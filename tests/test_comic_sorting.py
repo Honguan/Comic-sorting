@@ -1,9 +1,11 @@
 import importlib.util
+import os
 import tempfile
 import time
 import unittest
 import zipfile
 from pathlib import Path
+from unittest import mock
 
 
 MODULE_PATH = Path(__file__).parents[1] / "Comic sorting.py"
@@ -152,9 +154,54 @@ class ComicSortingTests(unittest.TestCase):
             app.base_path = type("Value", (), {"get": lambda self: str(root)})()
             app.folders = [(str(first), first.name, comic.Decimal("12")),
                            (str(second), second.name, comic.Decimal("13"))]
-            output = app.aggregate_folders(0, 1)
+            output = app.aggregate_folders(app.folders, 0, 1)
             self.assertEqual([path.name for path in comic.image_files(output)], ["1.png", "2.webp"])
             self.assertFalse((root / "temp").exists())
+
+    def test_updated_at_uses_newest_image(self):
+        with tempfile.TemporaryDirectory() as temp:
+            folder = Path(temp) / "Chapter 1"
+            folder.mkdir()
+            older = folder / "1.png"
+            newer = folder / "2.png"
+            older.write_bytes(b"old")
+            newer.write_bytes(b"new")
+            os.utime(older, (100, 100))
+            os.utime(newer, (200, 200))
+            os.utime(folder, (50, 50))
+
+            self.assertEqual(comic.updated_at(folder, [older, newer]), 200)
+
+    def test_aggregate_requires_tree_selection(self):
+        app = comic.FileAggregatorApp.__new__(comic.FileAggregatorApp)
+        app.folder_tree = type("Tree", (), {"selection": lambda self: ()})()
+        with mock.patch.object(comic.messagebox, "showwarning") as warning:
+            app.confirm_aggregate()
+        warning.assert_called_once_with("警告", "請先選擇父系列或章節")
+
+    def test_tree_selection_defaults_to_last_chapter(self):
+        class Entry:
+            def delete(self, *_):
+                self.value = ""
+
+            def insert(self, _, value):
+                self.value = value
+
+        series = Path("D:/Mangas/Series")
+        chapters = [(str(series / f"Chapter {number}"), f"Chapter {number}", comic.Decimal(number))
+                    for number in (1, 2, 3)]
+        app = comic.FileAggregatorApp.__new__(comic.FileAggregatorApp)
+        app.start_entry, app.end_entry = Entry(), Entry()
+        app.series_groups = {series: chapters}
+        app.tree_items = {"series": ("series", series), "chapter": ("chapter", series / "Chapter 2")}
+
+        app.folder_tree = type("Tree", (), {"selection": lambda self: ("series",)})()
+        app.on_tree_select()
+        self.assertEqual((app.start_entry.value, app.end_entry.value), ("1", "3"))
+
+        app.folder_tree = type("Tree", (), {"selection": lambda self: ("chapter",)})()
+        app.on_tree_select()
+        self.assertEqual((app.start_entry.value, app.end_entry.value), ("2", "3"))
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ import re
 import shutil
 import threading
 import zipfile
+from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 import tkinter as tk
@@ -41,6 +42,10 @@ def translation_status(chapter_folder):
         return "未翻譯", []
     images = image_files(result)
     return ("可匯出" if images else "結果為空"), images
+
+
+def updated_at(folder, images):
+    return max([Path(folder).stat().st_mtime, *(image.stat().st_mtime for image in images)])
 
 
 def source_fingerprint(images):
@@ -145,6 +150,9 @@ class FileAggregatorApp:
         self.root = root
         self.root.title("漫畫整合工具")
         self.folders = []
+        self.series_groups = {}
+        self.tree_items = {}
+        self.chapter_updates = {}
         self.events = queue.Queue()
         settings = load_json(settings_path(), {})
         self.base_path = tk.StringVar(value=settings.get("manga_path", ""))
@@ -164,11 +172,24 @@ class FileAggregatorApp:
 
         list_frame = ttk.Frame(manga)
         list_frame.pack(fill="both", expand=True, pady=8)
-        self.folder_listbox = tk.Listbox(list_frame, selectmode=tk.SINGLE, width=82, height=12)
-        scrollbar = ttk.Scrollbar(list_frame, command=self.folder_listbox.yview)
-        self.folder_listbox.configure(yscrollcommand=scrollbar.set)
-        self.folder_listbox.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
+        self.folder_tree = ttk.Treeview(
+            list_frame, columns=("status", "updated"), show="tree headings",
+            selectmode="browse", height=12)
+        self.folder_tree.heading("#0", text="系列 / 章節")
+        self.folder_tree.heading("status", text="狀態")
+        self.folder_tree.heading("updated", text="更新時間 ↓")
+        self.folder_tree.column("#0", width=560, stretch=True)
+        self.folder_tree.column("status", width=150, stretch=False)
+        self.folder_tree.column("updated", width=150, anchor="center", stretch=False)
+        vertical = ttk.Scrollbar(list_frame, command=self.folder_tree.yview)
+        horizontal = ttk.Scrollbar(list_frame, orient="horizontal", command=self.folder_tree.xview)
+        self.folder_tree.configure(yscrollcommand=vertical.set, xscrollcommand=horizontal.set)
+        self.folder_tree.grid(row=0, column=0, sticky="nsew")
+        vertical.grid(row=0, column=1, sticky="ns")
+        horizontal.grid(row=1, column=0, sticky="ew")
+        list_frame.rowconfigure(0, weight=1)
+        list_frame.columnconfigure(0, weight=1)
+        self.folder_tree.bind("<<TreeviewSelect>>", self.on_tree_select)
 
         range_row = ttk.Frame(manga)
         range_row.pack()
@@ -234,17 +255,57 @@ class FileAggregatorApp:
             messagebox.showwarning("警告", "請選擇有效的漫畫路徑")
             return
         self.folders = self.get_folders_with_numbers(base)
-        self.folder_listbox.delete(0, tk.END)
-        for index, (folder_path, _, _) in enumerate(self.folders, 1):
-            display_name = str(Path(folder_path).relative_to(base))
+        existing_items = self.folder_tree.get_children()
+        if existing_items:
+            self.folder_tree.delete(*existing_items)
+        self.series_groups = {}
+        self.tree_items = {}
+        self.chapter_updates = {}
+        details = {}
+        for folder_path, folder_name, number in self.folders:
+            chapter = Path(folder_path)
             status, translated = translation_status(folder_path)
             if status == "可匯出":
                 detail = f"{len(translated)} translated | Ready"
+                images = translated
             elif status == "結果為空":
                 detail = "Result empty"
+                images = []
             else:
-                detail = f"{len(image_files(folder_path))} images | Not translated"
-            self.folder_listbox.insert(tk.END, f"{index} | {display_name} | {detail}")
+                images = image_files(folder_path)
+                detail = f"{len(images)} images | Not translated"
+            modified = updated_at(chapter, images)
+            self.chapter_updates[chapter] = modified
+            details[chapter] = detail
+            self.series_groups.setdefault(chapter.parent, []).append(
+                (str(chapter), folder_name, number))
+        for chapters in self.series_groups.values():
+            chapters.sort(key=lambda item: (item[2], natural_sort_key(item[1])))
+        series_order = sorted(
+            self.series_groups,
+            key=lambda series: max(self.chapter_updates[Path(item[0])]
+                                   for item in self.series_groups[series]),
+            reverse=True)
+        for series in series_order:
+            modified = max(self.chapter_updates[Path(item[0])]
+                           for item in self.series_groups[series])
+            relative_series = series.relative_to(base)
+            series_name = series.name if relative_series == Path(".") else str(relative_series)
+            parent = self.folder_tree.insert(
+                "", "end", text=series_name, open=False,
+                values=(f"{len(self.series_groups[series])} chapters",
+                        datetime.fromtimestamp(modified).strftime("%Y-%m-%d %H:%M:%S")))
+            self.tree_items[parent] = ("series", series)
+            display_chapters = sorted(
+                self.series_groups[series],
+                key=lambda item: self.chapter_updates[Path(item[0])], reverse=True)
+            for folder_path, folder_name, _ in display_chapters:
+                chapter = Path(folder_path)
+                item = self.folder_tree.insert(
+                    parent, "end", text=folder_name,
+                    values=(details[chapter], datetime.fromtimestamp(
+                        self.chapter_updates[chapter]).strftime("%Y-%m-%d %H:%M:%S")))
+                self.tree_items[item] = ("chapter", chapter)
 
     @staticmethod
     def get_folders_with_numbers(base_path):
@@ -264,31 +325,52 @@ class FileAggregatorApp:
             natural_sort_key(str(Path(item[0]).parent.relative_to(base))),
             item[2], natural_sort_key(item[1])))
 
+    def selected_tree_item(self):
+        selection = self.folder_tree.selection()
+        if not selection:
+            return None
+        kind, path = self.tree_items[selection[0]]
+        series = path if kind == "series" else path.parent
+        return kind, path, self.series_groups[series]
+
+    def on_tree_select(self, _event=None):
+        selected = self.selected_tree_item()
+        if not selected:
+            return
+        kind, path, chapters = selected
+        start = 1 if kind == "series" else next(
+            index for index, item in enumerate(chapters, 1) if Path(item[0]) == path)
+        for entry, value in ((self.start_entry, start), (self.end_entry, len(chapters))):
+            entry.delete(0, tk.END)
+            entry.insert(0, str(value))
+
     def confirm_aggregate(self):
+        selected = self.selected_tree_item()
+        if not selected:
+            messagebox.showwarning("警告", "請先選擇父系列或章節")
+            return
+        _, _, chapters = selected
         start, end = self.start_entry.get(), self.end_entry.get()
         if not start.isdigit() or not end.isdigit():
             messagebox.showwarning("警告", "請輸入有效的起始和結束編號")
             return
         start_idx, end_idx = int(start) - 1, int(end) - 1
-        if start_idx < 0 or end_idx >= len(self.folders) or start_idx > end_idx:
+        if start_idx < 0 or end_idx >= len(chapters) or start_idx > end_idx:
             messagebox.showwarning("警告", "請確保編號範圍有效")
             return
-        names = [self.folders[index][1] for index in range(start_idx, end_idx + 1)]
+        names = [chapters[index][1] for index in range(start_idx, end_idx + 1)]
         if messagebox.askyesno("確認整合", f"您確定要整合以下資料夾嗎？\n\n{', '.join(names)}"):
             try:
-                output = self.aggregate_folders(start_idx, end_idx)
+                output = self.aggregate_folders(chapters, start_idx, end_idx)
                 messagebox.showinfo("完成", f"檔案已重命名並複製到 {output.name}")
                 self.load_folders()
             except Exception as error:
                 messagebox.showerror("整合失敗", str(error))
 
-    def aggregate_folders(self, start_idx, end_idx):
-        selected = self.folders[start_idx:end_idx + 1]
-        parents = {Path(folder_path).parent for folder_path, _, _ in selected}
-        if len(parents) != 1:
-            raise ValueError("只能整合同一系列內的章節")
+    def aggregate_folders(self, chapters, start_idx, end_idx):
+        selected = chapters[start_idx:end_idx + 1]
         output_name = f"Chapter {selected[0][2]}-{selected[-1][2]}"
-        output = parents.pop() / output_name
+        output = Path(selected[0][0]).parent / output_name
         output.mkdir(exist_ok=True)
         index = 1
         for folder_path, _, _ in selected:
@@ -298,11 +380,18 @@ class FileAggregatorApp:
         return output
 
     def export_selected(self):
-        selection = self.folder_listbox.curselection()
-        if not selection:
-            messagebox.showwarning("警告", "請先在列表選取一個章節")
+        selected = self.selected_tree_item()
+        if not selected:
+            messagebox.showwarning("警告", "請先選擇父系列或章節")
             return
-        self.start_export([self.folders[selection[0]][0]])
+        kind, path, chapters = selected
+        candidates = chapters if kind == "series" else [(str(path), path.name, chapter_number(path.name))]
+        ready = [folder_path for folder_path, _, _ in candidates
+                 if translation_status(folder_path)[0] == "可匯出"]
+        if not ready:
+            messagebox.showinfo("Komga 匯出", "選取項目沒有可匯出的翻譯結果")
+            return
+        self.start_export(ready)
 
     def export_all(self):
         chapters = [path for path, _, _ in self.folders if translation_status(path)[0] == "可匯出"]
