@@ -66,6 +66,19 @@ class ComicSortingTests(unittest.TestCase):
                 self.assertEqual(comic.resource_path("assets/icon.ico"),
                                  Path(temp) / "assets" / "icon.ico")
 
+    def test_settings_path_is_bound_to_executable_folder(self):
+        with tempfile.TemporaryDirectory() as temp:
+            executable = Path(temp) / "Comic sorting.exe"
+            with mock.patch.object(comic.sys, "frozen", True, create=True), \
+                    mock.patch.object(comic.sys, "executable", str(executable)):
+                path = comic.settings_path()
+                self.assertEqual(path, executable.parent / "comic-sorting.settings.json")
+                self.assertEqual(comic.load_json(path, {}), {})
+                comic.save_json(path, {"manga_path": "first", "komga_path": "output"})
+                comic.save_json(path, {"manga_path": "rebound", "komga_path": "new-output"})
+                self.assertEqual(comic.load_json(path, {}),
+                                 {"manga_path": "rebound", "komga_path": "new-output"})
+
     def test_high_level_discovery(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

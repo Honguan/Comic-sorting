@@ -16,7 +16,7 @@ from tkinter import filedialog, messagebox, ttk
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 WORK_FOLDER_NAMES = {"mask", "inpainted"}
-DEFAULT_KOMGA_PATH = r"D:\Komga"
+SETTINGS_FILENAME = "comic-sorting.settings.json"
 
 
 def resource_path(relative_path):
@@ -215,8 +215,8 @@ def export_chapter(series_path, chapter_path, komga_root, state, skip_unchanged=
 
 
 def settings_path():
-    base = os.environ.get("APPDATA") or str(Path.home())
-    return Path(base) / "ComicSorting" / "settings.json"
+    base = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent
+    return base / SETTINGS_FILENAME
 
 
 class FileAggregatorApp:
@@ -238,7 +238,7 @@ class FileAggregatorApp:
         self.manga_busy = False
         settings = load_json(settings_path(), {})
         self.base_path = tk.StringVar(value=settings.get("manga_path", ""))
-        self.komga_path = tk.StringVar(value=settings.get("komga_path", DEFAULT_KOMGA_PATH))
+        self.komga_path = tk.StringVar(value=settings.get("komga_path", ""))
         self.skip_unchanged = tk.BooleanVar(value=True)
         self.open_after_export = tk.BooleanVar(value=False)
         self.status_text = tk.StringVar(value="就緒")

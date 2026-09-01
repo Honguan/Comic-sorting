@@ -44,12 +44,14 @@ CBZ 根目錄只包含 `result` 內的 `.png`、`.jpg`、`.jpeg`、`.webp` 圖�
 
 Komga 匯出只有在整批 CBZ 與狀態檔都成功後才會自動清理；任何匯出失敗都會保留工作資料。
 
-## 設定與增量狀態
+## 路徑綁定與增量狀態
 
-- 使用者設定：`%APPDATA%\ComicSorting\settings.json`
+- 可攜式設定：EXE 同目錄的 `comic-sorting.settings.json`
 - Komga 增量狀態：`<Komga 路徑>\.comic-sorting-state.json`
 
-設定檔保存最近使用的漫畫與 Komga 路徑。增量狀態依圖片名稱、大小及修改時間判斷是否需要更新 CBZ。
+首次啟動時漫畫與 Komga 路徑皆為空白，必須手動設定。設定後會自動保存並在後續啟動時讀取；重新瀏覽即可改綁其他路徑。移動 EXE 時請連同設定檔一起移動。
+
+增量狀態依圖片名稱、大小及修改時間判斷是否需要更新 CBZ。
 
 ## 開發與建置
 
