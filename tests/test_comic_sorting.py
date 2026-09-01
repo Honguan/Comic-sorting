@@ -213,6 +213,44 @@ class ComicSortingTests(unittest.TestCase):
         app.on_tree_select()
         self.assertEqual((app.start_entry.value, app.end_entry.value), ("2", "3"))
 
+    def test_tree_numbers_series_by_time_and_chapters_by_number(self):
+        class Tree:
+            def __init__(self):
+                self.items = []
+
+            def get_children(self):
+                return ()
+
+            def delete(self, *_):
+                pass
+
+            def insert(self, parent, _, text, **kwargs):
+                item = f"item{len(self.items)}"
+                self.items.append((item, parent, text, kwargs.get("values")))
+                return item
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for series, chapter, modified in (("Newer", 10, 300), ("Newer", 2, 200),
+                                               ("Older", 1, 100)):
+                result = root / series / f"Chapter {chapter}" / "result"
+                result.mkdir(parents=True)
+                image = result / "1.webp"
+                image.write_bytes(b"image")
+                os.utime(image, (modified, modified))
+                os.utime(result.parent, (modified, modified))
+            app = comic.FileAggregatorApp.__new__(comic.FileAggregatorApp)
+            app.base_path = type("Value", (), {"get": lambda self: str(root)})()
+            app.folder_tree = Tree()
+
+            app.load_folders()
+
+            parents = [item for item in app.folder_tree.items if not item[1]]
+            self.assertEqual([item[2] for item in parents], ["1. Newer", "2. Older"])
+            newer_children = [item[2] for item in app.folder_tree.items
+                              if item[1] == parents[0][0]]
+            self.assertEqual(newer_children, ["1. Chapter 2", "2. Chapter 10"])
+
 
 if __name__ == "__main__":
     unittest.main()
