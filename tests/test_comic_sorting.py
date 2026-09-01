@@ -349,6 +349,43 @@ class ComicSortingTests(unittest.TestCase):
             self.assertEqual(events[-1][0], "done")
             self.assertTrue(events[-1][1].is_dir())
 
+    def test_progress_bars_are_shown_and_hidden(self):
+        class Progress:
+            def __init__(self):
+                self.visible = False
+                self.stopped = False
+
+            def configure(self, **kwargs):
+                self.options = kwargs
+
+            def pack(self, **kwargs):
+                self.visible = True
+                self.pack_options = kwargs
+
+            def stop(self):
+                self.stopped = True
+
+            def pack_forget(self):
+                self.visible = False
+
+        app = comic.FileAggregatorApp.__new__(comic.FileAggregatorApp)
+        app.scan_progress = Progress()
+        app.progress = Progress()
+        app.scan_status_label = object()
+        app.status_label = object()
+
+        app.show_scan_progress("indeterminate")
+        app.show_export_progress("determinate")
+        self.assertTrue(app.scan_progress.visible)
+        self.assertTrue(app.progress.visible)
+
+        app.hide_scan_progress()
+        app.hide_export_progress()
+        self.assertFalse(app.scan_progress.visible)
+        self.assertFalse(app.progress.visible)
+        self.assertTrue(app.scan_progress.stopped)
+        self.assertTrue(app.progress.stopped)
+
 
 if __name__ == "__main__":
     unittest.main()

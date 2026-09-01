@@ -274,7 +274,9 @@ class FileAggregatorApp:
         self.scan_progress = ttk.Progressbar(scan_row, mode="indeterminate")
         self.scan_progress.pack(side="left", fill="x", expand=True)
         self.scan_status_text = tk.StringVar(value="尚未掃描")
-        ttk.Label(scan_row, textvariable=self.scan_status_text).pack(side="left", padx=(8, 0))
+        self.scan_status_label = ttk.Label(scan_row, textvariable=self.scan_status_text)
+        self.scan_status_label.pack(side="left", padx=(8, 0))
+        self.scan_progress.pack_forget()
 
         range_row = ttk.Frame(manga)
         range_row.pack()
@@ -316,7 +318,9 @@ class FileAggregatorApp:
         self.cleanup_button.pack(side="left")
         self.progress = ttk.Progressbar(export, mode="determinate")
         self.progress.pack(fill="x", pady=(8, 2))
-        ttk.Label(export, textvariable=self.status_text).pack(anchor="w")
+        self.status_label = ttk.Label(export, textvariable=self.status_text)
+        self.status_label.pack(anchor="w")
+        self.progress.pack_forget()
 
         self.root.protocol("WM_DELETE_WINDOW", self.close)
         if self.base_path.get() and Path(self.base_path.get()).is_dir():
@@ -353,7 +357,7 @@ class FileAggregatorApp:
         if self.manga_busy:
             return
         self.set_manga_busy(True)
-        self.scan_progress.configure(mode="indeterminate")
+        self.show_scan_progress("indeterminate")
         self.scan_progress.start(12)
         self.scan_status_text.set("正在掃描…")
         threading.Thread(target=self.scan_worker, args=(base,), daemon=True).start()
@@ -370,6 +374,23 @@ class FileAggregatorApp:
                        self.cleanup_button):
             widget.configure(state=state)
 
+    def show_scan_progress(self, mode):
+        self.scan_progress.configure(mode=mode, value=0)
+        self.scan_progress.pack(
+            side="left", fill="x", expand=True, before=self.scan_status_label)
+
+    def hide_scan_progress(self):
+        self.scan_progress.stop()
+        self.scan_progress.pack_forget()
+
+    def show_export_progress(self, mode):
+        self.progress.configure(mode=mode, value=0)
+        self.progress.pack(fill="x", pady=(8, 2), before=self.status_label)
+
+    def hide_export_progress(self):
+        self.progress.stop()
+        self.progress.pack_forget()
+
     def scan_worker(self, base):
         try:
             self.scan_events.put(("done", base, self.scan_folder_data(base)))
@@ -382,8 +403,7 @@ class FileAggregatorApp:
         except queue.Empty:
             self.root.after(50, self.poll_scan_events)
             return
-        self.scan_progress.stop()
-        self.scan_progress.configure(value=0)
+        self.hide_scan_progress()
         self.set_manga_busy(False)
         if event[0] == "error":
             self.scan_status_text.set("掃描失敗")
@@ -513,7 +533,8 @@ class FileAggregatorApp:
         names = [chapters[index][1] for index in range(start_idx, end_idx + 1)]
         if messagebox.askyesno("確認整合", f"您確定要整合以下資料夾嗎？\n\n{summarize_names(names)}"):
             self.set_manga_busy(True)
-            self.scan_progress.configure(mode="determinate", value=0, maximum=1)
+            self.show_scan_progress("determinate")
+            self.scan_progress.configure(maximum=1)
             self.scan_status_text.set("準備整合…")
             threading.Thread(
                 target=self.aggregate_worker,
@@ -587,6 +608,7 @@ class FileAggregatorApp:
         if done is None:
             self.root.after(50, self.poll_aggregate_events)
             return
+        self.hide_scan_progress()
         self.set_manga_busy(False)
         if done[0] == "error":
             self.scan_status_text.set("整合失敗")
@@ -624,7 +646,8 @@ class FileAggregatorApp:
             return
         self.save_settings()
         self.set_manga_busy(True)
-        self.progress.configure(value=0, maximum=1)
+        self.show_export_progress("determinate")
+        self.progress.configure(maximum=1)
         self.status_text.set("準備匯出…")
         options = (self.base_path.get(), self.komga_path.get(), self.skip_unchanged.get())
         threading.Thread(target=self.export_worker, args=(chapters, *options), daemon=True).start()
@@ -675,7 +698,7 @@ class FileAggregatorApp:
                 "資料夾本身會保留，此操作無法復原。確定繼續嗎？"):
             return
         self.set_manga_busy(True)
-        self.progress.configure(mode="indeterminate")
+        self.show_export_progress("indeterminate")
         self.progress.start(12)
         self.status_text.set("正在清理 mask / inpainted…")
         threading.Thread(target=self.cleanup_worker, args=(root,), daemon=True).start()
@@ -707,8 +730,7 @@ class FileAggregatorApp:
             elif event[0] == "cleanup_done":
                 _, (folders, removed, errors) = event
                 summary = f"已清理 {folders} 個資料夾、移除 {removed} 個項目"
-                self.progress.stop()
-                self.progress.configure(mode="determinate", value=0)
+                self.hide_export_progress()
                 self.status_text.set(summary)
                 if errors:
                     messagebox.showerror("清理完成（含錯誤）", summary + "\n\n" + "\n".join(errors))
@@ -717,13 +739,13 @@ class FileAggregatorApp:
                 done = True
                 rescan = removed > 0
             elif event[0] == "cleanup_error":
-                self.progress.stop()
-                self.progress.configure(mode="determinate", value=0)
+                self.hide_export_progress()
                 self.status_text.set("清理失敗")
                 messagebox.showerror("清理失敗", str(event[1]))
                 done = True
             else:
                 _, counts, errors, output_folder, cleanup = event
+                self.hide_export_progress()
                 summary = (f"新增：{counts['created']}  更新：{counts['updated']}  "
                            f"跳過：{counts['skipped']}  失敗：{counts['failed']}")
                 if cleanup:
