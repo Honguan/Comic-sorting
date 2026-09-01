@@ -1,0 +1,48 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install PyInstaller
+        run: python -m pip install pyinstaller==6.14.1
+
+      - name: Run tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Build executable
+        run: python -m PyInstaller --noconfirm "Comic sorting.spec"
+
+      - name: Name release asset
+        shell: pwsh
+        run: |
+          $asset = "dist\Comic-sorting-$env:GITHUB_REF_NAME-windows-x64.exe"
+          Copy-Item -LiteralPath "dist\Comic sorting.exe" -Destination $asset
+          "RELEASE_ASSET=$asset" >> $env:GITHUB_ENV
+
+      - name: Publish GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create $env:GITHUB_REF_NAME $env:RELEASE_ASSET `
+            --repo $env:GITHUB_REPOSITORY `
+            --verify-tag `
+            --generate-notes `
+            --title "Comic Sorting $env:GITHUB_REF_NAME"
