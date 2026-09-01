@@ -38,8 +38,11 @@ def image_files(folder):
     folder = Path(folder)
     if not folder.is_dir():
         return []
-    return sorted((path for path in folder.iterdir()
-                   if path.is_file() and path.suffix.casefold() in IMAGE_EXTENSIONS),
+    with os.scandir(folder) as entries:
+        images = [Path(entry.path) for entry in entries
+                  if entry.is_file(follow_symlinks=False)
+                  and Path(entry.name).suffix.casefold() in IMAGE_EXTENSIONS]
+    return sorted(images,
                   key=lambda path: natural_sort_key(path.name))
 
 
@@ -175,7 +178,8 @@ def create_cbz(images, output, progress=None):
 def load_json(path, default):
     try:
         with open(path, "r", encoding="utf-8") as file:
-            return json.load(file)
+            value = json.load(file)
+            return value if isinstance(value, type(default)) else default
     except (OSError, ValueError):
         return default
 
@@ -336,13 +340,20 @@ class FileAggregatorApp:
             self.load_folders()
 
     def save_settings(self):
-        save_json(settings_path(), {"manga_path": self.base_path.get(), "komga_path": self.komga_path.get()})
+        try:
+            save_json(settings_path(), {
+                "manga_path": self.base_path.get(),
+                "komga_path": self.komga_path.get(),
+            })
+            return True
+        except OSError as error:
+            messagebox.showerror(
+                "設定保存失敗",
+                f"無法寫入 EXE 同目錄的設定檔：\n{settings_path()}\n\n{error}")
+            return False
 
     def close(self):
-        try:
-            self.save_settings()
-        except OSError:
-            pass
+        self.save_settings()
         self.root.destroy()
 
     def browse(self):
@@ -650,25 +661,31 @@ class FileAggregatorApp:
         self.start_export(chapters)
 
     def start_export(self, chapters):
-        if not Path(self.base_path.get()).is_dir() or not self.komga_path.get().strip():
+        source_root = Path(self.base_path.get())
+        output_root = Path(self.komga_path.get())
+        if not source_root.is_dir() or not self.komga_path.get().strip():
             messagebox.showwarning("警告", "請確認漫畫與 Komga 路徑")
+            return
+        if output_root.resolve().is_relative_to(source_root.resolve()):
+            messagebox.showwarning("警告", "Komga 輸出路徑不能位於漫畫來源路徑內")
             return
         self.save_settings()
         self.set_manga_busy(True)
         self.show_export_progress("determinate")
         self.progress.configure(maximum=1)
         self.status_text.set("準備匯出…")
-        options = (self.base_path.get(), self.komga_path.get(), self.skip_unchanged.get())
+        options = (self.komga_path.get(), self.skip_unchanged.get())
         threading.Thread(target=self.export_worker, args=(chapters, *options), daemon=True).start()
         self.root.after(50, self.poll_events)
 
-    def export_worker(self, chapters, source_root, komga_path, skip_unchanged):
+    def export_worker(self, chapters, komga_path, skip_unchanged):
         root = Path(komga_path)
         state_file = root / ".comic-sorting-state.json"
         state = load_json(state_file, {})
         counts = {"created": 0, "updated": 0, "skipped": 0, "failed": 0}
         errors = []
         output_folders = set()
+        exported_chapters = []
         for chapter in chapters:
             chapter = Path(chapter)
             name = chapter.name
@@ -679,20 +696,30 @@ class FileAggregatorApp:
                         ("progress", chapter_name, current, total)))
                 counts[action] += 1
                 output_folders.add(output.parent)
+                exported_chapters.append(chapter)
                 self.events.put(("chapter", action, name))
             except Exception as error:
                 counts["failed"] += 1
                 errors.append(f"{name}: {error}")
                 self.events.put(("chapter", "failed", name))
+        state_saved = True
         try:
             save_json(state_file, state)
         except Exception as error:
+            state_saved = False
             counts["failed"] += 1
             errors.append(f"狀態檔: {error}")
         cleanup = None
-        if not counts["failed"]:
-            cleanup = clear_work_folders(source_root)
-            errors.extend(f"清理失敗：{error}" for error in cleanup[2])
+        if state_saved and exported_chapters:
+            folders = removed = 0
+            cleanup_errors = []
+            for chapter in exported_chapters:
+                result = clear_work_folders(chapter)
+                folders += result[0]
+                removed += result[1]
+                cleanup_errors.extend(result[2])
+            cleanup = folders, removed, cleanup_errors
+            errors.extend(f"清理失敗：{error}" for error in cleanup_errors)
         output_folder = output_folders.pop() if len(output_folders) == 1 else root
         self.events.put(("done", counts, errors, str(output_folder), cleanup))
 

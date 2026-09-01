@@ -79,6 +79,22 @@ class ComicSortingTests(unittest.TestCase):
                 self.assertEqual(comic.load_json(path, {}),
                                  {"manga_path": "rebound", "komga_path": "new-output"})
 
+    def test_load_json_rejects_wrong_root_type(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "settings.json"
+            path.write_text("[]", encoding="utf-8")
+            self.assertEqual(comic.load_json(path, {}), {})
+
+    def test_settings_save_failure_is_reported(self):
+        app = comic.FileAggregatorApp.__new__(comic.FileAggregatorApp)
+        value = lambda text: type("Value", (), {"get": lambda self: text})()
+        app.base_path = value("manga")
+        app.komga_path = value("komga")
+        with mock.patch.object(comic, "save_json", side_effect=OSError("denied")), \
+                mock.patch.object(comic.messagebox, "showerror") as error:
+            self.assertFalse(app.save_settings())
+        self.assertIn("denied", error.call_args.args[1])
+
     def test_high_level_discovery(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -108,7 +124,7 @@ class ComicSortingTests(unittest.TestCase):
             app = comic.FileAggregatorApp.__new__(comic.FileAggregatorApp)
             app.events = comic.queue.Queue()
 
-            app.export_worker([str(chapter)], str(root / "Mangas"), str(output_root), True)
+            app.export_worker([str(chapter)], str(output_root), True)
 
             self.assertTrue((output_root / "Killer Shark" / "Chapter 10-42.cbz").is_file())
             self.assertEqual(list((chapter / "mask").iterdir()), [])
@@ -148,9 +164,41 @@ class ComicSortingTests(unittest.TestCase):
             app = comic.FileAggregatorApp.__new__(comic.FileAggregatorApp)
             app.events = comic.queue.Queue()
 
-            app.export_worker([chapter], root / "Mangas", root / "Komga", True)
+            app.export_worker([chapter], root / "Komga", True)
 
             self.assertTrue((mask / "1.png").is_file())
+
+    def test_export_cleanup_does_not_touch_unselected_chapters(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            selected = root / "Mangas" / "Series" / "Chapter 1"
+            unselected = root / "Mangas" / "Series" / "Chapter 2"
+            (selected / "result").mkdir(parents=True)
+            (selected / "result" / "1.png").write_bytes(b"result")
+            for chapter in (selected, unselected):
+                (chapter / "mask").mkdir(parents=True, exist_ok=True)
+                (chapter / "mask" / "1.png").write_bytes(b"mask")
+            app = comic.FileAggregatorApp.__new__(comic.FileAggregatorApp)
+            app.events = comic.queue.Queue()
+
+            app.export_worker([selected], root / "Komga", True)
+
+            self.assertEqual(list((selected / "mask").iterdir()), [])
+            self.assertTrue((unselected / "mask" / "1.png").is_file())
+
+    def test_export_rejects_output_inside_source(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            app = comic.FileAggregatorApp.__new__(comic.FileAggregatorApp)
+            value = lambda path: type("Value", (), {"get": lambda self: str(path)})()
+            app.base_path = value(root)
+            app.komga_path = value(root / "Komga")
+
+            with mock.patch.object(comic.messagebox, "showwarning") as warning:
+                app.start_export([])
+
+            warning.assert_called_once_with(
+                "警告", "Komga 輸出路徑不能位於漫畫來源路徑內")
 
     def test_create_cbz(self):
         with tempfile.TemporaryDirectory() as temp:
