@@ -235,7 +235,8 @@ class FileAggregatorApp:
             return
         self.folders = self.get_folders_with_numbers(base)
         self.folder_listbox.delete(0, tk.END)
-        for index, (folder_path, folder_name, _) in enumerate(self.folders, 1):
+        for index, (folder_path, _, _) in enumerate(self.folders, 1):
+            display_name = str(Path(folder_path).relative_to(base))
             status, translated = translation_status(folder_path)
             if status == "可匯出":
                 detail = f"{len(translated)} translated | Ready"
@@ -243,16 +244,25 @@ class FileAggregatorApp:
                 detail = "Result empty"
             else:
                 detail = f"{len(image_files(folder_path))} images | Not translated"
-            self.folder_listbox.insert(tk.END, f"{index} | {folder_name} | {detail}")
+            self.folder_listbox.insert(tk.END, f"{index} | {display_name} | {detail}")
 
     @staticmethod
     def get_folders_with_numbers(base_path):
         folders = []
-        for folder in Path(base_path).iterdir():
+        base = Path(base_path)
+        for current, directory_names, file_names in os.walk(base):
+            folder = Path(current)
+            has_result = "result" in directory_names
+            directory_names[:] = [name for name in directory_names
+                                  if name not in {"result", "inpainted"}]
             number = chapter_number(folder.name)
-            if folder.is_dir() and number is not None:
+            has_images = any(Path(name).suffix.casefold() in IMAGE_EXTENSIONS
+                             for name in file_names)
+            if folder != base and number is not None and (has_result or has_images):
                 folders.append((str(folder), folder.name, number))
-        return sorted(folders, key=lambda item: (item[2], natural_sort_key(item[1])))
+        return sorted(folders, key=lambda item: (
+            natural_sort_key(str(Path(item[0]).parent.relative_to(base))),
+            item[2], natural_sort_key(item[1])))
 
     def confirm_aggregate(self):
         start, end = self.start_entry.get(), self.end_entry.get()
@@ -274,8 +284,11 @@ class FileAggregatorApp:
 
     def aggregate_folders(self, start_idx, end_idx):
         selected = self.folders[start_idx:end_idx + 1]
+        parents = {Path(folder_path).parent for folder_path, _, _ in selected}
+        if len(parents) != 1:
+            raise ValueError("只能整合同一系列內的章節")
         output_name = f"Chapter {selected[0][2]}-{selected[-1][2]}"
-        output = Path(self.base_path.get()) / output_name
+        output = parents.pop() / output_name
         output.mkdir(exist_ok=True)
         index = 1
         for folder_path, _, _ in selected:
@@ -307,24 +320,27 @@ class FileAggregatorApp:
         self.export_all_button.configure(state="disabled")
         self.progress.configure(value=0, maximum=1)
         self.status_text.set("準備匯出…")
-        options = (self.base_path.get(), self.komga_path.get(), self.skip_unchanged.get())
+        options = (self.komga_path.get(), self.skip_unchanged.get())
         threading.Thread(target=self.export_worker, args=(chapters, *options), daemon=True).start()
         self.root.after(50, self.poll_events)
 
-    def export_worker(self, chapters, series_path, komga_path, skip_unchanged):
+    def export_worker(self, chapters, komga_path, skip_unchanged):
         root = Path(komga_path)
         state_file = root / ".comic-sorting-state.json"
         state = load_json(state_file, {})
         counts = {"created": 0, "updated": 0, "skipped": 0, "failed": 0}
         errors = []
+        output_folders = set()
         for chapter in chapters:
-            name = Path(chapter).name
+            chapter = Path(chapter)
+            name = chapter.name
             try:
-                action, _ = export_chapter(
-                    series_path, chapter, root, state, skip_unchanged,
+                action, output = export_chapter(
+                    chapter.parent, chapter, root, state, skip_unchanged,
                     lambda current, total, chapter_name=name: self.events.put(
                         ("progress", chapter_name, current, total)))
                 counts[action] += 1
+                output_folders.add(output.parent)
                 self.events.put(("chapter", action, name))
             except Exception as error:
                 counts["failed"] += 1
@@ -335,7 +351,8 @@ class FileAggregatorApp:
         except Exception as error:
             counts["failed"] += 1
             errors.append(f"狀態檔: {error}")
-        self.events.put(("done", counts, errors, str(root / Path(series_path).name)))
+        output_folder = output_folders.pop() if len(output_folders) == 1 else root
+        self.events.put(("done", counts, errors, str(output_folder)))
 
     def poll_events(self):
         done = False

@@ -58,6 +58,35 @@ class ComicSortingTests(unittest.TestCase):
         self.assertEqual(comic.output_path_for("D:/Komga", series, series / "Chapter 1"),
                          Path("D:/Komga/＂series＂/Chapter 1.cbz"))
 
+    def test_high_level_discovery(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            first = root / "Killer Shark in Another World" / "Chapter 10-42"
+            second = root / "29-Years-Old Bachelor" / "Chapter 1"
+            (first / "result").mkdir(parents=True)
+            (second / "result").mkdir(parents=True)
+            (first / "result" / "1.webp").write_bytes(b"first")
+            (second / "result" / "1.webp").write_bytes(b"second")
+
+            folders = comic.FileAggregatorApp.get_folders_with_numbers(root)
+
+            self.assertEqual([Path(item[0]) for item in folders], [second, first])
+
+    def test_high_level_export_uses_actual_series(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            chapter = root / "Mangas" / "Killer Shark" / "Chapter 10-42"
+            result = chapter / "result"
+            result.mkdir(parents=True)
+            (result / "1.webp").write_bytes(b"image")
+            output_root = root / "Komga"
+            app = comic.FileAggregatorApp.__new__(comic.FileAggregatorApp)
+            app.events = comic.queue.Queue()
+
+            app.export_worker([str(chapter)], str(output_root), True)
+
+            self.assertTrue((output_root / "Killer Shark" / "Chapter 10-42.cbz").is_file())
+
     def test_create_cbz(self):
         with tempfile.TemporaryDirectory() as temp:
             series, chapter, _, output_root = fixture(temp)
