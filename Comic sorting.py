@@ -125,6 +125,31 @@ def clear_work_folders(root):
     return len(targets), removed, errors
 
 
+def remove_aggregated_folders(chapters, start_idx, end_idx, output):
+    output = Path(output)
+    output_resolved = output.resolve()
+    parent = output.parent.resolve()
+    selected = [Path(item[0]) for item in chapters[start_idx:end_idx + 1]]
+    removed = []
+    errors = []
+    for folder in selected[:-1]:
+        try:
+            resolved = folder.resolve()
+            if resolved == output_resolved:
+                continue
+            if resolved.parent != parent or folder.is_symlink():
+                raise ValueError("不允許刪除系列目錄外或符號連結資料夾")
+            if not folder.exists():
+                continue
+            if not folder.is_dir():
+                raise ValueError("來源不是資料夾")
+            shutil.rmtree(folder)
+            removed.append(folder.name)
+        except (OSError, ValueError) as error:
+            errors.append(f"{folder}: {error}")
+    return removed, errors
+
+
 def source_fingerprint(images):
     details = []
     latest = 0
@@ -245,6 +270,8 @@ class FileAggregatorApp:
         self.komga_path = tk.StringVar(value=settings.get("komga_path", ""))
         self.skip_unchanged = tk.BooleanVar(value=True)
         self.open_after_export = tk.BooleanVar(value=False)
+        self.remove_sources_after_aggregate = tk.BooleanVar(
+            value=settings.get("remove_sources_after_aggregate") is True)
         self.status_text = tk.StringVar(value="就緒")
 
         manga = ttk.LabelFrame(root, text="漫畫整合", padding=8)
@@ -301,6 +328,10 @@ class FileAggregatorApp:
         self.end_entry.pack(side="left")
         self.aggregate_button = ttk.Button(range_row, text="確認整合", command=self.confirm_aggregate)
         self.aggregate_button.pack(side="left", padx=10)
+        self.remove_sources_checkbox = ttk.Checkbutton(
+            range_row, text="整合後清除來源（保留最後一個）",
+            variable=self.remove_sources_after_aggregate, command=self.save_settings)
+        self.remove_sources_checkbox.pack(side="left")
 
         export = ttk.LabelFrame(root, text="Komga 匯出", padding=8)
         export.pack(fill="x", padx=10, pady=6)
@@ -344,6 +375,7 @@ class FileAggregatorApp:
             save_json(settings_path(), {
                 "manga_path": self.base_path.get(),
                 "komga_path": self.komga_path.get(),
+                "remove_sources_after_aggregate": self.remove_sources_after_aggregate.get(),
             })
             return True
         except OSError as error:
@@ -388,6 +420,7 @@ class FileAggregatorApp:
         state = "disabled" if busy else "normal"
         for widget in (self.path_entry, self.browse_button, self.rescan_button,
                        self.start_entry, self.end_entry, self.aggregate_button,
+                       self.remove_sources_checkbox,
                        self.komga_entry, self.browse_komga_button,
                        self.skip_checkbox, self.open_checkbox,
                        self.export_selected_button, self.export_all_button,
@@ -551,14 +584,20 @@ class FileAggregatorApp:
             messagebox.showwarning("警告", "請確保編號範圍有效")
             return
         names = [chapters[index][1] for index in range(start_idx, end_idx + 1)]
-        if messagebox.askyesno("確認整合", f"您確定要整合以下資料夾嗎？\n\n{summarize_names(names)}"):
+        remove_sources = self.remove_sources_after_aggregate.get()
+        confirmation = f"您確定要整合以下資料夾嗎？\n\n{summarize_names(names)}"
+        if remove_sources:
+            confirmation += (
+                "\n\n注意：整合成功後，將永久刪除本次範圍內除最後一個"
+                f"之外的來源資料夾與內容。\n保留：{names[-1]}")
+        if messagebox.askyesno("確認整合", confirmation):
             self.set_manga_busy(True)
             self.show_scan_progress("determinate")
             self.scan_progress.configure(maximum=1)
             self.scan_status_text.set("準備整合…")
             threading.Thread(
                 target=self.aggregate_worker,
-                args=(chapters, start_idx, end_idx), daemon=True).start()
+                args=(chapters, start_idx, end_idx, remove_sources), daemon=True).start()
             self.root.after(50, self.poll_aggregate_events)
 
     def aggregate_folders(self, chapters, start_idx, end_idx, progress=None):
@@ -602,13 +641,17 @@ class FileAggregatorApp:
                 pass
         return output
 
-    def aggregate_worker(self, chapters, start_idx, end_idx):
+    def aggregate_worker(self, chapters, start_idx, end_idx, remove_sources=False):
         try:
             output = self.aggregate_folders(
                 chapters, start_idx, end_idx,
                 lambda current, total: self.aggregate_events.put(
                     ("progress", current, total)))
-            self.aggregate_events.put(("done", output))
+            cleanup = ([], [])
+            if remove_sources:
+                cleanup = remove_aggregated_folders(
+                    chapters, start_idx, end_idx, output)
+            self.aggregate_events.put(("done", output, cleanup))
         except Exception as error:
             self.aggregate_events.put(("error", error))
 
@@ -635,7 +678,15 @@ class FileAggregatorApp:
             messagebox.showerror("整合失敗", str(done[1]))
             return
         output = done[1]
-        messagebox.showinfo("完成", f"檔案已重命名並複製到 {output.name}")
+        removed, cleanup_errors = done[2]
+        summary = f"檔案已重命名並複製到 {output.name}"
+        if removed:
+            summary += f"\n已清除 {len(removed)} 個來源資料夾"
+        if cleanup_errors:
+            messagebox.showwarning(
+                "整合完成（清理含錯誤）", summary + "\n\n" + "\n".join(cleanup_errors))
+        else:
+            messagebox.showinfo("完成", summary)
         self.load_folders()
 
     def export_selected(self):

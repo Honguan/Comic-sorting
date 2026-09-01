@@ -90,10 +90,23 @@ class ComicSortingTests(unittest.TestCase):
         value = lambda text: type("Value", (), {"get": lambda self: text})()
         app.base_path = value("manga")
         app.komga_path = value("komga")
+        app.remove_sources_after_aggregate = value(False)
         with mock.patch.object(comic, "save_json", side_effect=OSError("denied")), \
                 mock.patch.object(comic.messagebox, "showerror") as error:
             self.assertFalse(app.save_settings())
         self.assertIn("denied", error.call_args.args[1])
+
+    def test_settings_persist_aggregate_cleanup_option(self):
+        with tempfile.TemporaryDirectory() as temp:
+            app = comic.FileAggregatorApp.__new__(comic.FileAggregatorApp)
+            value = lambda item: type("Value", (), {"get": lambda self: item})()
+            app.base_path = value("manga")
+            app.komga_path = value("komga")
+            app.remove_sources_after_aggregate = value(True)
+            path = Path(temp) / "settings.json"
+            with mock.patch.object(comic, "settings_path", return_value=path):
+                self.assertTrue(app.save_settings())
+            self.assertIs(comic.load_json(path, {})["remove_sources_after_aggregate"], True)
 
     def test_high_level_discovery(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -295,6 +308,37 @@ class ComicSortingTests(unittest.TestCase):
             self.assertFalse((root / "temp").exists())
             self.assertFalse((root / ".Chapter 12-13.tmp").exists())
             self.assertFalse((root / ".Chapter 12-13.backup").exists())
+
+    def test_remove_aggregated_folders_preserves_last_and_output(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            chapters = []
+            for number in (1, 2, 3):
+                folder = root / f"Chapter {number}"
+                folder.mkdir()
+                (folder / "1.png").write_bytes(str(number).encode())
+                chapters.append((str(folder), folder.name, comic.Decimal(number)))
+            output = root / "Chapter 1-3"
+            output.mkdir()
+            (output / "1.png").write_bytes(b"output")
+
+            removed, errors = comic.remove_aggregated_folders(chapters, 0, 2, output)
+
+            self.assertEqual((removed, errors), (["Chapter 1", "Chapter 2"], []))
+            self.assertFalse((root / "Chapter 1").exists())
+            self.assertFalse((root / "Chapter 2").exists())
+            self.assertTrue((root / "Chapter 3" / "1.png").is_file())
+            self.assertTrue((output / "1.png").is_file())
+
+    def test_failed_aggregate_never_removes_sources(self):
+        app = comic.FileAggregatorApp.__new__(comic.FileAggregatorApp)
+        app.aggregate_events = comic.queue.Queue()
+        with mock.patch.object(app, "aggregate_folders", side_effect=OSError("stop")), \
+                mock.patch.object(comic, "remove_aggregated_folders") as remove:
+            app.aggregate_worker([], 0, 0, True)
+
+        remove.assert_not_called()
+        self.assertEqual(app.aggregate_events.get_nowait()[0], "error")
 
     def test_long_confirmation_summary(self):
         names = [f"Chapter {number}" for number in range(1, 13)]
