@@ -39,6 +39,9 @@ def image_files(folder):
 def translation_status(chapter_folder):
     result = Path(chapter_folder) / "result"
     if not result.is_dir():
+        result = next((child for child in Path(chapter_folder).iterdir()
+                       if child.is_dir() and child.name.casefold() == "result"), result)
+    if not result.is_dir():
         return "未翻譯", []
     images = image_files(result)
     return ("可匯出" if images else "結果為空"), images
@@ -75,6 +78,11 @@ def format_size(size):
         if value < 1024 or unit == "TB":
             return f"{int(value)} B" if unit == "B" else f"{value:.1f} {unit}"
         value /= 1024
+
+
+def summarize_names(names):
+    preview = ", ".join(names[:10])
+    return preview if len(names) <= 10 else f"{preview}\n…共 {len(names)} 個章節"
 
 
 def source_fingerprint(images):
@@ -183,7 +191,11 @@ class FileAggregatorApp:
         self.tree_items = {}
         self.chapter_updates = {}
         self.chapter_sizes = {}
+        self.ready_chapters = set()
         self.events = queue.Queue()
+        self.scan_events = queue.Queue()
+        self.aggregate_events = queue.Queue()
+        self.manga_busy = False
         settings = load_json(settings_path(), {})
         self.base_path = tk.StringVar(value=settings.get("manga_path", ""))
         self.komga_path = tk.StringVar(value=settings.get("komga_path", DEFAULT_KOMGA_PATH))
@@ -196,9 +208,12 @@ class FileAggregatorApp:
         path_row = ttk.Frame(manga)
         path_row.pack(fill="x")
         ttk.Label(path_row, text="漫畫路徑：").pack(side="left")
-        ttk.Entry(path_row, textvariable=self.base_path).pack(side="left", fill="x", expand=True)
-        ttk.Button(path_row, text="瀏覽", command=self.browse).pack(side="left", padx=(6, 0))
-        ttk.Button(path_row, text="重新掃描", command=self.load_folders).pack(side="left", padx=(6, 0))
+        self.path_entry = ttk.Entry(path_row, textvariable=self.base_path)
+        self.path_entry.pack(side="left", fill="x", expand=True)
+        self.browse_button = ttk.Button(path_row, text="瀏覽", command=self.browse)
+        self.browse_button.pack(side="left", padx=(6, 0))
+        self.rescan_button = ttk.Button(path_row, text="重新掃描", command=self.load_folders)
+        self.rescan_button.pack(side="left", padx=(6, 0))
 
         list_frame = ttk.Frame(manga)
         list_frame.pack(fill="both", expand=True, pady=8)
@@ -223,6 +238,13 @@ class FileAggregatorApp:
         list_frame.columnconfigure(0, weight=1)
         self.folder_tree.bind("<<TreeviewSelect>>", self.on_tree_select)
 
+        scan_row = ttk.Frame(manga)
+        scan_row.pack(fill="x")
+        self.scan_progress = ttk.Progressbar(scan_row, mode="indeterminate")
+        self.scan_progress.pack(side="left", fill="x", expand=True)
+        self.scan_status_text = tk.StringVar(value="尚未掃描")
+        ttk.Label(scan_row, textvariable=self.scan_status_text).pack(side="left", padx=(8, 0))
+
         range_row = ttk.Frame(manga)
         range_row.pack()
         ttk.Label(range_row, text="起始編號：").pack(side="left")
@@ -231,19 +253,27 @@ class FileAggregatorApp:
         ttk.Label(range_row, text="結束編號：").pack(side="left", padx=(10, 0))
         self.end_entry = ttk.Entry(range_row, width=6)
         self.end_entry.pack(side="left")
-        ttk.Button(range_row, text="確認整合", command=self.confirm_aggregate).pack(side="left", padx=10)
+        self.aggregate_button = ttk.Button(range_row, text="確認整合", command=self.confirm_aggregate)
+        self.aggregate_button.pack(side="left", padx=10)
 
         export = ttk.LabelFrame(root, text="Komga 匯出", padding=8)
         export.pack(fill="x", padx=10, pady=6)
         komga_row = ttk.Frame(export)
         komga_row.pack(fill="x")
         ttk.Label(komga_row, text="Komga 輸出路徑：").pack(side="left")
-        ttk.Entry(komga_row, textvariable=self.komga_path).pack(side="left", fill="x", expand=True)
-        ttk.Button(komga_row, text="瀏覽", command=self.browse_komga).pack(side="left", padx=(6, 0))
+        self.komga_entry = ttk.Entry(komga_row, textvariable=self.komga_path)
+        self.komga_entry.pack(side="left", fill="x", expand=True)
+        self.browse_komga_button = ttk.Button(
+            komga_row, text="瀏覽", command=self.browse_komga)
+        self.browse_komga_button.pack(side="left", padx=(6, 0))
         options = ttk.Frame(export)
         options.pack(fill="x", pady=6)
-        ttk.Checkbutton(options, text="已存在且來源未變更時跳過", variable=self.skip_unchanged).pack(side="left")
-        ttk.Checkbutton(options, text="匯出完成後開啟輸出資料夾", variable=self.open_after_export).pack(side="left", padx=12)
+        self.skip_checkbox = ttk.Checkbutton(
+            options, text="已存在且來源未變更時跳過", variable=self.skip_unchanged)
+        self.skip_checkbox.pack(side="left")
+        self.open_checkbox = ttk.Checkbutton(
+            options, text="匯出完成後開啟輸出資料夾", variable=self.open_after_export)
+        self.open_checkbox.pack(side="left", padx=12)
         buttons = ttk.Frame(export)
         buttons.pack(fill="x")
         self.export_selected_button = ttk.Button(buttons, text="匯出選取項目", command=self.export_selected)
@@ -286,35 +316,85 @@ class FileAggregatorApp:
         if not base.is_dir():
             messagebox.showwarning("警告", "請選擇有效的漫畫路徑")
             return
-        self.folders = self.get_folders_with_numbers(base)
-        existing_items = self.folder_tree.get_children()
-        if existing_items:
-            self.folder_tree.delete(*existing_items)
-        self.series_groups = {}
-        self.tree_items = {}
-        self.chapter_updates = {}
-        self.chapter_sizes = {}
+        if self.manga_busy:
+            return
+        self.set_manga_busy(True)
+        self.scan_progress.configure(mode="indeterminate")
+        self.scan_progress.start(12)
+        self.scan_status_text.set("正在掃描…")
+        threading.Thread(target=self.scan_worker, args=(base,), daemon=True).start()
+        self.root.after(50, self.poll_scan_events)
+
+    def set_manga_busy(self, busy):
+        self.manga_busy = busy
+        state = "disabled" if busy else "normal"
+        for widget in (self.path_entry, self.browse_button, self.rescan_button,
+                       self.start_entry, self.end_entry, self.aggregate_button,
+                       self.komga_entry, self.browse_komga_button,
+                       self.skip_checkbox, self.open_checkbox,
+                       self.export_selected_button, self.export_all_button):
+            widget.configure(state=state)
+
+    def scan_worker(self, base):
+        try:
+            self.scan_events.put(("done", base, self.scan_folder_data(base)))
+        except Exception as error:
+            self.scan_events.put(("error", error))
+
+    def poll_scan_events(self):
+        try:
+            event = self.scan_events.get_nowait()
+        except queue.Empty:
+            self.root.after(50, self.poll_scan_events)
+            return
+        self.scan_progress.stop()
+        self.scan_progress.configure(value=0)
+        self.set_manga_busy(False)
+        if event[0] == "error":
+            self.scan_status_text.set("掃描失敗")
+            messagebox.showerror("掃描失敗", str(event[1]))
+            return
+        _, base, data = event
+        self.apply_scan_data(base, data)
+
+    @staticmethod
+    def scan_folder_data(base):
+        folders = FileAggregatorApp.get_folders_with_numbers(base)
+        series_groups = {}
+        chapter_updates = {}
+        chapter_sizes = {}
+        ready_chapters = set()
         details = {}
-        for folder_path, folder_name, number in self.folders:
+        for folder_path, folder_name, number in folders:
             chapter = Path(folder_path)
             status, translated = translation_status(folder_path)
             if status == "可匯出":
-                detail = f"{len(translated)} translated | Ready"
+                detail = f"{len(translated)} 張翻譯圖片｜可匯出"
                 images = translated
+                ready_chapters.add(chapter)
             elif status == "結果為空":
-                detail = "Result empty"
+                detail = "結果資料夾為空"
                 images = []
             else:
                 images = image_files(folder_path)
-                detail = f"{len(images)} images | Not translated"
-            modified = updated_at(chapter, images)
-            self.chapter_updates[chapter] = modified
-            self.chapter_sizes[chapter] = folder_size(chapter)
+                detail = f"{len(images)} 張圖片｜未翻譯"
+            chapter_updates[chapter] = updated_at(chapter, images)
+            chapter_sizes[chapter] = folder_size(chapter)
             details[chapter] = detail
-            self.series_groups.setdefault(chapter.parent, []).append(
+            series_groups.setdefault(chapter.parent, []).append(
                 (str(chapter), folder_name, number))
-        for chapters in self.series_groups.values():
+        for chapters in series_groups.values():
             chapters.sort(key=lambda item: (item[2], natural_sort_key(item[1])))
+        return (folders, series_groups, chapter_updates, chapter_sizes,
+                ready_chapters, details)
+
+    def apply_scan_data(self, base, data):
+        (self.folders, self.series_groups, self.chapter_updates,
+         self.chapter_sizes, self.ready_chapters, details) = data
+        existing_items = self.folder_tree.get_children()
+        if existing_items:
+            self.folder_tree.delete(*existing_items)
+        self.tree_items = {}
         series_order = sorted(
             self.series_groups,
             key=lambda series: max(self.chapter_updates[Path(item[0])]
@@ -327,7 +407,7 @@ class FileAggregatorApp:
             series_name = series.name if relative_series == Path(".") else str(relative_series)
             parent = self.folder_tree.insert(
                 "", "end", text=f"{series_index}. {series_name}", open=False,
-                values=(f"{len(self.series_groups[series])} chapters",
+                values=(f"{len(self.series_groups[series])} 個章節",
                         format_size(sum(self.chapter_sizes[Path(item[0])]
                                         for item in self.series_groups[series])),
                         datetime.fromtimestamp(modified).strftime("%Y-%m-%d %H:%M:%S")))
@@ -341,6 +421,8 @@ class FileAggregatorApp:
                             datetime.fromtimestamp(
                         self.chapter_updates[chapter]).strftime("%Y-%m-%d %H:%M:%S")))
                 self.tree_items[item] = ("chapter", chapter)
+        self.scan_status_text.set(
+            f"{len(self.series_groups)} 個系列，{len(self.folders)} 個章節")
 
     @staticmethod
     def get_folders_with_numbers(base_path):
@@ -348,9 +430,9 @@ class FileAggregatorApp:
         base = Path(base_path)
         for current, directory_names, file_names in os.walk(base):
             folder = Path(current)
-            has_result = "result" in directory_names
+            has_result = any(name.casefold() == "result" for name in directory_names)
             directory_names[:] = [name for name in directory_names
-                                  if name not in {"result", "inpainted"}]
+                                  if name.casefold() not in {"result", "inpainted"}]
             number = chapter_number(folder.name)
             has_images = any(Path(name).suffix.casefold() in IMAGE_EXTENSIONS
                              for name in file_names)
@@ -394,25 +476,90 @@ class FileAggregatorApp:
             messagebox.showwarning("警告", "請確保編號範圍有效")
             return
         names = [chapters[index][1] for index in range(start_idx, end_idx + 1)]
-        if messagebox.askyesno("確認整合", f"您確定要整合以下資料夾嗎？\n\n{', '.join(names)}"):
-            try:
-                output = self.aggregate_folders(chapters, start_idx, end_idx)
-                messagebox.showinfo("完成", f"檔案已重命名並複製到 {output.name}")
-                self.load_folders()
-            except Exception as error:
-                messagebox.showerror("整合失敗", str(error))
+        if messagebox.askyesno("確認整合", f"您確定要整合以下資料夾嗎？\n\n{summarize_names(names)}"):
+            self.set_manga_busy(True)
+            self.scan_progress.configure(mode="determinate", value=0, maximum=1)
+            self.scan_status_text.set("準備整合…")
+            threading.Thread(
+                target=self.aggregate_worker,
+                args=(chapters, start_idx, end_idx), daemon=True).start()
+            self.root.after(50, self.poll_aggregate_events)
 
-    def aggregate_folders(self, chapters, start_idx, end_idx):
+    def aggregate_folders(self, chapters, start_idx, end_idx, progress=None):
         selected = chapters[start_idx:end_idx + 1]
         output_name = f"Chapter {selected[0][2]}-{selected[-1][2]}"
         output = Path(selected[0][0]).parent / output_name
-        output.mkdir(exist_ok=True)
-        index = 1
-        for folder_path, _, _ in selected:
-            for source in image_files(folder_path):
-                shutil.copy2(source, output / f"{index}{source.suffix}")
-                index += 1
+        sources = [source for folder_path, _, _ in selected if Path(folder_path) != output
+                   for source in image_files(folder_path)]
+        if not sources:
+            raise ValueError("選取範圍沒有可整合的圖片")
+        temporary = output.with_name(f".{output.name}.tmp")
+        backup = output.with_name(f".{output.name}.backup")
+        if temporary.exists():
+            shutil.rmtree(temporary)
+        if backup.exists():
+            if output.exists():
+                shutil.rmtree(backup)
+            else:
+                os.replace(backup, output)
+        if output.exists() and not output.is_dir():
+            raise ValueError(f"輸出路徑不是資料夾：{output}")
+        temporary.mkdir()
+        try:
+            for index, source in enumerate(sources, 1):
+                shutil.copy2(source, temporary / f"{index}{source.suffix}")
+                if progress:
+                    progress(index, len(sources))
+            if output.exists():
+                os.replace(output, backup)
+            os.replace(temporary, output)
+        except Exception:
+            if temporary.exists():
+                shutil.rmtree(temporary)
+            if backup.exists() and not output.exists():
+                os.replace(backup, output)
+            raise
+        if backup.exists():
+            try:
+                shutil.rmtree(backup)
+            except OSError:
+                pass
         return output
+
+    def aggregate_worker(self, chapters, start_idx, end_idx):
+        try:
+            output = self.aggregate_folders(
+                chapters, start_idx, end_idx,
+                lambda current, total: self.aggregate_events.put(
+                    ("progress", current, total)))
+            self.aggregate_events.put(("done", output))
+        except Exception as error:
+            self.aggregate_events.put(("error", error))
+
+    def poll_aggregate_events(self):
+        done = None
+        while True:
+            try:
+                event = self.aggregate_events.get_nowait()
+            except queue.Empty:
+                break
+            if event[0] == "progress":
+                _, current, total = event
+                self.scan_progress.configure(maximum=max(total, 1), value=current)
+                self.scan_status_text.set(f"正在整合… {current} / {total}")
+            else:
+                done = event
+        if done is None:
+            self.root.after(50, self.poll_aggregate_events)
+            return
+        self.set_manga_busy(False)
+        if done[0] == "error":
+            self.scan_status_text.set("整合失敗")
+            messagebox.showerror("整合失敗", str(done[1]))
+            return
+        output = done[1]
+        messagebox.showinfo("完成", f"檔案已重命名並複製到 {output.name}")
+        self.load_folders()
 
     def export_selected(self):
         selected = self.selected_tree_item()
@@ -422,14 +569,15 @@ class FileAggregatorApp:
         kind, path, chapters = selected
         candidates = chapters if kind == "series" else [(str(path), path.name, chapter_number(path.name))]
         ready = [folder_path for folder_path, _, _ in candidates
-                 if translation_status(folder_path)[0] == "可匯出"]
+                 if Path(folder_path) in self.ready_chapters]
         if not ready:
             messagebox.showinfo("Komga 匯出", "選取項目沒有可匯出的翻譯結果")
             return
         self.start_export(ready)
 
     def export_all(self):
-        chapters = [path for path, _, _ in self.folders if translation_status(path)[0] == "可匯出"]
+        chapters = [path for path, _, _ in self.folders
+                    if Path(path) in self.ready_chapters]
         if not chapters:
             messagebox.showinfo("Komga 匯出", "沒有可匯出的翻譯結果")
             return
@@ -440,8 +588,7 @@ class FileAggregatorApp:
             messagebox.showwarning("警告", "請確認漫畫與 Komga 路徑")
             return
         self.save_settings()
-        self.export_selected_button.configure(state="disabled")
-        self.export_all_button.configure(state="disabled")
+        self.set_manga_busy(True)
         self.progress.configure(value=0, maximum=1)
         self.status_text.set("準備匯出…")
         options = (self.komga_path.get(), self.skip_unchanged.get())
@@ -491,11 +638,13 @@ class FileAggregatorApp:
                 self.status_text.set(f"正在處理：{chapter} — {current} / {total}")
             elif event[0] == "chapter":
                 _, action, chapter = event
-                self.status_text.set(f"[{action.upper()}] {chapter}")
+                action_label = {"created": "新增", "updated": "更新",
+                                "skipped": "跳過", "failed": "失敗"}[action]
+                self.status_text.set(f"[{action_label}] {chapter}")
             else:
                 _, counts, errors, output_folder = event
-                summary = (f"Created: {counts['created']}  Updated: {counts['updated']}  "
-                           f"Skipped: {counts['skipped']}  Failed: {counts['failed']}")
+                summary = (f"新增：{counts['created']}  更新：{counts['updated']}  "
+                           f"跳過：{counts['skipped']}  失敗：{counts['failed']}")
                 self.status_text.set(summary)
                 if errors:
                     messagebox.showerror("Komga 匯出完成（含錯誤）", summary + "\n\n" + "\n".join(errors))
@@ -505,9 +654,7 @@ class FileAggregatorApp:
                     os.startfile(output_folder)
                 done = True
         if done:
-            self.export_selected_button.configure(state="normal")
-            self.export_all_button.configure(state="normal")
-            self.load_folders()
+            self.set_manga_busy(False)
         else:
             self.root.after(50, self.poll_events)
 

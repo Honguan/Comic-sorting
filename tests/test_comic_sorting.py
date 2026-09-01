@@ -141,6 +141,14 @@ class ComicSortingTests(unittest.TestCase):
             (chapter / "result" / "1.png").write_bytes(b"image")
             self.assertEqual(comic.translation_status(chapter)[0], "可匯出")
 
+    def test_translation_status_accepts_result_case(self):
+        with tempfile.TemporaryDirectory() as temp:
+            chapter = Path(temp) / "Chapter 1"
+            result = chapter / "Result"
+            result.mkdir(parents=True)
+            (result / "1.png").write_bytes(b"image")
+            self.assertEqual(comic.translation_status(chapter)[0], "可匯出")
+
     def test_aggregate_direct_copy(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -156,7 +164,33 @@ class ComicSortingTests(unittest.TestCase):
                            (str(second), second.name, comic.Decimal("13"))]
             output = app.aggregate_folders(app.folders, 0, 1)
             self.assertEqual([path.name for path in comic.image_files(output)], ["1.png", "2.webp"])
+            with_existing = [(str(output), output.name, comic.Decimal("12")), *app.folders]
+            output = app.aggregate_folders(with_existing, 0, 2)
+            self.assertEqual([path.name for path in comic.image_files(output)], ["1.png", "2.webp"])
+            (output / "stale.png").write_bytes(b"stale")
+            output = app.aggregate_folders(app.folders, 0, 1)
+            self.assertFalse((output / "stale.png").exists())
+            original = {path.name: path.read_bytes() for path in output.iterdir()}
+            with mock.patch.object(comic.shutil, "copy2", side_effect=OSError("stop")):
+                with self.assertRaises(OSError):
+                    app.aggregate_folders(app.folders, 0, 1)
+            self.assertEqual({path.name: path.read_bytes() for path in output.iterdir()}, original)
+            backup = root / ".Chapter 12-13.backup"
+            output.rename(backup)
+            with mock.patch.object(comic.shutil, "copy2", side_effect=OSError("stop")):
+                with self.assertRaises(OSError):
+                    app.aggregate_folders(app.folders, 0, 1)
+            self.assertEqual({path.name: path.read_bytes() for path in output.iterdir()}, original)
             self.assertFalse((root / "temp").exists())
+            self.assertFalse((root / ".Chapter 12-13.tmp").exists())
+            self.assertFalse((root / ".Chapter 12-13.backup").exists())
+
+    def test_long_confirmation_summary(self):
+        names = [f"Chapter {number}" for number in range(1, 13)]
+        summary = comic.summarize_names(names)
+        self.assertIn("Chapter 10", summary)
+        self.assertNotIn("Chapter 11", summary)
+        self.assertIn("共 12 個章節", summary)
 
     def test_updated_at_uses_newest_image(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -242,14 +276,34 @@ class ComicSortingTests(unittest.TestCase):
             app = comic.FileAggregatorApp.__new__(comic.FileAggregatorApp)
             app.base_path = type("Value", (), {"get": lambda self: str(root)})()
             app.folder_tree = Tree()
+            app.scan_status_text = type("Value", (), {"set": lambda self, value: None})()
 
-            app.load_folders()
+            app.apply_scan_data(root, app.scan_folder_data(root))
 
             parents = [item for item in app.folder_tree.items if not item[1]]
             self.assertEqual([item[2] for item in parents], ["1. Newer", "2. Older"])
             newer_children = [item[2] for item in app.folder_tree.items
                               if item[1] == parents[0][0]]
             self.assertEqual(newer_children, ["1. Chapter 2", "2. Chapter 10"])
+
+    def test_background_workers_report_completion(self):
+        with tempfile.TemporaryDirectory() as temp:
+            series, chapter, _, _ = fixture(temp)
+            app = comic.FileAggregatorApp.__new__(comic.FileAggregatorApp)
+            app.scan_events = comic.queue.Queue()
+            app.aggregate_events = comic.queue.Queue()
+
+            app.scan_worker(series)
+            scan_event = app.scan_events.get_nowait()
+            self.assertEqual((scan_event[0], len(scan_event[2][0])), ("done", 1))
+            self.assertIn(chapter, scan_event[2][4])
+
+            chapters = [(str(chapter), chapter.name, comic.Decimal("1"))]
+            (chapter / "1.png").write_bytes(b"image")
+            app.aggregate_worker(chapters, 0, 0)
+            events = list(app.aggregate_events.queue)
+            self.assertEqual(events[-1][0], "done")
+            self.assertTrue(events[-1][1].is_dir())
 
 
 if __name__ == "__main__":
