@@ -48,6 +48,35 @@ def updated_at(folder, images):
     return max([Path(folder).stat().st_mtime, *(image.stat().st_mtime for image in images)])
 
 
+def folder_size(folder):
+    total = 0
+    pending = [os.fspath(folder)]
+    while pending:
+        try:
+            entries = os.scandir(pending.pop())
+        except OSError:
+            continue
+        with entries:
+            for entry in entries:
+                try:
+                    if entry.is_dir(follow_symlinks=False):
+                        pending.append(entry.path)
+                    elif entry.is_file(follow_symlinks=False):
+                        total += entry.stat(follow_symlinks=False).st_size
+                except OSError:
+                    # ponytail: unreadable files are omitted; report them if size auditing is needed.
+                    pass
+    return total
+
+
+def format_size(size):
+    value = float(size)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if value < 1024 or unit == "TB":
+            return f"{int(value)} B" if unit == "B" else f"{value:.1f} {unit}"
+        value /= 1024
+
+
 def source_fingerprint(images):
     details = []
     latest = 0
@@ -153,6 +182,7 @@ class FileAggregatorApp:
         self.series_groups = {}
         self.tree_items = {}
         self.chapter_updates = {}
+        self.chapter_sizes = {}
         self.events = queue.Queue()
         settings = load_json(settings_path(), {})
         self.base_path = tk.StringVar(value=settings.get("manga_path", ""))
@@ -173,13 +203,15 @@ class FileAggregatorApp:
         list_frame = ttk.Frame(manga)
         list_frame.pack(fill="both", expand=True, pady=8)
         self.folder_tree = ttk.Treeview(
-            list_frame, columns=("status", "updated"), show="tree headings",
+            list_frame, columns=("status", "size", "updated"), show="tree headings",
             selectmode="browse", height=12)
         self.folder_tree.heading("#0", text="系列 / 章節")
         self.folder_tree.heading("status", text="狀態")
+        self.folder_tree.heading("size", text="資料夾大小")
         self.folder_tree.heading("updated", text="更新時間 ↓")
-        self.folder_tree.column("#0", width=560, stretch=True)
+        self.folder_tree.column("#0", width=450, stretch=True)
         self.folder_tree.column("status", width=150, stretch=False)
+        self.folder_tree.column("size", width=110, anchor="e", stretch=False)
         self.folder_tree.column("updated", width=150, anchor="center", stretch=False)
         vertical = ttk.Scrollbar(list_frame, command=self.folder_tree.yview)
         horizontal = ttk.Scrollbar(list_frame, orient="horizontal", command=self.folder_tree.xview)
@@ -261,6 +293,7 @@ class FileAggregatorApp:
         self.series_groups = {}
         self.tree_items = {}
         self.chapter_updates = {}
+        self.chapter_sizes = {}
         details = {}
         for folder_path, folder_name, number in self.folders:
             chapter = Path(folder_path)
@@ -276,6 +309,7 @@ class FileAggregatorApp:
                 detail = f"{len(images)} images | Not translated"
             modified = updated_at(chapter, images)
             self.chapter_updates[chapter] = modified
+            self.chapter_sizes[chapter] = folder_size(chapter)
             details[chapter] = detail
             self.series_groups.setdefault(chapter.parent, []).append(
                 (str(chapter), folder_name, number))
@@ -294,6 +328,8 @@ class FileAggregatorApp:
             parent = self.folder_tree.insert(
                 "", "end", text=series_name, open=False,
                 values=(f"{len(self.series_groups[series])} chapters",
+                        format_size(sum(self.chapter_sizes[Path(item[0])]
+                                        for item in self.series_groups[series])),
                         datetime.fromtimestamp(modified).strftime("%Y-%m-%d %H:%M:%S")))
             self.tree_items[parent] = ("series", series)
             display_chapters = sorted(
@@ -303,7 +339,8 @@ class FileAggregatorApp:
                 chapter = Path(folder_path)
                 item = self.folder_tree.insert(
                     parent, "end", text=folder_name,
-                    values=(details[chapter], datetime.fromtimestamp(
+                    values=(details[chapter], format_size(self.chapter_sizes[chapter]),
+                            datetime.fromtimestamp(
                         self.chapter_updates[chapter]).strftime("%Y-%m-%d %H:%M:%S")))
                 self.tree_items[item] = ("chapter", chapter)
 

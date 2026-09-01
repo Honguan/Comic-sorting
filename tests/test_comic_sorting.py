@@ -172,6 +172,16 @@ class ComicSortingTests(unittest.TestCase):
 
             self.assertEqual(comic.updated_at(folder, [older, newer]), 200)
 
+    def test_folder_size_and_format(self):
+        with tempfile.TemporaryDirectory() as temp:
+            folder = Path(temp)
+            (folder / "nested").mkdir()
+            (folder / "1.bin").write_bytes(b"a" * 1024)
+            (folder / "nested" / "2.bin").write_bytes(b"b" * 512)
+
+            self.assertEqual(comic.folder_size(folder), 1536)
+            self.assertEqual(comic.format_size(1536), "1.5 KB")
+
     def test_aggregate_requires_tree_selection(self):
         app = comic.FileAggregatorApp.__new__(comic.FileAggregatorApp)
         app.folder_tree = type("Tree", (), {"selection": lambda self: ()})()
