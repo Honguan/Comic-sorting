@@ -4,6 +4,7 @@ import os
 import queue
 import re
 import shutil
+import sys
 import threading
 import zipfile
 from datetime import datetime
@@ -16,6 +17,11 @@ from tkinter import filedialog, messagebox, ttk
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 WORK_FOLDER_NAMES = {"mask", "inpainted"}
 DEFAULT_KOMGA_PATH = r"D:\Komga"
+
+
+def resource_path(relative_path):
+    base = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
+    return base / relative_path
 
 
 def natural_sort_key(value):
@@ -216,6 +222,9 @@ def settings_path():
 class FileAggregatorApp:
     def __init__(self, root):
         self.root = root
+        icon = resource_path("assets/comic-sorting.ico")
+        if icon.is_file():
+            self.root.iconbitmap(default=icon)
         self.root.title("漫畫整合工具")
         self.folders = []
         self.series_groups = {}

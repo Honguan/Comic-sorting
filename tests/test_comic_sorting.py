@@ -60,6 +60,12 @@ class ComicSortingTests(unittest.TestCase):
         self.assertEqual(comic.output_path_for("D:/Komga", series, series / "Chapter 1"),
                          Path("D:/Komga/＂series＂/Chapter 1.cbz"))
 
+    def test_resource_path_uses_pyinstaller_bundle(self):
+        with tempfile.TemporaryDirectory() as temp:
+            with mock.patch.object(comic.sys, "_MEIPASS", temp, create=True):
+                self.assertEqual(comic.resource_path("assets/icon.ico"),
+                                 Path(temp) / "assets" / "icon.ico")
+
     def test_high_level_discovery(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
