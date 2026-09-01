@@ -81,13 +81,57 @@ class ComicSortingTests(unittest.TestCase):
             result = chapter / "result"
             result.mkdir(parents=True)
             (result / "1.webp").write_bytes(b"image")
+            (chapter / "mask").mkdir()
+            (chapter / "mask" / "1.png").write_bytes(b"mask")
+            (chapter / "inpainted").mkdir()
+            (chapter / "inpainted" / "1.png").write_bytes(b"inpainted")
             output_root = root / "Komga"
             app = comic.FileAggregatorApp.__new__(comic.FileAggregatorApp)
             app.events = comic.queue.Queue()
 
-            app.export_worker([str(chapter)], str(output_root), True)
+            app.export_worker([str(chapter)], str(root / "Mangas"), str(output_root), True)
 
             self.assertTrue((output_root / "Killer Shark" / "Chapter 10-42.cbz").is_file())
+            self.assertEqual(list((chapter / "mask").iterdir()), [])
+            self.assertEqual(list((chapter / "inpainted").iterdir()), [])
+
+    def test_clear_work_folders_preserves_folders_and_other_data(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            mask = root / "Chapter 1" / "Mask"
+            inpainted = root / "Chapter 2" / "inpainted"
+            result = root / "Chapter 1" / "result"
+            mask.mkdir(parents=True)
+            inpainted.mkdir(parents=True)
+            result.mkdir(parents=True)
+            (mask / "1.png").write_bytes(b"mask")
+            (mask / "nested").mkdir()
+            (mask / "nested" / "2.png").write_bytes(b"nested")
+            (inpainted / "1.png").write_bytes(b"inpainted")
+            (result / "1.png").write_bytes(b"result")
+
+            folders, removed, errors = comic.clear_work_folders(root)
+
+            self.assertEqual((folders, removed, errors), (2, 3, []))
+            self.assertTrue(mask.is_dir())
+            self.assertTrue(inpainted.is_dir())
+            self.assertEqual(list(mask.iterdir()), [])
+            self.assertEqual(list(inpainted.iterdir()), [])
+            self.assertTrue((result / "1.png").is_file())
+
+    def test_failed_export_preserves_work_folders(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            chapter = root / "Mangas" / "Series" / "Chapter 1"
+            mask = chapter / "mask"
+            mask.mkdir(parents=True)
+            (mask / "1.png").write_bytes(b"mask")
+            app = comic.FileAggregatorApp.__new__(comic.FileAggregatorApp)
+            app.events = comic.queue.Queue()
+
+            app.export_worker([chapter], root / "Mangas", root / "Komga", True)
+
+            self.assertTrue((mask / "1.png").is_file())
 
     def test_create_cbz(self):
         with tempfile.TemporaryDirectory() as temp:

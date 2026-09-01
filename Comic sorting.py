@@ -14,6 +14,7 @@ from tkinter import filedialog, messagebox, ttk
 
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
+WORK_FOLDER_NAMES = {"mask", "inpainted"}
 DEFAULT_KOMGA_PATH = r"D:\Komga"
 
 
@@ -83,6 +84,36 @@ def format_size(size):
 def summarize_names(names):
     preview = ", ".join(names[:10])
     return preview if len(names) <= 10 else f"{preview}\n…共 {len(names)} 個章節"
+
+
+def clear_work_folders(root):
+    targets = []
+    for current, directory_names, _ in os.walk(root):
+        matched = [name for name in directory_names
+                   if name.casefold() in WORK_FOLDER_NAMES]
+        targets.extend(Path(current) / name for name in matched)
+        directory_names[:] = [name for name in directory_names if name not in matched]
+    removed = 0
+    errors = []
+    for folder in targets:
+        if folder.is_symlink():
+            errors.append(f"{folder}: 不清理符號連結")
+            continue
+        try:
+            children = list(folder.iterdir())
+        except OSError as error:
+            errors.append(f"{folder}: {error}")
+            continue
+        for child in children:
+            try:
+                if child.is_dir() and not child.is_symlink():
+                    shutil.rmtree(child)
+                else:
+                    child.unlink()
+                removed += 1
+            except OSError as error:
+                errors.append(f"{child}: {error}")
+    return len(targets), removed, errors
 
 
 def source_fingerprint(images):
@@ -280,6 +311,9 @@ class FileAggregatorApp:
         self.export_selected_button.pack(side="left")
         self.export_all_button = ttk.Button(buttons, text="匯出所有已翻譯項目", command=self.export_all)
         self.export_all_button.pack(side="left", padx=6)
+        self.cleanup_button = ttk.Button(
+            buttons, text="清理所有 mask / inpainted", command=self.confirm_cleanup)
+        self.cleanup_button.pack(side="left")
         self.progress = ttk.Progressbar(export, mode="determinate")
         self.progress.pack(fill="x", pady=(8, 2))
         ttk.Label(export, textvariable=self.status_text).pack(anchor="w")
@@ -332,7 +366,8 @@ class FileAggregatorApp:
                        self.start_entry, self.end_entry, self.aggregate_button,
                        self.komga_entry, self.browse_komga_button,
                        self.skip_checkbox, self.open_checkbox,
-                       self.export_selected_button, self.export_all_button):
+                       self.export_selected_button, self.export_all_button,
+                       self.cleanup_button):
             widget.configure(state=state)
 
     def scan_worker(self, base):
@@ -591,11 +626,11 @@ class FileAggregatorApp:
         self.set_manga_busy(True)
         self.progress.configure(value=0, maximum=1)
         self.status_text.set("準備匯出…")
-        options = (self.komga_path.get(), self.skip_unchanged.get())
+        options = (self.base_path.get(), self.komga_path.get(), self.skip_unchanged.get())
         threading.Thread(target=self.export_worker, args=(chapters, *options), daemon=True).start()
         self.root.after(50, self.poll_events)
 
-    def export_worker(self, chapters, komga_path, skip_unchanged):
+    def export_worker(self, chapters, source_root, komga_path, skip_unchanged):
         root = Path(komga_path)
         state_file = root / ".comic-sorting-state.json"
         state = load_json(state_file, {})
@@ -622,11 +657,39 @@ class FileAggregatorApp:
         except Exception as error:
             counts["failed"] += 1
             errors.append(f"狀態檔: {error}")
+        cleanup = None
+        if not counts["failed"]:
+            cleanup = clear_work_folders(source_root)
+            errors.extend(f"清理失敗：{error}" for error in cleanup[2])
         output_folder = output_folders.pop() if len(output_folders) == 1 else root
-        self.events.put(("done", counts, errors, str(output_folder)))
+        self.events.put(("done", counts, errors, str(output_folder), cleanup))
+
+    def confirm_cleanup(self):
+        root = Path(self.base_path.get())
+        if not root.is_dir():
+            messagebox.showwarning("警告", "請選擇有效的漫畫路徑")
+            return
+        if not messagebox.askyesno(
+                "確認清理",
+                "將清空目前漫畫路徑下所有 mask 與 inpainted 資料夾內容。\n"
+                "資料夾本身會保留，此操作無法復原。確定繼續嗎？"):
+            return
+        self.set_manga_busy(True)
+        self.progress.configure(mode="indeterminate")
+        self.progress.start(12)
+        self.status_text.set("正在清理 mask / inpainted…")
+        threading.Thread(target=self.cleanup_worker, args=(root,), daemon=True).start()
+        self.root.after(50, self.poll_events)
+
+    def cleanup_worker(self, root):
+        try:
+            self.events.put(("cleanup_done", clear_work_folders(root)))
+        except Exception as error:
+            self.events.put(("cleanup_error", error))
 
     def poll_events(self):
         done = False
+        rescan = False
         while True:
             try:
                 event = self.events.get_nowait()
@@ -641,10 +704,30 @@ class FileAggregatorApp:
                 action_label = {"created": "新增", "updated": "更新",
                                 "skipped": "跳過", "failed": "失敗"}[action]
                 self.status_text.set(f"[{action_label}] {chapter}")
+            elif event[0] == "cleanup_done":
+                _, (folders, removed, errors) = event
+                summary = f"已清理 {folders} 個資料夾、移除 {removed} 個項目"
+                self.progress.stop()
+                self.progress.configure(mode="determinate", value=0)
+                self.status_text.set(summary)
+                if errors:
+                    messagebox.showerror("清理完成（含錯誤）", summary + "\n\n" + "\n".join(errors))
+                else:
+                    messagebox.showinfo("清理完成", summary)
+                done = True
+                rescan = removed > 0
+            elif event[0] == "cleanup_error":
+                self.progress.stop()
+                self.progress.configure(mode="determinate", value=0)
+                self.status_text.set("清理失敗")
+                messagebox.showerror("清理失敗", str(event[1]))
+                done = True
             else:
-                _, counts, errors, output_folder = event
+                _, counts, errors, output_folder, cleanup = event
                 summary = (f"新增：{counts['created']}  更新：{counts['updated']}  "
                            f"跳過：{counts['skipped']}  失敗：{counts['failed']}")
+                if cleanup:
+                    summary += f"  清理：{cleanup[0]} 個資料夾／{cleanup[1]} 個項目"
                 self.status_text.set(summary)
                 if errors:
                     messagebox.showerror("Komga 匯出完成（含錯誤）", summary + "\n\n" + "\n".join(errors))
@@ -653,8 +736,11 @@ class FileAggregatorApp:
                 if self.open_after_export.get() and Path(output_folder).is_dir():
                     os.startfile(output_folder)
                 done = True
+                rescan = bool(cleanup and cleanup[1])
         if done:
             self.set_manga_busy(False)
+            if rescan:
+                self.load_folders()
         else:
             self.root.after(50, self.poll_events)
 
