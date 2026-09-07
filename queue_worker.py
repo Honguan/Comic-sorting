@@ -30,8 +30,9 @@ def translator_command(installation, config, python_path="", chapter=None):
         raise ValueError(tr("請選擇既有 BallonsTranslator config JSON"))
     command = [str(python), "-u", "-m", "ballontranslator", "--config", str(config)]
     if chapter is not None:
-        if "," in str(chapter):
-            raise ValueError(tr("BallonsTranslator 的 --exec_dirs 不支援含逗號的路徑"))
+        # run_batch accepts a list; its string form splits literal path commas.
+        command[2:4] = ["-c", "from ballontranslator.launch import args, main; "
+                         "args.exec_dirs = [args.exec_dirs]; main()"]
         command += ["--headless", "--exec_dirs", str(Path(chapter).resolve())]
     env = os.environ.copy()
     env["PATH"] = os.pathsep.join((str(python.parent), str(python.parent / "Scripts"), env.get("PATH", "")))

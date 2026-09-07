@@ -25,8 +25,38 @@ class TranslationQueueTests(unittest.TestCase):
             self.assertEqual(command[-1], str(root / "漫畫 1"))
             self.assertEqual(command[0], str(root / "ballontrans_pylibs_win/python.exe"))
             self.assertEqual(env["PYTHONIOENCODING"], "utf-8")
-            with self.assertRaises(ValueError):
-                translator_command(root, config, chapter=root / "a,b")
+
+    def test_comma_path_reaches_translator_as_one_directory(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            package = root / "ballontranslator"
+            package.mkdir()
+            (package / "__init__.py").touch()
+            (package / "__main__.py").write_text("from .launch import main\nmain()\n")
+            (package / "launch.py").write_text(
+                "import argparse\nfrom pathlib import Path\n"
+                "parser = argparse.ArgumentParser()\n"
+                "parser.add_argument('--config')\n"
+                "parser.add_argument('--headless', action='store_true')\n"
+                "parser.add_argument('--exec_dirs', default='')\n"
+                "args = parser.parse_args()\n"
+                "def main():\n"
+                "    dirs = args.exec_dirs\n"
+                "    if not isinstance(dirs, list): dirs = dirs.split(',')\n"
+                "    assert len(dirs) == 1\n"
+                "    (Path(dirs[0]) / 'result').mkdir()\n"
+                "    print('finished translating all dirs')\n"
+                "    input()\n"
+            )
+            config = root / "config.json"
+            config.write_text("{}")
+            for name in ("漫畫 1", "系列, 名稱/Chapter '1, 2'"):
+                with self.subTest(name=name):
+                    chapter = root / name
+                    chapter.mkdir(parents=True)
+                    run_translation(*translator_command(root, config, sys.executable, chapter),
+                                    threading.Event(), lambda *p: None)
+                    self.assertTrue((chapter / "result").is_dir())
 
     def test_process_completion_progress_and_failure(self):
         progress = []
