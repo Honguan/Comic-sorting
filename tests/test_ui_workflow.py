@@ -13,7 +13,7 @@ from ui_language import set_language
 class WorkflowTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
-        self.folder = Path(self.temp.name)
+        self.folder = Path(self.temp.name).resolve()
         self.settings = self.folder / "settings.json"
         self.patch = mock.patch.object(comic, "settings_path", return_value=self.settings)
         self.patch.start()

@@ -13,7 +13,7 @@ from test_comic_sorting import comic
 class TranslationQueueTests(unittest.TestCase):
     def test_installed_runtime_and_unicode_paths(self):
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
+            root = Path(temp).resolve()
             (root / "ballontranslator").mkdir()
             (root / "ballontranslator/__main__.py").touch()
             (root / "ballontrans_pylibs_win").mkdir()
