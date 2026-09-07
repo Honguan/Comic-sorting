@@ -378,7 +378,7 @@ class ComicSortingTests(unittest.TestCase):
             app.confirm_aggregate()
         warning.assert_called_once_with("警告", "請先選擇父系列或章節")
 
-    def test_tree_selection_defaults_to_last_chapter(self):
+    def test_tree_selection_uses_selected_range(self):
         class Entry:
             def delete(self, *_):
                 self.value = ""
@@ -390,17 +390,21 @@ class ComicSortingTests(unittest.TestCase):
         chapters = [(str(series / f"Chapter {number}"), f"Chapter {number}", comic.Decimal(number))
                     for number in (1, 2, 3)]
         app = comic.FileAggregatorApp.__new__(comic.FileAggregatorApp)
+        app.manga_busy = False
+        app.selection_text = mock.Mock()
         app.start_entry, app.end_entry = Entry(), Entry()
         app.series_groups = {series: chapters}
-        app.tree_items = {"series": ("series", series), "chapter": ("chapter", series / "Chapter 2")}
+        app.tree_items = {"series": ("series", series), **{
+            str(number): ("chapter", series / f"Chapter {number}") for number in (1, 2, 3)}}
 
-        app.folder_tree = type("Tree", (), {"selection": lambda self: ("series",)})()
+        app.folder_tree = type("Tree", (), {"selection": lambda self: ("series",),
+                                           "get_children": lambda self, item: ("1", "2", "3")})()
         app.on_tree_select()
         self.assertEqual((app.start_entry.value, app.end_entry.value), ("1", "3"))
 
-        app.folder_tree = type("Tree", (), {"selection": lambda self: ("chapter",)})()
+        app.folder_tree = type("Tree", (), {"selection": lambda self: ("2",)})()
         app.on_tree_select()
-        self.assertEqual((app.start_entry.value, app.end_entry.value), ("2", "3"))
+        self.assertEqual((app.start_entry.value, app.end_entry.value), ("2", "2"))
 
     def test_tree_numbers_series_by_time_and_chapters_by_number(self):
         class Tree:
@@ -408,6 +412,9 @@ class ComicSortingTests(unittest.TestCase):
                 self.items = []
 
             def get_children(self):
+                return ()
+
+            def selection(self):
                 return ()
 
             def delete(self, *_):
@@ -431,6 +438,8 @@ class ComicSortingTests(unittest.TestCase):
             app = comic.FileAggregatorApp.__new__(comic.FileAggregatorApp)
             app.base_path = type("Value", (), {"get": lambda self: str(root)})()
             app.folder_tree = Tree()
+            app.tree_items = {}
+            app.search_text = type("Value", (), {"get": lambda self: ""})()
             app.scan_status_text = type("Value", (), {"set": lambda self, value: None})()
 
             app.apply_scan_data(root, app.scan_folder_data(root))
