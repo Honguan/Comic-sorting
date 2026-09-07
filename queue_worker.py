@@ -135,9 +135,8 @@ def run_jobs(jobs, settings, output, skip, stop, emit):
                     run_translation(*translator_command(settings["bt_path"], settings["bt_config"],
                                                         settings.get("bt_python", ""), path), stop,
                                     lambda name, value: emit(("stage", name, value)))
-                    sources = {p.stem for p in image_files(path)}
-                    _, translated = translation_status(path)
-                    if not sources.issubset({p.stem for p in translated}):
+                    status, _ = translation_status(path)
+                    if status != tr("可匯出"):
                         raise RuntimeError(tr("翻譯結果不完整，未執行後續動作"))
                 if stop.is_set():
                     raise RuntimeError(tr("已停止"))

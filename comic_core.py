@@ -27,6 +27,21 @@ def chapter_number(name):
     return Decimal(match.group()) if match else None
 
 
+def aggregate_output(selected):
+    """Validate non-overlapping inputs before deriving the merged folder name."""
+    parent = Path(selected[0][0]).parent.resolve()
+    end = None
+    for path, name, start in selected:
+        match = re.fullmatch(r"Chapter\s+(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)", name, re.I)
+        last = Decimal(match[2]) if match else start
+        if Path(path).parent.resolve() != parent:
+            raise ValueError(tr("整合時請只選擇同一系列的章節"))
+        if last < start or (end is not None and start <= end):
+            raise ValueError(tr("章節範圍重疊或順序錯誤：{0}。請只選擇不重疊的來源章節。").format(name))
+        end = last
+    return parent / f"Chapter {selected[0][2]}-{end}"
+
+
 def image_files(folder):
     folder = Path(folder)
     if not folder.is_dir():
@@ -44,9 +59,13 @@ def translation_status(chapter_folder):
     if not result.is_dir():
         result = next((child for child in Path(chapter_folder).iterdir()
                        if child.is_dir() and child.name.casefold() == "result"), result)
-    if not result.is_dir():
+    if not result.is_dir() or is_link_or_junction(result):
         return tr("未翻譯"), []
     images = image_files(result)
+    if images:
+        sources = {path.stem.casefold() for path in image_files(chapter_folder)}
+        if not sources.issubset({path.stem.casefold() for path in images}):
+            return tr("部分翻譯"), images
     return (tr("可匯出") if images else tr("結果為空")), images
 
 
@@ -59,7 +78,10 @@ def folder_size(folder):
     pending = [os.fspath(folder)]
     while pending:
         try:
-            entries = os.scandir(pending.pop())
+            current = pending.pop()
+            if is_link_or_junction(current):
+                continue
+            entries = os.scandir(current)
         except OSError:
             continue
         with entries:
@@ -88,10 +110,14 @@ def summarize_names(names):
     return preview if len(names) <= 10 else tr("{0}\n…共 {1} 個章節").format(preview, len(names))
 
 
+def is_link_or_junction(path):
+    info = Path(path).lstat()
+    return bool(stat.S_ISLNK(info.st_mode)
+                or getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+
+
 def _check_cleanup_path(path, root):
-    info = path.lstat()
-    if (stat.S_ISLNK(info.st_mode)
-            or getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT):
+    if is_link_or_junction(path):
         raise ValueError(tr("{0}: 不清理符號連結").format(path))
     if not path.resolve().is_relative_to(root):
         raise ValueError(tr("不允許刪除系列目錄外或符號連結資料夾"))
@@ -252,6 +278,9 @@ def save_json(path, data):
 
 def export_chapter(series_path, chapter_path, komga_root, state, skip_unchanged=True,
                    progress=None):
+    chapter_path, komga_root = Path(chapter_path).resolve(), Path(komga_root).resolve()
+    if chapter_path.is_relative_to(komga_root) or komga_root.is_relative_to(chapter_path):
+        raise ValueError(tr("匯出與漫畫路徑不可互相包含"))
     status, images = translation_status(chapter_path)
     if status != tr("可匯出"):
         raise ValueError(status)
@@ -259,13 +288,29 @@ def export_chapter(series_path, chapter_path, komga_root, state, skip_unchanged=
     key = f"{Path(series_path).name}/{Path(chapter_path).name}"
     fingerprint = source_fingerprint(images)
     previous = state.get(key, {})
+    if not isinstance(previous, dict):
+        previous = {}
+    source = images[0].parent.resolve()
+    if previous.get("source") and Path(previous["source"]).resolve() != source:
+        raise ValueError(tr("輸出已屬於其他來源，請改用不同的 Komga 路徑或系列名稱：{0}").format(output))
     if skip_unchanged and output.is_file() and previous.get("fingerprint") == fingerprint["fingerprint"]:
-        return "skipped", output
+        info = output.stat()
+        output_stat = [info.st_size, info.st_mtime_ns]
+        if "outputStat" not in previous:
+            try:
+                validate_cbz(output, images)
+                previous["outputStat"] = output_stat
+            except (OSError, ValueError, zipfile.BadZipFile):
+                pass  # Rebuild damaged archives from the unchanged source images.
+        if previous.get("outputStat") == output_stat:
+            return "skipped", output
     action = "updated" if output.exists() else "created"
     create_cbz(images, output, progress)
+    info = output.stat()
     state[key] = {
-        "source": str(Path(chapter_path) / "result"),
+        "source": str(source),
         "output": str(output),
+        "outputStat": [info.st_size, info.st_mtime_ns],
         **fingerprint,
     }
     return action, output

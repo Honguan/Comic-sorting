@@ -91,6 +91,7 @@ class ComicSortingTests(unittest.TestCase):
         app.base_path = value("manga")
         app.komga_path = value("komga")
         app.remove_sources_after_aggregate = value(False)
+        app.skip_unchanged, app.open_after_export = value(True), value(False)
         with mock.patch.object(comic, "save_json", side_effect=OSError("denied")), \
                 mock.patch.object(comic.messagebox, "showerror") as error:
             self.assertFalse(app.save_settings())
@@ -103,6 +104,7 @@ class ComicSortingTests(unittest.TestCase):
             app.base_path = value("manga")
             app.komga_path = value("komga")
             app.remove_sources_after_aggregate = value(True)
+            app.skip_unchanged, app.open_after_export = value(True), value(False)
             path = Path(temp) / "settings.json"
             with mock.patch.object(comic, "settings_path", return_value=path):
                 self.assertTrue(app.save_settings())
@@ -211,7 +213,7 @@ class ComicSortingTests(unittest.TestCase):
                 app.start_export([])
 
             warning.assert_called_once_with(
-                "警告", "Komga 輸出路徑不能位於漫畫來源路徑內")
+                "警告", "匯出與漫畫路徑不可互相包含")
 
     def test_create_cbz(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -289,7 +291,8 @@ class ComicSortingTests(unittest.TestCase):
             output = app.aggregate_folders(app.folders, 0, 1)
             self.assertEqual([path.name for path in comic.image_files(output)], ["1.png", "2.webp"])
             with_existing = [(str(output), output.name, comic.Decimal("12")), *app.folders]
-            output = app.aggregate_folders(with_existing, 0, 2)
+            with self.assertRaisesRegex(ValueError, "重疊"):
+                app.aggregate_folders(with_existing, 0, 2)
             self.assertEqual([path.name for path in comic.image_files(output)], ["1.png", "2.webp"])
             (output / "stale.png").write_bytes(b"stale")
             output = app.aggregate_folders(app.folders, 0, 1)
@@ -380,6 +383,9 @@ class ComicSortingTests(unittest.TestCase):
 
     def test_tree_selection_uses_selected_range(self):
         class Entry:
+            def configure(self, **_kwargs):
+                pass
+
             def delete(self, *_):
                 self.value = ""
 
@@ -438,6 +444,10 @@ class ComicSortingTests(unittest.TestCase):
             app = comic.FileAggregatorApp.__new__(comic.FileAggregatorApp)
             app.base_path = type("Value", (), {"get": lambda self: str(root)})()
             app.folder_tree = Tree()
+            app.scan_data = None
+            app.manga_busy = False
+            app.selection_text = mock.Mock()
+            app.start_entry, app.end_entry = mock.Mock(), mock.Mock()
             app.tree_items = {}
             app.search_text = type("Value", (), {"get": lambda self: ""})()
             app.scan_status_text = type("Value", (), {"set": lambda self, value: None})()

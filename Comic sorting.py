@@ -15,6 +15,7 @@ from comic_core import (
     natural_sort_key, updated_at, folder_size, format_size, summarize_names,
     clear_work_folders, remove_aggregated_folders, source_fingerprint,
     output_path_for, validate_cbz, create_cbz, load_json, save_json, export_chapter,
+    aggregate_output, is_link_or_junction,
 )
 
 
@@ -55,13 +56,14 @@ class FileAggregatorApp:
         self.manga_busy = False
         self.base_path = tk.StringVar(value=settings.get("manga_path", ""))
         self.komga_path = tk.StringVar(value=settings.get("komga_path", ""))
-        self.skip_unchanged = tk.BooleanVar(value=True)
-        self.open_after_export = tk.BooleanVar(value=False)
+        self.skip_unchanged = tk.BooleanVar(value=settings.get("skip_unchanged", True) is True)
+        self.open_after_export = tk.BooleanVar(value=settings.get("open_after_export", False) is True)
         self.remove_sources_after_aggregate = tk.BooleanVar(
             value=settings.get("remove_sources_after_aggregate") is True)
         self.status_text = tk.StringVar(value=tr("就緒"))
         self.search_text = tk.StringVar()
         self.scan_data = None
+        self.search_after = None
 
         language_row = ttk.Frame(root, padding=(10, 4))
         language_row.pack(fill="x")
@@ -73,8 +75,10 @@ class FileAggregatorApp:
         language_choice.bind("<<ComboboxSelected>>", lambda _event: self.save_settings())
         ttk.Label(language_row, text=tr("重新啟動後套用語言")).pack(side="left")
 
-        manga = ttk.LabelFrame(root, text=tr("漫畫整合"), padding=8)
-        manga.pack(fill="both", expand=True, padx=10, pady=6)
+        self.panes = ttk.Panedwindow(root, orient="vertical")
+        self.panes.pack(fill="both", expand=True, padx=10, pady=6)
+        manga = ttk.LabelFrame(self.panes, text=tr("漫畫整合"), padding=8)
+        self.panes.add(manga, weight=1)
         path_row = ttk.Frame(manga)
         path_row.pack(fill="x")
         ttk.Label(path_row, text=tr("漫畫路徑：")).pack(side="left")
@@ -88,11 +92,17 @@ class FileAggregatorApp:
         search_row = ttk.Frame(manga)
         search_row.pack(fill="x", pady=(6, 0))
         ttk.Label(search_row, text=tr("搜尋系列／章節")).pack(side="left")
-        ttk.Entry(search_row, textvariable=self.search_text).pack(side="left", fill="x", expand=True, padx=6)
+        self.search_entry = ttk.Entry(search_row, textvariable=self.search_text)
+        self.search_entry.pack(side="left", fill="x", expand=True, padx=6)
+        self.root.bind("<Control-f>", lambda _event: self.search_entry.focus_set())
+        self.search_entry.bind("<Escape>", lambda _event: self.search_text.set(""))
+        ttk.Button(search_row, text=tr("清除搜尋"), command=lambda: self.search_text.set("")).pack(side="left", padx=(0, 6))
         self.selection_text = tk.StringVar(value=tr("已選取 {0} 個章節").format(0))
         ttk.Label(search_row, textvariable=self.selection_text).pack(side="left")
         self.search_text.trace_add("write", self.filter_folders)
 
+        manga_footer = ttk.Frame(manga)
+        manga_footer.pack(side="bottom", fill="x")
         list_frame = ttk.Frame(manga)
         list_frame.pack(fill="both", expand=True, pady=8)
         self.folder_tree = ttk.Treeview(
@@ -116,7 +126,7 @@ class FileAggregatorApp:
         list_frame.columnconfigure(0, weight=1)
         self.folder_tree.bind("<<TreeviewSelect>>", self.on_tree_select)
 
-        scan_row = ttk.Frame(manga)
+        scan_row = ttk.Frame(manga_footer)
         scan_row.pack(fill="x")
         self.scan_progress = ttk.Progressbar(scan_row, mode="indeterminate")
         self.scan_progress.pack(side="left", fill="x", expand=True)
@@ -125,7 +135,7 @@ class FileAggregatorApp:
         self.scan_status_label.pack(side="left", padx=(8, 0))
         self.scan_progress.pack_forget()
 
-        range_row = ttk.Frame(manga)
+        range_row = ttk.Frame(manga_footer)
         range_row.pack()
         ttk.Label(range_row, text=tr("起始編號：")).pack(side="left")
         self.start_entry = ttk.Entry(range_row, width=6)
@@ -140,8 +150,8 @@ class FileAggregatorApp:
             variable=self.remove_sources_after_aggregate, command=self.save_settings)
         self.remove_sources_checkbox.pack(side="left")
 
-        self.work_tabs = ttk.Notebook(root)
-        self.work_tabs.pack(fill="both", expand=True, padx=10, pady=6)
+        self.work_tabs = ttk.Notebook(self.panes)
+        self.panes.add(self.work_tabs, weight=1)
         self.queue_tab = ttk.Frame(self.work_tabs)
         self.export_tab = ttk.Frame(self.work_tabs)
         self.settings_tab = ttk.Frame(self.work_tabs)
@@ -162,10 +172,10 @@ class FileAggregatorApp:
         options = ttk.Frame(export)
         options.pack(fill="x", pady=6)
         self.skip_checkbox = ttk.Checkbutton(
-            options, text=tr("已存在且來源未變更時跳過"), variable=self.skip_unchanged)
+            options, text=tr("已存在且來源未變更時跳過"), variable=self.skip_unchanged, command=self.save_settings)
         self.skip_checkbox.pack(side="left")
         self.open_checkbox = ttk.Checkbutton(
-            options, text=tr("匯出完成後開啟輸出資料夾"), variable=self.open_after_export)
+            options, text=tr("匯出完成後開啟輸出資料夾"), variable=self.open_after_export, command=self.save_settings)
         self.open_checkbox.pack(side="left", padx=12)
         buttons = ttk.Frame(export)
         buttons.pack(fill="x")
@@ -193,6 +203,8 @@ class FileAggregatorApp:
                 "manga_path": self.base_path.get(),
                 "komga_path": self.komga_path.get(),
                 "remove_sources_after_aggregate": self.remove_sources_after_aggregate.get(),
+                "skip_unchanged": self.skip_unchanged.get(),
+                "open_after_export": self.open_after_export.get(),
                 **({"ui_language": next(code for code, label in LANGUAGES.items()
                                         if label == self.ui_language.get())}
                    if hasattr(self, "ui_language") else {}),
@@ -226,11 +238,15 @@ class FileAggregatorApp:
             self.save_settings()
 
     def load_folders(self):
-        base = Path(self.base_path.get())
-        if not base.is_dir():
+        value = self.base_path.get().strip()
+        base = Path(value).resolve()
+        if not value or not base.is_dir():
             messagebox.showwarning(tr("警告"), tr("請選擇有效的漫畫路徑"))
             return
         if self.manga_busy:
+            return
+        self.base_path.set(str(base))
+        if not self.save_settings():
             return
         self.set_manga_busy(True)
         self.show_scan_progress("indeterminate")
@@ -252,6 +268,9 @@ class FileAggregatorApp:
             widget.configure(state=state)
         if hasattr(self, "translation_queue"):
             self.translation_queue.update_controls()
+        if not busy and self.has_explicit_chapter_selection():
+            self.start_entry.configure(state="disabled")
+            self.end_entry.configure(state="disabled")
 
     def show_scan_progress(self, mode):
         self.scan_progress.configure(mode=mode, value=0)
@@ -309,6 +328,9 @@ class FileAggregatorApp:
             elif status == tr("結果為空"):
                 detail = tr("結果資料夾為空")
                 images = []
+            elif status == tr("部分翻譯"):
+                detail = tr("{0} 張翻譯圖片｜部分翻譯").format(len(translated))
+                images = translated
             else:
                 images = image_files(folder_path)
                 detail = tr("{0} 張圖片｜未翻譯").format(len(images))
@@ -323,6 +345,7 @@ class FileAggregatorApp:
                 ready_chapters, details)
 
     def apply_scan_data(self, base, data):
+        view = self.folder_tree.yview() if self.scan_data and self.scan_data[0] == base else ()
         self.scan_data = (base, data)
         selected_paths = {self.tree_items[item][1] for item in self.folder_tree.selection()}
         expanded_paths = {self.tree_items[item][1] for item in self.folder_tree.get_children()
@@ -373,8 +396,18 @@ class FileAggregatorApp:
         self.scan_status_text.set(
             tr("{0} 個系列，{1} 個章節").format(len(self.series_groups), len(self.folders)))
 
+        if view:
+            self.folder_tree.yview_moveto(view[0])
+        self.on_tree_select()
+
     def filter_folders(self, *_args):
-        if self.scan_data and not self.manga_busy:
+        if self.search_after is not None:
+            self.root.after_cancel(self.search_after)
+        self.search_after = self.root.after(180, self.apply_filter)
+
+    def apply_filter(self):
+        self.search_after = None
+        if self.scan_data:
             self.apply_scan_data(*self.scan_data)
 
     def selected_chapters(self):
@@ -391,11 +424,16 @@ class FileAggregatorApp:
     def get_folders_with_numbers(base_path):
         folders = []
         base = Path(base_path)
+        if is_link_or_junction(base):
+            return folders
         for current, directory_names, file_names in os.walk(base):
             folder = Path(current)
             has_result = any(name.casefold() == "result" for name in directory_names)
             directory_names[:] = [name for name in directory_names
-                                  if name.casefold() not in {"result", "inpainted"}]
+                                  if name.casefold() not in {"result", "inpainted", "mask"}
+                                  and not (name.casefold().startswith(".chapter ")
+                                           and name.casefold().endswith((".tmp", ".backup")))
+                                  and not is_link_or_junction(folder / name)]
             number = chapter_number(folder.name)
             has_images = any(Path(name).suffix.casefold() in IMAGE_EXTENSIONS
                              for name in file_names)
@@ -413,13 +451,21 @@ class FileAggregatorApp:
         series = path if kind == "series" else path.parent
         return kind, path, self.series_groups[series]
 
+    def has_explicit_chapter_selection(self):
+        selection = self.folder_tree.selection()
+        return len(selection) > 1 and all(self.tree_items[item][0] == "chapter" for item in selection)
+
     def on_tree_select(self, _event=None):
-        if self.manga_busy:
-            return
         paths = self.selected_chapters()
         self.selection_text.set(tr("已選取 {0} 個章節").format(len(paths)))
+        if self.manga_busy:
+            return
+        for entry in (self.start_entry, self.end_entry):
+            entry.configure(state="normal")
         selected = self.selected_tree_item()
         if not selected:
+            for entry in (self.start_entry, self.end_entry):
+                entry.delete(0, tk.END)
             return
         kind, path, chapters = selected
         selected_paths = set(paths)
@@ -428,6 +474,8 @@ class FileAggregatorApp:
         for entry, value in ((self.start_entry, start), (self.end_entry, end)):
             entry.delete(0, tk.END)
             entry.insert(0, str(value))
+            if self.has_explicit_chapter_selection():
+                entry.configure(state="disabled")
 
     def confirm_aggregate(self, translate_after=False):
         if getattr(self, "manga_busy", False):
@@ -440,17 +488,29 @@ class FileAggregatorApp:
             messagebox.showwarning(tr("警告"), tr("整合時請只選擇同一系列的章節"))
             return
         _, _, chapters = selected
-        start, end = self.start_entry.get(), self.end_entry.get()
-        if not start.isdigit() or not end.isdigit():
-            messagebox.showwarning(tr("警告"), tr("請輸入有效的起始和結束編號"))
-            return
-        start_idx, end_idx = int(start) - 1, int(end) - 1
+        if self.has_explicit_chapter_selection():
+            paths = set(self.selected_chapters())
+            chapters = [item for item in chapters if Path(item[0]) in paths]
+            start_idx, end_idx = 0, len(chapters) - 1
+        else:
+            start, end = self.start_entry.get(), self.end_entry.get()
+            if not start.isdigit() or not end.isdigit():
+                messagebox.showwarning(tr("警告"), tr("請輸入有效的起始和結束編號"))
+                return
+            start_idx, end_idx = int(start) - 1, int(end) - 1
         if start_idx < 0 or end_idx >= len(chapters) or start_idx > end_idx:
             messagebox.showwarning(tr("警告"), tr("請確保編號範圍有效"))
+            return
+        try:
+            output = aggregate_output(chapters[start_idx:end_idx + 1])
+        except ValueError as error:
+            messagebox.showwarning(tr("警告"), str(error))
             return
         names = [chapters[index][1] for index in range(start_idx, end_idx + 1)]
         remove_sources = self.remove_sources_after_aggregate.get()
         confirmation = tr("您確定要整合以下資料夾嗎？\n\n{0}").format(summarize_names(names))
+        if output.exists() and output not in {Path(item[0]).resolve() for item in chapters[start_idx:end_idx + 1]}:
+            confirmation += tr("\n\n既有輸出將被取代（包含其中的翻譯結果）：{0}").format(output.name)
         if remove_sources:
             confirmation += (
                 tr("\n\n注意：整合成功後，將永久刪除本次範圍內除最後一個之外的來源資料夾與內容。\n保留：{0}").format(names[-1]))
@@ -467,12 +527,15 @@ class FileAggregatorApp:
 
     def aggregate_folders(self, chapters, start_idx, end_idx, progress=None):
         selected = chapters[start_idx:end_idx + 1]
-        output_name = f"Chapter {selected[0][2]}-{selected[-1][2]}"
-        output = Path(selected[0][0]).parent / output_name
-        sources = [source for folder_path, _, _ in selected if Path(folder_path) != output
-                   for source in image_files(folder_path)]
-        if not sources:
-            raise ValueError(tr("選取範圍沒有可整合的圖片"))
+        output = aggregate_output(selected)
+        if len(selected) == 1 and Path(selected[0][0]).resolve() == output:
+            return output
+        sources = []
+        for folder_path, _, _ in selected:
+            images = image_files(folder_path)
+            if not images:
+                raise ValueError(tr("來源沒有可整合的圖片：{0}").format(folder_path))
+            sources.extend(images)
         temporary = output.with_name(f".{output.name}.tmp")
         backup = output.with_name(f".{output.name}.backup")
         if temporary.exists():
@@ -589,8 +652,9 @@ class FileAggregatorApp:
         if not source_root.is_dir() or not self.komga_path.get().strip():
             messagebox.showwarning(tr("警告"), tr("請確認漫畫與 Komga 路徑"))
             return
-        if output_root.resolve().is_relative_to(source_root.resolve()):
-            messagebox.showwarning(tr("警告"), tr("Komga 輸出路徑不能位於漫畫來源路徑內"))
+        if (output_root.resolve().is_relative_to(source_root.resolve())
+                or source_root.resolve().is_relative_to(output_root.resolve())):
+            messagebox.showwarning(tr("警告"), tr("匯出與漫畫路徑不可互相包含"))
             return
         if not self.save_settings():
             return
@@ -651,8 +715,9 @@ class FileAggregatorApp:
     def confirm_cleanup(self):
         if self.manga_busy:
             return
-        root = Path(self.base_path.get())
-        if not root.is_dir():
+        value = self.base_path.get().strip()
+        root = Path(value)
+        if not value or not root.is_dir():
             messagebox.showwarning(tr("警告"), tr("請選擇有效的漫畫路徑"))
             return
         if not messagebox.askyesno(

@@ -9,6 +9,14 @@ def tr(text):
     return TRANSLATIONS.get(text, {}).get(_language, text)
 
 TRANSLATIONS = {
+    '部分翻譯': {'en': 'Partially translated', 'ja': '翻訳未完了'},
+    '{0} 張翻譯圖片｜部分翻譯': {'en': '{0} translated images | Incomplete', 'ja': '翻訳画像 {0} 枚｜翻訳未完了'},
+    '清除搜尋': {'en': 'Clear search', 'ja': '検索をクリア'},
+    '上次執行中斷，請確認結果後重試': {'en': 'The previous run was interrupted. Check its results before retrying.', 'ja': '前回の実行が中断されました。結果を確認してから再試行してください。'},
+    '來源沒有可整合的圖片：{0}': {'en': 'Source has no images to merge: {0}', 'ja': '結合できる画像が元フォルダーにありません：{0}'},
+    '章節範圍重疊或順序錯誤：{0}。請只選擇不重疊的來源章節。': {'en': 'Chapter ranges overlap or are out of order: {0}. Select only non-overlapping source chapters.', 'ja': '章の範囲が重複しているか順序が不正です：{0}。重複しない元の章のみ選択してください。'},
+    '輸出已屬於其他來源，請改用不同的 Komga 路徑或系列名稱：{0}': {'en': 'Output belongs to another source. Use a different Komga path or series name: {0}', 'ja': '出力は別の元フォルダーに属しています。Komga の出力先またはシリーズ名を変更してください：{0}'},
+    '\n\n既有輸出將被取代（包含其中的翻譯結果）：{0}': {'en': '\n\nExisting output will be replaced, including its translations: {0}', 'ja': '\n\n既存の出力は翻訳結果を含めて置き換えられます：{0}'},
     '\n\n注意：整合成功後，將永久刪除本次範圍內除最後一個之外的來源資料夾與內容。\n保留：{0}': {'en': '\n\nWarning: After a successful merge, all source folders and their contents in this range except the last folder will be permanently deleted.\nKeep: {0}', 'ja': '\n\n注意：結合が成功すると、今回の範囲内の最後のフォルダーを除くすべての元フォルダーとその内容が完全に削除されます。\n保持：{0}'},
     '\n已清除 {0} 個來源資料夾': {'en': '\nRemoved {0} source folders', 'ja': '\n元フォルダーを {0} 個削除しました'},
     '  清理：{0} 個資料夾／{1} 個項目': {'en': '  Cleanup: {0} folders / {1} items', 'ja': '  クリーンアップ：{0} 個のフォルダー／{1} 個の項目'},

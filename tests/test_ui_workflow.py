@@ -22,6 +22,8 @@ class WorkflowTests(unittest.TestCase):
         self.app = comic.FileAggregatorApp(self.root)
 
     def tearDown(self):
+        for handle in self.root.tk.call("after", "info"):
+            self.root.tk.call("after", "cancel", handle)
         self.root.update_idletasks()
         self.root.destroy()
         self.patch.stop()
@@ -52,6 +54,10 @@ class WorkflowTests(unittest.TestCase):
         parent = self.app.folder_tree.get_children()[0]
         self.assertTrue(self.app.folder_tree.item(parent, "open"))
         self.app.search_text.set("Chapter 1")
+        deadline = time.monotonic() + 1
+        while self.app.search_after is not None and time.monotonic() < deadline:
+            self.root.update()
+            time.sleep(.01)
         parent = self.app.folder_tree.get_children()[0]
         self.app.folder_tree.selection_set(parent)
         self.assertEqual(self.app.selected_chapters(), [first])

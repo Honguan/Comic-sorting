@@ -25,9 +25,9 @@ class TranslationQueue:
         self.running = False
         self.editor = None
         self.controls = []
-        default = r"D:\AI\BallonsTranslator_dev_src_with_gitpython"
+        default = settings.get("bt_path", "")
         self.installation = tk.StringVar(value=settings.get("bt_path", default))
-        self.config = tk.StringVar(value=settings.get("bt_config", str(Path(default) / "config" / "config.json")))
+        self.config = tk.StringVar(value=settings.get("bt_config", str(Path(default) / "config" / "config.json") if default else ""))
         self.python = tk.StringVar(value=settings.get("bt_python", ""))
         self.action = tk.StringVar(value=tr("翻譯"))
         self.export = tk.BooleanVar(value=settings.get("bt_export", False))
@@ -64,6 +64,8 @@ class TranslationQueue:
             check = ttk.Checkbutton(row, text=text, variable=variable, command=app.save_settings)
             check.pack(side="left", padx=(0, 8))
             self.controls.append(check)
+        footer = ttk.Frame(box)
+        footer.pack(side="bottom", fill="x")
         tree_frame = ttk.Frame(box)
         tree_frame.pack(fill="both", expand=True, pady=4)
         self.tree = ttk.Treeview(tree_frame, columns=("action", "status"), show="tree headings", height=5)
@@ -81,7 +83,7 @@ class TranslationQueue:
         tree_frame.rowconfigure(0, weight=1)
         tree_frame.columnconfigure(0, weight=1)
         self.tree.bind("<Double-1>", self.show_details)
-        row = ttk.Frame(box)
+        row = ttk.Frame(footer)
         row.pack(fill="x")
         for text, command in (("移除選取", self.remove), ("上移", lambda: self.move(-1)),
                               ("下移", lambda: self.move(1)), ("重試選取", self.retry),
@@ -91,21 +93,25 @@ class TranslationQueue:
         self.stop_button = ttk.Button(row, text=tr("停止"), command=self.stop.set)
         self.stop_button.pack(side="left", padx=2)
         self.summary = tk.StringVar()
-        ttk.Label(box, textvariable=self.summary).pack(anchor="w")
-        self.total = ttk.Progressbar(box)
+        ttk.Label(footer, textvariable=self.summary).pack(anchor="w")
+        self.total = ttk.Progressbar(footer)
         self.total.pack(fill="x")
         self.label = tk.StringVar(value=tr("BallonsTranslator：待命"))
-        ttk.Label(box, textvariable=self.label).pack(anchor="w")
-        self.stage = ttk.Progressbar(box)
+        ttk.Label(footer, textvariable=self.label).pack(anchor="w")
+        self.stage = ttk.Progressbar(footer)
         self.stage.pack(fill="x")
         records = settings.get("bt_jobs", [])
         for record in records if isinstance(records, list) else []:
-            if not isinstance(record, dict) or record.get("action") not in ACTIONS or not isinstance(record.get("path"), str):
+            if (not isinstance(record, dict) or record.get("action") not in ACTIONS
+                    or not isinstance(record.get("path"), str) or not record["path"].strip()):
                 continue
             status = record.get("status", "pending")
-            if status not in STATUSES or status == "running":
+            error = str(record.get("error", ""))
+            if status == "running":
+                status, error = "cancelled", tr("上次執行中斷，請確認結果後重試")
+            elif status not in STATUSES:
                 status = "pending"
-            self.jobs.append(Job(Path(record["path"]), record["action"], status, str(record.get("error", ""))))
+            self.jobs.append(Job(Path(record["path"]).resolve(), record["action"], status, error))
         self.render()
         self.update_controls()
 
@@ -130,6 +136,8 @@ class TranslationQueue:
         self.stop_button.configure(state="normal" if self.running else "disabled")
 
     def render(self):
+        view = self.tree.yview()
+        focus = self.tree.focus()
         selected = set(self.tree.selection())
         self.tree.delete(*self.tree.get_children())
         for job in self.jobs:
@@ -138,6 +146,10 @@ class TranslationQueue:
                              values=(tr(ACTIONS[job.action]), tr(STATUSES[job.status])))
             if item in selected:
                 self.tree.selection_add(item)
+            if item == focus:
+                self.tree.focus(item)
+        if view:
+            self.tree.yview_moveto(view[0])
         self.update_summary()
 
     def update_summary(self):
@@ -253,14 +265,18 @@ class TranslationQueue:
 
     def validate(self, translate=False):
         pending = [job for job in self.jobs if job.status == "pending"]
+        error_tab = self.app.queue_tab
         try:
             translating = translate or any(job.action == "translate" for job in pending)
             if translating:
+                error_tab = self.app.settings_tab
                 if self.editor and self.editor.poll() is None:
                     raise ValueError(tr("請先在 BallonsTranslator 儲存設定並關閉原生介面"))
                 self.command()
+                error_tab = self.app.queue_tab
             exporting = (translating and self.export.get()) or any(job.action == "export" for job in pending)
             if exporting and not self.app.komga_path.get().strip():
+                error_tab = self.app.export_tab
                 raise ValueError(tr("請設定 Komga 輸出路徑"))
             previous_failures = set()
             for job in self.jobs:
@@ -272,8 +288,6 @@ class TranslationQueue:
                     raise ValueError(tr("請先重試此路徑的失敗工作：{0}").format(job.path))
                 if not job.path.is_dir():
                     raise ValueError(f"{job.path}: {tr('漫畫路徑不存在')}")
-                if job.action == "translate":
-                    self.command(job.path)
                 if job.action == "export" or (job.action == "translate" and self.export.get()):
                     target = Path(self.app.komga_path.get()).resolve()
                     if target.is_relative_to(job.path) or job.path.is_relative_to(target):
@@ -281,7 +295,7 @@ class TranslationQueue:
             return True
         except (OSError, ValueError) as error:
             messagebox.showerror(tr("佇列設定"), str(error))
-            self.app.work_tabs.select(self.app.settings_tab)
+            self.app.work_tabs.select(error_tab)
             return False
 
     def start(self, cleanup_confirmed=False):
@@ -305,6 +319,7 @@ class TranslationQueue:
         self.app.root.after(50, self.poll)
 
     def poll(self):
+        changed = False
         for _ in range(100):
             try:
                 event = self.events.get_nowait()
@@ -313,6 +328,7 @@ class TranslationQueue:
             if event[0] == "status":
                 job = self.active_jobs[event[1]]
                 job.status, job.error = event[2], event[3]
+                changed = True
                 self.tree.set(str(id(job)), "status", tr(STATUSES[job.status]))
                 self.update_summary()
                 if job.status == "running":
@@ -332,4 +348,6 @@ class TranslationQueue:
                 if self.app.base_path.get():
                     self.app.load_folders()
                 return
+        if changed and not self.app.save_settings():
+            self.stop.set()
         self.app.root.after(50, self.poll)
