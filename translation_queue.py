@@ -3,10 +3,12 @@ from pathlib import Path
 import queue
 import threading
 import subprocess
+import os
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from queue_worker import Job, run_jobs, translator_command
+from app_logging import logger, log_path
 from ui_language import tr
 
 
@@ -48,6 +50,7 @@ class TranslationQueue:
             self.controls.append(entry)
             self.button(row, tr("瀏覽"), lambda v=variable, d=directory: self.browse(v, d))
         self.button(config_box, tr("開啟原生設定介面"), self.open_settings)
+        self.button(config_box, tr("開啟紀錄資料夾"), self.open_logs)
         row = ttk.Frame(box)
         row.pack(fill="x", pady=(0, 4))
         self.action_choice = ttk.Combobox(row, textvariable=self.action,
@@ -179,7 +182,15 @@ class TranslationQueue:
                                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             self.app.save_settings()
         except (OSError, ValueError) as error:
+            logger.exception("translator_settings_failed")
             messagebox.showerror("BallonsTranslator", str(error))
+
+    def open_logs(self):
+        try:
+            log_path().parent.mkdir(parents=True, exist_ok=True)
+            os.startfile(log_path().parent)
+        except OSError as error:
+            messagebox.showerror(tr("開啟紀錄資料夾"), str(error))
 
     def add_paths(self, paths, action=None):
         if self.app.manga_busy:
@@ -294,6 +305,7 @@ class TranslationQueue:
                         raise ValueError(tr("匯出與漫畫路徑不可互相包含"))
             return True
         except (OSError, ValueError) as error:
+            logger.exception("queue_validation_failed")
             messagebox.showerror(tr("佇列設定"), str(error))
             self.app.work_tabs.select(error_tab)
             return False

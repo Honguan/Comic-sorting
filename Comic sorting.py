@@ -9,6 +9,7 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from translation_queue import TranslationQueue
+from app_logging import configure_logging, logger, log_path, redact
 from ui_language import LANGUAGES, set_language, tr
 from comic_core import (
     IMAGE_EXTENSIONS, chapter_number, image_files, translation_status,
@@ -35,6 +36,7 @@ def settings_path():
 class FileAggregatorApp:
     def __init__(self, root):
         self.root = root
+        self.root.report_callback_exception = self.report_callback_exception
         settings = load_json(settings_path(), {})
         language = settings.get("ui_language", "zh-TW")
         set_language(language)
@@ -212,16 +214,22 @@ class FileAggregatorApp:
             })
             return True
         except OSError as error:
+            logger.exception("settings_save_failed path=%s", settings_path())
             messagebox.showerror(
                 tr("設定保存失敗"),
                 tr("無法寫入 EXE 同目錄的設定檔：\n{0}\n\n{1}").format(settings_path(), error))
             return False
+
+    def report_callback_exception(self, exception_type, error, traceback):
+        logger.error("ui_callback_failed", exc_info=(exception_type, error, traceback))
+        messagebox.showerror(tr("Comic sorting 錯誤"), redact(str(error)) + tr("；紀錄：{0}").format(log_path()))
 
     def close(self):
         if self.manga_busy:
             messagebox.showwarning(tr("工作執行中"), tr("請等待目前工作完成，或先停止翻譯佇列。"))
             return
         if self.save_settings():
+            logger.info("application_close")
             self.root.destroy()
 
     def browse(self):
@@ -291,8 +299,11 @@ class FileAggregatorApp:
 
     def scan_worker(self, base):
         try:
+            logger.info("scan_start path=%s", base)
             self.scan_events.put(("done", base, self.scan_folder_data(base)))
+            logger.info("scan_done path=%s", base)
         except Exception as error:
+            logger.exception("scan_failed path=%s", base)
             self.scan_events.put(("error", error))
 
     def poll_scan_events(self):
@@ -571,6 +582,7 @@ class FileAggregatorApp:
 
     def aggregate_worker(self, chapters, start_idx, end_idx, remove_sources=False):
         try:
+            logger.info("aggregate_start sources=%s cleanup=%s", [item[0] for item in chapters[start_idx:end_idx + 1]], remove_sources)
             output = self.aggregate_folders(
                 chapters, start_idx, end_idx,
                 lambda current, total: self.aggregate_events.put(
@@ -580,7 +592,9 @@ class FileAggregatorApp:
                 cleanup = remove_aggregated_folders(
                     chapters, start_idx, end_idx, output)
             self.aggregate_events.put(("done", output, cleanup))
+            logger.info("aggregate_done output=%s cleanup_errors=%s", output, cleanup[1])
         except Exception as error:
+            logger.exception("aggregate_failed")
             self.aggregate_events.put(("error", error))
 
     def poll_aggregate_events(self):
@@ -668,6 +682,7 @@ class FileAggregatorApp:
         self.root.after(50, self.poll_events)
 
     def export_worker(self, chapters, komga_path, skip_unchanged):
+        logger.info("export_start chapters=%s output=%s skip_unchanged=%s", len(chapters), komga_path, skip_unchanged)
         root = Path(komga_path)
         state_file = root / ".comic-sorting-state.json"
         state = load_json(state_file, {})
@@ -686,8 +701,10 @@ class FileAggregatorApp:
                 counts[action] += 1
                 output_folders.add(output.parent)
                 exported_chapters.append(chapter)
+                logger.info("export_%s source=%s output=%s", action, chapter, output)
                 self.events.put(("chapter", action, name))
             except Exception as error:
+                logger.exception("export_failed source=%s", chapter)
                 counts["failed"] += 1
                 errors.append(f"{name}: {error}")
                 self.events.put(("chapter", "failed", name))
@@ -695,6 +712,7 @@ class FileAggregatorApp:
         try:
             save_json(state_file, state)
         except Exception as error:
+            logger.exception("export_state_save_failed path=%s", state_file)
             state_saved = False
             counts["failed"] += 1
             errors.append(tr("狀態檔: {0}").format(error))
@@ -710,6 +728,7 @@ class FileAggregatorApp:
             cleanup = folders, removed, cleanup_errors
             errors.extend(tr("清理失敗：{0}").format(error) for error in cleanup_errors)
         output_folder = output_folders.pop() if len(output_folders) == 1 else root
+        logger.info("export_end counts=%s errors=%s cleanup=%s", counts, errors, cleanup)
         self.events.put(("done", counts, errors, str(output_folder), cleanup))
 
     def confirm_cleanup(self):
@@ -733,8 +752,12 @@ class FileAggregatorApp:
 
     def cleanup_worker(self, root):
         try:
-            self.events.put(("cleanup_done", clear_work_folders(root)))
+            logger.info("cleanup_start path=%s", root)
+            result = clear_work_folders(root)
+            logger.info("cleanup_end path=%s result=%s", root, result)
+            self.events.put(("cleanup_done", result))
         except Exception as error:
+            logger.exception("cleanup_failed path=%s", root)
             self.events.put(("cleanup_error", error))
 
     def poll_events(self):
@@ -795,10 +818,13 @@ class FileAggregatorApp:
 
 if __name__ == "__main__":
     try:
+        configure_logging()
+        logger.info("application_start executable=%s", sys.executable)
         root = tk.Tk()
         FileAggregatorApp(root)
         root.mainloop()
     except Exception as error:
+        logger.exception("application_failed")
         try:
             messagebox.showerror(tr("Comic sorting 錯誤"), str(error))
         except Exception:

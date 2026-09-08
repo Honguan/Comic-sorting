@@ -9,6 +9,8 @@ def tr(text):
     return TRANSLATIONS.get(text, {}).get(_language, text)
 
 TRANSLATIONS = {
+    '開啟紀錄資料夾': {'en': 'Open log folder', 'ja': 'ログフォルダーを開く'},
+    '；紀錄：{0}': {'en': '; Log: {0}', 'ja': '；ログ：{0}'},
     '部分翻譯': {'en': 'Partially translated', 'ja': '翻訳未完了'},
     '{0} 張翻譯圖片｜部分翻譯': {'en': '{0} translated images | Incomplete', 'ja': '翻訳画像 {0} 枚｜翻訳未完了'},
     '清除搜尋': {'en': 'Clear search', 'ja': '検索をクリア'},

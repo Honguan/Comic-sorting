@@ -69,7 +69,39 @@ class QueueWorkerTests(unittest.TestCase):
         detail = str(caught.exception)
         self.assertNotIn("\x1b", detail)
         self.assertEqual(detail.splitlines()[1:],
-                         [f"line{i}" for i in range(6, 25)] + ["finished translating all dirs"])
+                         ["ERROR"] + [f"line{i}" for i in range(6, 25)] + ["finished translating all dirs"])
+
+    def test_recovered_llm_parse_error_does_not_fail_completed_translation(self):
+        lines = [
+            '[ERROR  ] trans_llm:_translate:1253 - Failed to parse matching translation count for prompt:',
+            'Translate the following JSON array.',
+            '[WARNING] trans_llm:_translate:1260 - LLM translation failed due to count mismatch. Attempt: 1',
+            '[DEBUG  ] trans_llm:_log_token_usage:1090 - LLM token usage: page=76.jpg, attempt=2, finish_reason=stop',
+            'Translation: 100%',
+            'finished translating all dirs',
+        ]
+        script = f"lines = {lines!r}; [print(line) for line in lines]; input()"
+        run_translation([sys.executable, '-u', '-c', script], self.root, None,
+                        threading.Event(), lambda *args: None)
+
+    def test_fatal_error_is_kept_even_when_progress_pushes_it_out_of_tail(self):
+        script = ("print('[ERROR] message:create_error_dialog:33 - LLM output limit reached (8192)'); "
+                  "[print('progress '+str(i)) for i in range(30)]; "
+                  "print('finished translating all dirs'); input()")
+        with self.assertRaisesRegex(RuntimeError, 'LLM output limit reached'):
+            run_translation([sys.executable, '-u', '-c', script], self.root, None,
+                            threading.Event(), lambda *args: None)
+
+    def test_exhausted_retry_and_pipeline_stop_remain_failures(self):
+        for error in (
+                '[ERROR] trans_llm:_translate:1256 - LLM translation failed: count mismatch',
+                '[INFO] module_manager:_imgtrans_pipeline:1208 - Image translation pipeline stopped.',
+                'Translation: 50% [ERROR] message:create_error_dialog:33 - LLM output limit reached'):
+            with self.subTest(error=error):
+                script = f"print({error!r}); print('finished translating all dirs'); input()"
+                with self.assertRaises(RuntimeError):
+                    run_translation([sys.executable, '-u', '-c', script], self.root, None,
+                                    threading.Event(), lambda *args: None)
 
     def test_failure_blocks_same_path_but_continues_other_path_without_mutating_jobs(self):
         chapter, other = self.chapter(), self.chapter("Chapter 2")
