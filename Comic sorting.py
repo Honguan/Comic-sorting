@@ -228,6 +228,11 @@ class FileAggregatorApp:
         if self.manga_busy:
             messagebox.showwarning(tr("工作執行中"), tr("請等待目前工作完成，或先停止翻譯佇列。"))
             return
+        editor = self.translation_queue.config_editor
+        if editor and editor.winfo_exists():
+            editor.close()
+            if editor.winfo_exists():
+                return
         if self.save_settings():
             logger.info("application_close")
             self.root.destroy()

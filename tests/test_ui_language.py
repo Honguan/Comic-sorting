@@ -27,7 +27,7 @@ class UILanguageTests(unittest.TestCase):
                                              for _, field, spec, conversion
                                              in formatter.parse(translations[language])
                                              if field is not None])
-        for name in ("Comic sorting.py", "translation_queue.py", "comic_core.py", "queue_worker.py"):
+        for name in ("Comic sorting.py", "translation_queue.py", "comic_core.py", "queue_worker.py", "bt_settings.py"):
             tree = ast.parse((Path(__file__).parents[1] / name).read_text(encoding="utf-8"))
             for node in ast.walk(tree):
                 if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)

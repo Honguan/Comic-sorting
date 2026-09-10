@@ -5,7 +5,7 @@ a = Analysis(
     ['Comic sorting.py'],
     pathex=[],
     binaries=[],
-    datas=[('assets/comic-sorting.ico', 'assets')],
+    datas=[('assets/comic-sorting.ico', 'assets'), ('bt_config_bridge.py', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

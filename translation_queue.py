@@ -10,6 +10,7 @@ from tkinter import filedialog, messagebox, ttk
 from queue_worker import Job, run_jobs, translator_command
 from app_logging import logger, log_path
 from ui_language import tr
+from bt_settings import ConfigEditor
 
 
 ACTIONS = {"translate": "翻譯", "export": "匯出", "cleanup": "清理"}
@@ -26,6 +27,7 @@ class TranslationQueue:
         self.stop = threading.Event()
         self.running = False
         self.editor = None
+        self.config_editor = None
         self.controls = []
         default = settings.get("bt_path", "")
         self.installation = tk.StringVar(value=settings.get("bt_path", default))
@@ -49,8 +51,11 @@ class TranslationQueue:
             entry.bind("<FocusOut>", lambda _event: self.app.save_settings())
             self.controls.append(entry)
             self.button(row, tr("瀏覽"), lambda v=variable, d=directory: self.browse(v, d))
-        self.button(config_box, tr("開啟原生設定介面"), self.open_settings)
-        self.button(config_box, tr("開啟紀錄資料夾"), self.open_logs)
+        settings_actions = ttk.Frame(config_box)
+        settings_actions.pack(fill="x", pady=(6, 0))
+        self.button(settings_actions, tr("編輯設定檔"), self.edit_settings)
+        self.button(settings_actions, tr("開啟原生設定介面"), self.open_settings)
+        self.button(settings_actions, tr("開啟紀錄資料夾"), self.open_logs)
         row = ttk.Frame(box)
         row.pack(fill="x", pady=(0, 4))
         self.action_choice = ttk.Combobox(row, textvariable=self.action,
@@ -176,6 +181,9 @@ class TranslationQueue:
     def open_settings(self):
         if self.app.manga_busy or (self.editor and self.editor.poll() is None):
             return
+        if self.config_editor and self.config_editor.winfo_exists():
+            self.config_editor.lift()
+            return
         try:
             command, root, env = self.command()
             self.editor = subprocess.Popen(command, cwd=root, env=env,
@@ -184,6 +192,21 @@ class TranslationQueue:
         except (OSError, ValueError) as error:
             logger.exception("translator_settings_failed")
             messagebox.showerror("BallonsTranslator", str(error))
+
+    def edit_settings(self):
+        if self.app.manga_busy:
+            return
+        if self.config_editor and self.config_editor.winfo_exists():
+            self.config_editor.lift()
+            return
+        if self.editor and self.editor.poll() is None:
+            messagebox.showinfo("BallonsTranslator", tr("請先在 BallonsTranslator 儲存設定並關閉原生介面"))
+            return
+        try:
+            self.command()
+            self.config_editor = ConfigEditor(self.app.root, self.settings())
+        except (OSError, ValueError) as error:
+            messagebox.showerror(tr("設定檔"), str(error))
 
     def open_logs(self):
         try:
@@ -283,6 +306,8 @@ class TranslationQueue:
                 error_tab = self.app.settings_tab
                 if self.editor and self.editor.poll() is None:
                     raise ValueError(tr("請先在 BallonsTranslator 儲存設定並關閉原生介面"))
+                if self.config_editor and self.config_editor.winfo_exists():
+                    raise ValueError(tr("請先儲存並關閉設定編輯器"))
                 self.command()
                 error_tab = self.app.queue_tab
             exporting = (translating and self.export.get()) or any(job.action == "export" for job in pending)
