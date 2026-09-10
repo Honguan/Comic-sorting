@@ -92,6 +92,7 @@ def run_translation(command, root, env, stop, progress, log_context=""):
     fatal_count = 0
     retries = 0
     recent = deque(maxlen=20)
+    stages = {}
     ansi = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\))")
     logger.info("[%s] translator_start command=%s cwd=%s", log_context, subprocess.list2cmdline(command), root)
     process = subprocess.Popen(command, cwd=root, env=env, stdin=subprocess.PIPE,
@@ -139,6 +140,7 @@ def run_translation(command, root, env, stop, progress, log_context=""):
                 failures.append(line)
             stage_progress = parse_bt_progress(line)
             if stage_progress:
+                stages[stage_progress[0]] = stage_progress[1]
                 progress(*stage_progress)
         code = process.wait()
         logger.info("[%s] translator_exit=%s completed=%s fatal_errors=%s retry_diagnostics=%s stopped=%s",
@@ -146,13 +148,18 @@ def run_translation(command, root, env, stop, progress, log_context=""):
         if stop.is_set():
             raise RuntimeError(tr("已停止；未執行此項目的後續動作"))
         if code or not completed or failures:
-            detail = tr("BallonsTranslator 未成功完成（exit={0}）；請查看其 logs").format(code)
+            finished_with_anomalies = completed and stages and all(value == 100 for value in stages.values())
+            detail = (tr("流程已完成但發現異常（exit={0}）") if finished_with_anomalies else
+                      tr("BallonsTranslator 未成功完成（exit={0}）；請查看其 logs")).format(code)
             detail += tr("；紀錄：{0}").format(log_path())
             for failure in failures:
                 if failure not in recent:
                     detail += "\n" + failure
             if recent:
                 detail += "\n" + "\n".join(recent)
+            if finished_with_anomalies:
+                logger.warning("[%s] completed_with_anomalies %s", log_context, detail)
+                return detail
             raise RuntimeError(detail)
     finally:
         finished.set()
@@ -200,6 +207,7 @@ def run_jobs(jobs, settings, output, skip, stop, emit):
             try:
                 whole_chapter = True
                 completion_note = ""
+                diagnostic = None
                 if action not in ("translate", "export", "cleanup"):
                     raise ValueError(tr("不支援的佇列動作：{0}").format(action))
                 if not path.is_dir():
@@ -222,15 +230,17 @@ def run_jobs(jobs, settings, output, skip, stop, emit):
                             page_manifest = Path(temporary) / "pages.json"
                             save_json(page_manifest, [p.name for p in selected])
                         command_options = {"page_manifest": page_manifest} if page_manifest else {}
-                        run_translation(*translator_command(settings["bt_path"], settings["bt_config"],
+                        diagnostic = run_translation(*translator_command(settings["bt_path"], settings["bt_config"],
                                                             settings.get("bt_python", ""), path, **command_options), stop,
                                         lambda *values: emit(("bt_progress", *values)), log_context=job_id)
+                        if isinstance(diagnostic, str):
+                            completion_note = diagnostic
                     status, translated = translation_status(path)
                     if not {p.stem.casefold() for p in selected}.issubset({p.stem.casefold() for p in translated}):
                         raise RuntimeError(tr("翻譯結果不完整，未執行後續動作"))
                     whole_chapter = status == tr("可匯出")
                     if not whole_chapter:
-                        completion_note = tr("指定頁面已完成；全章結果尚未齊全，略過自動匯出與清理")
+                        completion_note = "\n".join(filter(None, (completion_note, tr("指定頁面已完成；全章結果尚未齊全，略過自動匯出與清理"))))
                         logger.info("[%s] partial_range_completed export_cleanup_skipped", job_id)
                     result_path = translated[0].parent
                     logger.info("[%s] result_verified sources=%s results=%s", job_id, len(image_files(path)), len(translated))
@@ -260,7 +270,7 @@ def run_jobs(jobs, settings, output, skip, stop, emit):
                         raise RuntimeError("\n".join(errors))
                 if stop.is_set():
                     raise RuntimeError(tr("已停止"))
-                emit(("status", index, "done", completion_note))
+                emit(("status", index, "done_warning" if action == "translate" and isinstance(diagnostic, str) and diagnostic else "done", completion_note))
                 if action == "translate":
                     emit(("result", result_path))
                 logger.info("[%s] job_done", job_id)

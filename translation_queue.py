@@ -16,6 +16,7 @@ from comic_core import image_files
 
 ACTIONS = {"translate": "翻譯", "export": "匯出", "cleanup": "清理"}
 STATUSES = {"pending": "等待", "running": "執行中", "done": "完成",
+            "done_warning": "完成（有異常）",
             "failed": "失敗", "cancelled": "已停止", "blocked": "前置工作失敗"}
 
 
@@ -211,7 +212,7 @@ class TranslationQueue:
     def update_summary(self):
         self.summary.set(tr("佇列 {0} 項｜等待 {1}｜完成 {2}｜需處理 {3}").format(
             len(self.jobs), sum(j.status == "pending" for j in self.jobs),
-            sum(j.status == "done" for j in self.jobs),
+            sum(j.status in ("done", "done_warning") for j in self.jobs),
             sum(j.status in ("failed", "cancelled", "blocked") for j in self.jobs)))
 
     def browse(self, variable, directory):
@@ -301,14 +302,14 @@ class TranslationQueue:
 
     def clear_completed(self):
         if not self.app.manga_busy:
-            self.jobs[:] = [job for job in self.jobs if job.status != "done"]
+            self.jobs[:] = [job for job in self.jobs if job.status not in ("done", "done_warning")]
             self.changed()
 
     def retry(self):
         if not self.app.manga_busy:
             selected = set(self.tree.selection())
             for job in self.jobs:
-                if str(id(job)) in selected and job.status in ("failed", "cancelled", "blocked"):
+                if str(id(job)) in selected and job.status in ("failed", "cancelled", "blocked", "done_warning"):
                     job.status, job.error = "pending", ""
             self.changed()
 

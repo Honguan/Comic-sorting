@@ -218,6 +218,8 @@ TRANSLATIONS = {
     '失敗：{0}': {'en': 'Failed: {0}', 'ja': '失敗：{0}'},
     '安裝路徑': {'en': 'Installation path', 'ja': 'インストール先'},
     '完成': {'en': 'Complete', 'ja': '完了'},
+    '完成（有異常）': {'en': 'Complete (with anomalies)', 'ja': '完了（異常あり）'},
+    '流程已完成但發現異常（exit={0}）': {'en': 'Processing completed with anomalies (exit={0})', 'ja': '処理は完了しましたが異常があります（exit={0}）'},
     '將清空目前漫畫路徑下所有 mask 與 inpainted 資料夾內容。\n資料夾本身會保留，此操作無法復原。確定繼續嗎？': {'en': 'This will clear all mask and inpainted folder contents under the current comic path.\nThe folders themselves will be kept. This cannot be undone. Continue?', 'ja': '現在の漫画パス内にあるすべての mask と inpainted フォルダーの内容を削除します。\nフォルダー自体は残ります。この操作は元に戻せません。続行しますか？'},
     '尚未掃描': {'en': 'Not scanned yet', 'ja': '未スキャン'},
     '就緒': {'en': 'Ready', 'ja': '準備完了'},

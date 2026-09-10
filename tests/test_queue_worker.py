@@ -149,6 +149,19 @@ class QueueWorkerTests(unittest.TestCase):
         run_translation([sys.executable, '-u', '-c', script], self.root, None,
                         threading.Event(), lambda *args: None)
 
+    def test_completed_process_exit_anomaly_is_reported_but_incomplete_is_failed(self):
+        for percent in (100, 99):
+            script = (f"print('Translation: {percent}%'); "
+                      "print('finished translating all dirs'); input(); raise SystemExit(5)")
+            args = ([sys.executable, '-u', '-c', script], self.root, None,
+                    threading.Event(), lambda *args: None)
+            if percent == 100:
+                warning = run_translation(*args)
+                self.assertIn('exit=5', warning)
+            else:
+                with self.assertRaises(RuntimeError):
+                    run_translation(*args)
+
     def test_fatal_error_is_kept_even_when_progress_pushes_it_out_of_tail(self):
         script = ("print('[ERROR] message:create_error_dialog:33 - LLM output limit reached (8192)'); "
                   "[print('progress '+str(i)) for i in range(30)]; "

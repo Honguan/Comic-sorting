@@ -314,6 +314,28 @@ class WorkflowTests(unittest.TestCase):
         self.assertFalse(q.running)
         self.assertFalse(self.app.manga_busy)
 
+    def test_completed_anomaly_is_visible_persisted_and_can_be_retried(self):
+        from comic_core import load_json
+        from queue_worker import run_jobs
+        from ui_language import tr
+        chapter = self.chapter("Chapter 1")
+        (chapter / "1.png").write_bytes(b"source")
+        q = self.app.translation_queue
+        q.add_paths([chapter], "translate")
+        q.active_jobs = tuple(q.jobs)
+        with mock.patch("queue_worker.translator_command", return_value=([], self.folder, None)), \
+                mock.patch("queue_worker.run_translation", return_value="exit=3221225477"), \
+                mock.patch("translation_queue.os.startfile"):
+            run_jobs(q.active_jobs, dict(bt_path="installed", bt_config=""), "", True, q.stop, q.events.put)
+            q.poll()
+        self.assertEqual(q.jobs[0].status, "done_warning")
+        self.assertEqual(q.tree.set(str(id(q.jobs[0])), "status"), tr("完成（有異常）"))
+        self.assertIn("3221225477", q.jobs[0].error)
+        self.assertEqual(load_json(self.settings, {})["bt_jobs"][0]["status"], "done_warning")
+        q.tree.selection_set(str(id(q.jobs[0])))
+        q.retry()
+        self.assertEqual((q.jobs[0].status, q.jobs[0].error), ("pending", ""))
+
     def test_layout_fits_standard_desktop(self):
         self.root.update_idletasks()
         self.assertLessEqual(self.root.winfo_reqheight(), 780)
