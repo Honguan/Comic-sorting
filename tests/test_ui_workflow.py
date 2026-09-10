@@ -104,6 +104,52 @@ class WorkflowTests(unittest.TestCase):
             self.assertFalse(q.validate())
         error.assert_called_once()
 
+    def test_translation_completion_opens_final_location_once(self):
+        from queue_worker import run_jobs
+        chapter = self.chapter("Chapter 1, 測試")
+        (chapter / "1.png").write_bytes(b"source")
+        q = self.app.translation_queue
+        for exporting in (False, True):
+            with self.subTest(exporting=exporting), \
+                    mock.patch("queue_worker.translator_command", return_value=([], self.folder, None)), \
+                    mock.patch("queue_worker.run_translation"), \
+                    mock.patch("translation_queue.os.startfile") as startfile, \
+                    mock.patch("translation_queue.subprocess.Popen") as explorer:
+                q.add_paths([chapter], "translate")
+                q.active_jobs = tuple(q.jobs)
+                run_jobs(q.active_jobs, dict(bt_path="installed", bt_config="", bt_export=exporting),
+                         str(self.folder / "Komga"), True, q.stop, q.events.put)
+                q.poll()
+                self.assertEqual(q.jobs[0].status, "done")
+                if exporting:
+                    archive = self.folder / "Komga" / "Series" / f"{chapter.name}.cbz"
+                    self.assertTrue(archive.is_file())
+                    explorer.assert_called_once_with(f'explorer.exe /select,"{archive}"')
+                    startfile.assert_not_called()
+                else:
+                    startfile.assert_called_once_with(chapter / "result")
+                    explorer.assert_not_called()
+                q.start()  # Already completed jobs must not reopen their results.
+                self.assertEqual(startfile.call_count + explorer.call_count, 1)
+
+    def test_result_open_failure_does_not_interrupt_queue_completion(self):
+        q = self.app.translation_queue
+        chapter = self.chapter("Chapter 1")
+        q.add_paths([chapter], "translate")
+        q.active_jobs = tuple(q.jobs)
+        q.running = True
+        self.app.set_manga_busy(True)
+        for event in (("status", 0, "done", ""), ("result", chapter / "result"), ("done",)):
+            q.events.put(event)
+        with mock.patch("translation_queue.os.startfile", side_effect=OSError("cannot open")), \
+                mock.patch("translation_queue.messagebox.showwarning") as warning:
+            q.poll()
+        warning.assert_called_once()
+        self.assertIn(str(chapter / "result"), warning.call_args.args[1])
+        self.assertEqual(q.jobs[0].status, "done")
+        self.assertFalse(q.running)
+        self.assertFalse(self.app.manga_busy)
+
     def test_layout_fits_standard_desktop(self):
         self.root.update_idletasks()
         self.assertLessEqual(self.root.winfo_reqheight(), 780)

@@ -423,6 +423,19 @@ class TranslationQueue:
                 self.stage.configure(value=event[2])
             elif event[0] == "total":
                 self.total.configure(value=event[1])
+            elif event[0] == "result":
+                path = event[1]
+                try:
+                    if path.is_dir():
+                        os.startfile(path)
+                    elif path.is_file():
+                        subprocess.Popen(f'explorer.exe /select,"{path}"')
+                    else:
+                        raise FileNotFoundError(path)
+                    logger.info("translation_result_opened path=%s", path)
+                except OSError as error:
+                    logger.exception("translation_result_open_failed path=%s", path)
+                    messagebox.showwarning(tr("無法開啟結果位置"), f"{path}\n\n{error}")
             elif event[0] == "done":
                 self.running = False
                 self.app.set_manga_busy(False)

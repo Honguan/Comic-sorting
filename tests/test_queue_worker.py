@@ -107,6 +107,23 @@ class QueueWorkerTests(unittest.TestCase):
         self.assertEqual(len(watchers), 1)
         self.assertFalse(watchers[0].is_alive())
 
+    def test_completed_translation_reports_final_location_after_cleanup(self):
+        chapter = self.chapter("Chapter 1, 測試")
+        output = self.root / "output"
+        settings = dict(bt_path="installed", bt_config="", bt_cleanup=True)
+        for exporting in (False, True, True):  # Include an unchanged CBZ reused on the second export.
+            with self.subTest(exporting=exporting), \
+                    mock.patch("queue_worker.translator_command", return_value=([], self.root, None)), \
+                    mock.patch("queue_worker.run_translation"):
+                events = []
+                run_jobs([Job(chapter, "translate")], dict(settings, bt_export=exporting),
+                         str(output), True, threading.Event(), events.append)
+                expected = output_path_for(output, chapter.parent, chapter) if exporting else chapter / "result"
+                self.assertTrue(expected.exists())
+                self.assertEqual([e for e in events if e[0] == "result"], [("result", expected)])
+                self.assertGreater(events.index(("result", expected)), events.index(("status", 0, "done", "")))
+                self.assertFalse((chapter / "mask" / "keep.png").exists())
+
     def test_subprocess_failure_keeps_twenty_clean_diagnostic_lines(self):
         script = ("print('\\x1b[31mERROR\\x1b[0m'); "
                   "[print('\\x1b[32mline'+str(i)+'\\x1b[0m') for i in range(25)]; "
@@ -168,6 +185,7 @@ class QueueWorkerTests(unittest.TestCase):
         self.assertEqual([e for e in events if e[0] == "total"],
                          [("total", 1), ("total", 2), ("total", 3)])
         self.assertEqual(events[-1], ("done",))
+        self.assertFalse(any(e[0] == "result" for e in events))
 
     def test_export_state_save_failure_prevents_cleanup(self):
         chapter = self.chapter()
@@ -181,6 +199,7 @@ class QueueWorkerTests(unittest.TestCase):
         self.assertTrue((chapter / "mask" / "keep.png").exists())
         self.assertIn(("status", 0, "failed", "state write failed"), events)
         self.assertIn("blocked", [e[2] for e in events if e[0] == "status"])
+        self.assertFalse(any(e[0] == "result" for e in events))
 
     def test_cancel_during_export_preserves_original_archive_and_pending_jobs(self):
         chapter = self.chapter()
@@ -208,6 +227,7 @@ class QueueWorkerTests(unittest.TestCase):
                          [(0, "running"), (0, "cancelled")])
         self.assertEqual([asdict(job) for job in jobs], before)
         self.assertEqual(events[-1], ("done",))
+        self.assertFalse(any(e[0] == "result" for e in events))
 
 
 if __name__ == "__main__":

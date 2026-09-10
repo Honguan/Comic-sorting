@@ -9,6 +9,7 @@ def tr(text):
     return TRANSLATIONS.get(text, {}).get(_language, text)
 
 TRANSLATIONS = {
+    '無法開啟結果位置': {'en': 'Cannot open result location', 'ja': '結果の保存場所を開けません'},
     '未啟用': {'en': 'Disabled', 'ja': '無効'},
     '估算中': {'en': 'Estimating', 'ja': '計算中'},
     '{0}%｜{1}/{2} 頁｜剩餘 {3}': {'en': '{0}% | {1}/{2} pages | ETA {3}', 'ja': '{0}%｜{1}/{2} ページ｜残り {3}'},

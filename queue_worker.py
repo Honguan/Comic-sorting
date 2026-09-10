@@ -194,6 +194,7 @@ def run_jobs(jobs, settings, output, skip, stop, emit):
                     status, translated = translation_status(path)
                     if status != tr("可匯出"):
                         raise RuntimeError(tr("翻譯結果不完整，未執行後續動作"))
+                    result_path = translated[0].parent
                     logger.info("[%s] result_verified sources=%s results=%s", job_id, len(image_files(path)), len(translated))
                 if stop.is_set():
                     raise RuntimeError(tr("已停止"))
@@ -209,6 +210,7 @@ def run_jobs(jobs, settings, output, skip, stop, emit):
                     export_action, archive = export_chapter(path.parent, path, target, state, skip,
                                                             progress=export_progress)
                     save_json(state_file, state)
+                    result_path = archive
                     logger.info("[%s] export_%s output=%s", job_id, export_action, archive)
                     emit(("stage", "匯出", 100))
                 if stop.is_set():
@@ -221,6 +223,8 @@ def run_jobs(jobs, settings, output, skip, stop, emit):
                 if stop.is_set():
                     raise RuntimeError(tr("已停止"))
                 emit(("status", index, "done", ""))
+                if action == "translate":
+                    emit(("result", result_path))
                 logger.info("[%s] job_done", job_id)
             except Exception as error:
                 logger.exception("[%s] job_%s action=%s path=%s", job_id,
