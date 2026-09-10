@@ -137,7 +137,7 @@ class TranslationQueue:
             elif status not in STATUSES:
                 status = "pending"
             self.jobs.append(Job(Path(record["path"]).resolve(), record["action"], status, error,
-                                 record.get("start_page", 1), record.get("end_page")))
+                                 record.get("start_page", 1), record.get("end_page"), record.get("range_export") is True))
         self.render()
         self.update_controls()
 
@@ -151,7 +151,7 @@ class TranslationQueue:
         return dict(bt_path=self.installation.get(), bt_config=self.config.get(),
                     bt_python=self.python.get(), bt_export=self.export.get(), bt_cleanup=self.cleanup.get(),
                     bt_jobs=[dict(path=str(job.path), action=job.action, status=job.status, error=job.error,
-                                  start_page=job.start_page, end_page=job.end_page)
+                                  start_page=job.start_page, end_page=job.end_page, range_export=job.range_export)
                              for job in self.jobs])
 
     def reset_bt_progress(self, total=None, enabled=None):
@@ -360,6 +360,18 @@ class TranslationQueue:
         for row, title, variable in ((2, "起始頁", start), (3, "結束頁（空白到最後）", end)):
             ttk.Label(box, text=tr(title)).grid(row=row, column=0, sticky="w", pady=3)
             ttk.Spinbox(box, from_=1, to=len(images), textvariable=variable, width=12).grid(row=row, column=1, padx=(12, 0))
+        range_export = tk.BooleanVar(dialog, value=job.range_export)
+        export_check = ttk.Checkbutton(box, text=tr("指定頁面完成後匯出 CBZ"), variable=range_export)
+        export_check.grid(row=4, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        ttk.Label(box, text=tr("指定頁數專用，預設不匯出；勾選後須全章結果齊全才匯出整章 CBZ。"),
+                  wraplength=420).grid(row=5, column=0, columnspan=2, sticky="w")
+
+        def update_export(*_args):
+            export_check.configure(state="disabled" if start.get().strip() == "1" and not end.get().strip() else "normal")
+
+        start.trace_add("write", update_export)
+        end.trace_add("write", update_export)
+        update_export()
 
         def save():
             try:
@@ -369,15 +381,15 @@ class TranslationQueue:
             except ValueError:
                 messagebox.showerror(tr("翻譯頁數"), tr("翻譯頁數必須介於 1 至 {0}，且起始頁不可大於結束頁").format(len(images)), parent=dialog)
                 return
-            if (job.start_page, job.end_page) != (first, last):
-                job.start_page, job.end_page = first, last
+            if (job.start_page, job.end_page, job.range_export) != (first, last, range_export.get()):
+                job.start_page, job.end_page, job.range_export = first, last, range_export.get()
                 job.status, job.error = "pending", ""
                 self.changed()
             dialog.destroy()
 
         buttons = ttk.Frame(box)
-        buttons.grid(row=4, column=0, columnspan=2, pady=(12, 0))
-        ttk.Button(buttons, text=tr("全部頁面"), command=lambda: (start.set("1"), end.set(""))).pack(side="left", padx=3)
+        buttons.grid(row=6, column=0, columnspan=2, pady=(12, 0))
+        ttk.Button(buttons, text=tr("全部頁面"), command=lambda: (start.set("1"), end.set(""), range_export.set(False))).pack(side="left", padx=3)
         ttk.Button(buttons, text=tr("套用"), command=save).pack(side="left", padx=3)
         ttk.Button(buttons, text=tr("取消"), command=dialog.destroy).pack(side="left", padx=3)
         dialog.bind("<Return>", lambda _event: save())
@@ -408,7 +420,7 @@ class TranslationQueue:
                     raise ValueError(tr("請先儲存並關閉設定編輯器"))
                 self.command()
                 error_tab = self.app.queue_tab
-            exporting = (translating and self.export.get()) or any(job.action == "export" for job in pending)
+            exporting = (translate and self.export.get()) or any(job.should_export(self.export.get()) for job in pending)
             if exporting and not self.app.komga_path.get().strip():
                 error_tab = self.app.export_tab
                 raise ValueError(tr("請設定 Komga 輸出路徑"))
@@ -424,7 +436,7 @@ class TranslationQueue:
                     raise ValueError(f"{job.path}: {tr('漫畫路徑不存在')}")
                 if job.action == "translate":
                     job.select_pages(image_files(job.path))
-                if job.action == "export" or (job.action == "translate" and self.export.get()):
+                if job.should_export(self.export.get()):
                     target = Path(self.app.komga_path.get()).resolve()
                     if target.is_relative_to(job.path) or job.path.is_relative_to(target):
                         raise ValueError(tr("匯出與漫畫路徑不可互相包含"))

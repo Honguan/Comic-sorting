@@ -73,7 +73,7 @@ class PageRangeTests(unittest.TestCase):
         mask = self.chapter / "mask"
         mask.mkdir()
         (mask / "keep.png").write_bytes(b"work")
-        events = self.run_job(Job(self.chapter, "translate", start_page=2, end_page=3), bt_export=True, bt_cleanup=True)
+        events = self.run_job(Job(self.chapter, "translate", start_page=2, end_page=3, range_export=True), bt_export=True, bt_cleanup=True)
         self.assertEqual([p.name for p in image_files(self.chapter / "result")], ["2.png", "3.png"])
         self.assertTrue((mask / "keep.png").exists())
         self.assertFalse(self.output.exists())
@@ -89,7 +89,7 @@ class PageRangeTests(unittest.TestCase):
         result.mkdir()
         for name in ("1.png", "3.png", "10.png"):
             (result / name).write_bytes(b"existing translation")
-        events = self.run_job(Job(self.chapter, "translate", start_page=2, end_page=2), bt_export=True)
+        events = self.run_job(Job(self.chapter, "translate", start_page=2, end_page=2, range_export=True), bt_export=False)
         self.assertIn(("status", 0, "done", ""), events)
         for name in ("1.png", "3.png", "10.png"):
             self.assertEqual((result / name).read_bytes(), b"existing translation")
@@ -97,10 +97,23 @@ class PageRangeTests(unittest.TestCase):
         self.assertTrue(archive.is_file())
         self.assertIn(("result", archive), events)
 
+    def test_selected_pages_default_to_no_export_even_with_complete_results(self):
+        result = self.chapter / "result"
+        result.mkdir()
+        for name in ("1.png", "2.png", "3.png", "10.png"):
+            (result / name).write_bytes(b"existing translation")
+        for start, end in ((2, 2), (1, 4), (2, None)):
+            with self.subTest(start=start, end=end):
+                events = self.run_job(Job(self.chapter, "translate", start_page=start, end_page=end), bt_export=True)
+                self.assertIn(("status", 0, "done", ""), events)
+                self.assertFalse(self.output.exists())
+                self.assertIn(("result", result), events)
+
     def test_default_still_translates_all_pages(self):
-        events = self.run_job(Job(self.chapter, "translate"))
+        events = self.run_job(Job(self.chapter, "translate"), bt_export=True)
         self.assertIn(("status", 0, "done", ""), events)
         self.assertEqual(len(image_files(self.chapter / "result")), 4)
+        self.assertTrue(output_path_for(self.output, self.chapter.parent, self.chapter).is_file())
 
     def test_invalid_range_or_missing_selected_output_fails_without_followups(self):
         for job in (Job(self.chapter, "translate", start_page=5), Job(self.chapter, "translate", start_page=2, end_page=3)):

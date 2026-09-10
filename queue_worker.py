@@ -47,6 +47,12 @@ class Job:
     error: str = ""
     start_page: int = 1
     end_page: int | None = None
+    range_export: bool = False
+
+    def should_export(self, default):
+        if self.action != "translate":
+            return self.action == "export"
+        return self.range_export if self.start_page != 1 or self.end_page is not None else default
 
     def select_pages(self, images):
         end = len(images) if self.end_page is None else self.end_page
@@ -230,7 +236,7 @@ def run_jobs(jobs, settings, output, skip, stop, emit):
                     logger.info("[%s] result_verified sources=%s results=%s", job_id, len(image_files(path)), len(translated))
                 if stop.is_set():
                     raise RuntimeError(tr("已停止"))
-                if action == "export" or (action == "translate" and whole_chapter and settings.get("bt_export", False)):
+                if whole_chapter and job.should_export(settings.get("bt_export", False)):
                     if not str(output).strip():
                         raise ValueError(tr("請設定 Komga 輸出路徑"))
                     target = Path(output).resolve()

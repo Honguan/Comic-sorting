@@ -206,6 +206,8 @@ TRANSLATIONS = {
     '加入指定路徑': {'en': 'Add path', 'ja': 'パスを指定して追加'},
     '動作': {'en': 'Action', 'ja': '操作'},
     '匯出': {'en': 'Export', 'ja': 'エクスポート'},
+    '指定頁面完成後匯出 CBZ': {'en': 'Export CBZ after the selected pages finish', 'ja': '指定ページの完了後に CBZ をエクスポート'},
+    '指定頁數專用，預設不匯出；勾選後須全章結果齊全才匯出整章 CBZ。': {'en': 'Selected pages only; export is off by default. When enabled, export the whole chapter only if all results are available.', 'ja': '指定ページ専用。既定ではエクスポートしません。有効にすると、全ページの結果が揃った場合に章全体を CBZ に出力します。'},
     '匯出完成後開啟輸出資料夾': {'en': 'Open output folder after export', 'ja': 'エクスポート後に出力フォルダーを開く'},
     '匯出所有已翻譯項目': {'en': 'Export all translated items', 'ja': '翻訳済みの全項目をエクスポート'},
     '匯出與漫畫路徑不可互相包含': {'en': 'Export and comic paths cannot contain each other', 'ja': '出力先と漫画のパスを互いの配下に指定することはできません'},

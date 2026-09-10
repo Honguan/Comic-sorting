@@ -176,23 +176,67 @@ class WorkflowTests(unittest.TestCase):
         box = dialog.winfo_children()[0]
         first_input, last_input = (box.grid_slaves(row=row, column=1)[0] for row in (2, 3))
         self.assertEqual((first_input.get(), last_input.get()), ("1", ""))
+        export_check = box.grid_slaves(row=4)[0]
+        self.assertFalse(export_check.instate(["selected"]))
+        self.assertTrue(export_check.instate(["disabled"]))
         first_input.set("2")
         last_input.set("4")
-        buttons = box.grid_slaves(row=4)[0].winfo_children()
+        self.assertFalse(export_check.instate(["disabled"]))
+        export_check.invoke()
+        buttons = box.grid_slaves(row=6)[0].winfo_children()
         next(b for b in buttons if b["text"] == tr("套用")).invoke()
         self.assertEqual((q.jobs[0].start_page, q.jobs[0].end_page, q.jobs[0].status), (2, 4, "pending"))
         self.assertEqual((q.jobs[1].start_page, q.jobs[1].end_page), (1, None))
+        self.assertEqual([j.range_export for j in q.jobs], [True, False])
         self.assertIn("2", q.tree.set(str(id(q.jobs[0])), "pages"))
         self.assertEqual(load_json(self.settings, {})["bt_jobs"][0]["end_page"], 4)
         another = tk.Toplevel(self.root)
         restored = comic.FileAggregatorApp(another).translation_queue
         self.assertEqual([(j.start_page, j.end_page) for j in restored.jobs], [(2, 4), (1, None)])
+        self.assertEqual([j.range_export for j in restored.jobs], [True, False])
         another.destroy()
+        q.jobs[0].status = "done"
         dialog = q.edit_page_range()
-        buttons = dialog.winfo_children()[0].grid_slaves(row=4)[0].winfo_children()
+        box = dialog.winfo_children()[0]
+        self.assertTrue(box.grid_slaves(row=4)[0].instate(["selected"]))
+        box.grid_slaves(row=4)[0].invoke()
+        buttons = box.grid_slaves(row=6)[0].winfo_children()
+        next(b for b in buttons if b["text"] == tr("套用")).invoke()
+        self.assertFalse(q.jobs[0].range_export)
+        self.assertEqual(q.jobs[0].status, "pending")
+        dialog = q.edit_page_range()
+        buttons = dialog.winfo_children()[0].grid_slaves(row=6)[0].winfo_children()
         next(b for b in buttons if b["text"] == tr("全部頁面")).invoke()
         next(b for b in buttons if b["text"] == tr("套用")).invoke()
         self.assertEqual((q.jobs[0].start_page, q.jobs[0].end_page), (1, None))
+        self.assertFalse(q.jobs[0].range_export)
+
+    def test_range_export_controls_output_validation_and_legacy_jobs_default_off(self):
+        from comic_core import save_json
+        chapter = self.chapter("Chapter 1")
+        (chapter / "1.png").touch()
+        save_json(self.settings, {"bt_export": True, "bt_jobs": [dict(
+            path=str(chapter), action="translate", start_page=1, end_page=1)]})
+        another = tk.Toplevel(self.root)
+        q = comic.FileAggregatorApp(another).translation_queue
+        self.assertFalse(q.jobs[0].range_export)
+        with mock.patch.object(q, "command"), mock.patch("translation_queue.messagebox.showerror") as error:
+            self.assertTrue(q.validate())  # Global export does not require an output for this range.
+            q.app.komga_path.set(str(chapter))
+            self.assertTrue(q.validate())
+            error.assert_not_called()
+            q.jobs[0].range_export = True
+            self.assertFalse(q.validate())  # Enabled range export still rejects overlapping paths.
+            q.export.set(False)
+            q.app.komga_path.set("")
+            self.assertFalse(q.validate())  # Per-job opt-in requires an output even when global export is off.
+            q.app.komga_path.set(str(self.folder / "Komga"))
+            self.assertTrue(q.validate())
+            q.app.komga_path.set("")
+            q.jobs.append(Job(chapter, "export"))
+            q.jobs[0].range_export = False
+            self.assertFalse(q.validate())  # A separate manual export keeps its own requirements.
+        another.destroy()
 
     def test_page_range_rejects_multi_selection_nontranslation_busy_and_bad_values(self):
         from ui_language import tr
@@ -216,7 +260,7 @@ class WorkflowTests(unittest.TestCase):
         dialog = q.edit_page_range()
         box = dialog.winfo_children()[0]
         box.grid_slaves(row=2, column=1)[0].set("0")
-        buttons = box.grid_slaves(row=4)[0].winfo_children()
+        buttons = box.grid_slaves(row=6)[0].winfo_children()
         with mock.patch("translation_queue.messagebox.showerror") as error:
             next(b for b in buttons if b["text"] == tr("套用")).invoke()
         error.assert_called_once()
