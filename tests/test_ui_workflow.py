@@ -104,6 +104,69 @@ class WorkflowTests(unittest.TestCase):
             self.assertFalse(q.validate())
         error.assert_called_once()
 
+    def test_page_range_edits_only_one_job_and_survives_restart(self):
+        from comic_core import load_json
+        from ui_language import tr
+        first, second = self.chapter("Chapter 1"), self.chapter("Chapter 2")
+        for chapter in (first, second):
+            for index in range(1, 6):
+                (chapter / f"{index}.png").touch()
+        q = self.app.translation_queue
+        q.add_paths([first, second], "translate")
+        q.jobs[0].status = "done"
+        q.tree.selection_set(str(id(q.jobs[0])))
+        dialog = q.edit_page_range()
+        box = dialog.winfo_children()[0]
+        first_input, last_input = (box.grid_slaves(row=row, column=1)[0] for row in (2, 3))
+        self.assertEqual((first_input.get(), last_input.get()), ("1", ""))
+        first_input.set("2")
+        last_input.set("4")
+        buttons = box.grid_slaves(row=4)[0].winfo_children()
+        next(b for b in buttons if b["text"] == tr("套用")).invoke()
+        self.assertEqual((q.jobs[0].start_page, q.jobs[0].end_page, q.jobs[0].status), (2, 4, "pending"))
+        self.assertEqual((q.jobs[1].start_page, q.jobs[1].end_page), (1, None))
+        self.assertIn("2", q.tree.set(str(id(q.jobs[0])), "pages"))
+        self.assertEqual(load_json(self.settings, {})["bt_jobs"][0]["end_page"], 4)
+        another = tk.Toplevel(self.root)
+        restored = comic.FileAggregatorApp(another).translation_queue
+        self.assertEqual([(j.start_page, j.end_page) for j in restored.jobs], [(2, 4), (1, None)])
+        another.destroy()
+        dialog = q.edit_page_range()
+        buttons = dialog.winfo_children()[0].grid_slaves(row=4)[0].winfo_children()
+        next(b for b in buttons if b["text"] == tr("全部頁面")).invoke()
+        next(b for b in buttons if b["text"] == tr("套用")).invoke()
+        self.assertEqual((q.jobs[0].start_page, q.jobs[0].end_page), (1, None))
+
+    def test_page_range_rejects_multi_selection_nontranslation_busy_and_bad_values(self):
+        from ui_language import tr
+        chapter = self.chapter("Chapter 1")
+        (chapter / "1.png").touch()
+        q = self.app.translation_queue
+        q.add_paths([chapter], "translate")
+        q.add_paths([chapter], "export")
+        selections = ((), tuple(str(id(j)) for j in q.jobs), (str(id(q.jobs[1])),))
+        for selection in selections:
+            q.tree.selection_set(*selection)
+            q.update_controls()
+            self.assertEqual(str(q.range_button["state"]), "disabled")
+            self.assertIsNone(q.edit_page_range())
+        q.tree.selection_set(str(id(q.jobs[0])))
+        self.app.set_manga_busy(True)
+        self.assertIsNone(q.edit_page_range())
+        self.app.set_manga_busy(False)
+        q.update_controls()
+        self.assertEqual(str(q.range_button["state"]), "normal")
+        dialog = q.edit_page_range()
+        box = dialog.winfo_children()[0]
+        box.grid_slaves(row=2, column=1)[0].set("0")
+        buttons = box.grid_slaves(row=4)[0].winfo_children()
+        with mock.patch("translation_queue.messagebox.showerror") as error:
+            next(b for b in buttons if b["text"] == tr("套用")).invoke()
+        error.assert_called_once()
+        self.assertEqual(q.jobs[0].start_page, 1)
+        self.assertTrue(dialog.winfo_exists())
+        dialog.destroy()
+
     def test_translation_completion_opens_final_location_once(self):
         from queue_worker import run_jobs
         chapter = self.chapter("Chapter 1, 測試")

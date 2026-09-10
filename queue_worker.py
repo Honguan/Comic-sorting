@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
+import tempfile
 import threading
 import uuid
 
@@ -43,9 +45,18 @@ class Job:
     action: str
     status: str = "pending"
     error: str = ""
+    start_page: int = 1
+    end_page: int | None = None
+
+    def select_pages(self, images):
+        end = len(images) if self.end_page is None else self.end_page
+        if (type(self.start_page) is not int or type(end) is not int
+                or not 1 <= self.start_page <= end <= len(images)):
+            raise ValueError(tr("翻譯頁數必須介於 1 至 {0}，且起始頁不可大於結束頁").format(len(images)))
+        return images[self.start_page - 1:end]
 
 
-def translator_command(installation, config, python_path="", chapter=None):
+def translator_command(installation, config, python_path="", chapter=None, page_manifest=None):
     root = Path(installation).resolve()
     python = (Path(python_path) if python_path else root / "ballontrans_pylibs_win" / "python.exe").resolve()
     if not (root / "ballontranslator" / "__main__.py").is_file() or not python.is_file():
@@ -59,6 +70,10 @@ def translator_command(installation, config, python_path="", chapter=None):
         command[2:4] = ["-c", "from ballontranslator.launch import args, main; "
                          "args.exec_dirs = [args.exec_dirs]; main()"]
         command += ["--headless", "--exec_dirs", str(Path(chapter).resolve())]
+        if page_manifest is not None:
+            script_dir = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
+            command[3] = f"import sys; sys.path.insert(0, {str(script_dir)!r}); from bt_run_bridge import main; main()"
+            command.insert(4, str(page_manifest))
     env = os.environ.copy()
     env["PATH"] = os.pathsep.join((str(python.parent), str(python.parent / "Scripts"), env.get("PATH", "")))
     env["PYTHONIOENCODING"] = "utf-8"
@@ -177,6 +192,8 @@ def run_jobs(jobs, settings, output, skip, stop, emit):
                 continue
             emit(("status", index, "running", ""))
             try:
+                whole_chapter = True
+                completion_note = ""
                 if action not in ("translate", "export", "cleanup"):
                     raise ValueError(tr("不支援的佇列動作：{0}").format(action))
                 if not path.is_dir():
@@ -185,20 +202,35 @@ def run_jobs(jobs, settings, output, skip, stop, emit):
                     sources = image_files(path)
                     if not sources:
                         raise ValueError(tr("指定路徑沒有圖片，請選擇章節或整合輸出"))
+                    selected = job.select_pages(sources)
                     module = load_json(settings["bt_config"], {}).get("module", {})
-                    emit(("bt_reset", len(sources), {name: module.get(flag, True) is not False
-                                                   for name, flag in BT_STAGES.items()}))
-                    run_translation(*translator_command(settings["bt_path"], settings["bt_config"],
-                                                        settings.get("bt_python", ""), path), stop,
-                                    lambda *values: emit(("bt_progress", *values)), log_context=job_id)
+                    enabled = {name: module.get(flag, True) is not False for name, flag in BT_STAGES.items()}
+                    if not any(enabled.values()):
+                        raise ValueError(tr("請至少啟用一個 BallonsTranslator 處理階段"))
+                    emit(("bt_reset", len(selected), enabled))
+                    logger.info("[%s] translation_pages start=%s end=%s selected=%s total=%s", job_id,
+                                job.start_page, job.end_page or len(sources), len(selected), len(sources))
+                    with tempfile.TemporaryDirectory(prefix="comic-sorting-pages-") as temporary:
+                        page_manifest = None
+                        if len(selected) != len(sources):
+                            page_manifest = Path(temporary) / "pages.json"
+                            save_json(page_manifest, [p.name for p in selected])
+                        command_options = {"page_manifest": page_manifest} if page_manifest else {}
+                        run_translation(*translator_command(settings["bt_path"], settings["bt_config"],
+                                                            settings.get("bt_python", ""), path, **command_options), stop,
+                                        lambda *values: emit(("bt_progress", *values)), log_context=job_id)
                     status, translated = translation_status(path)
-                    if status != tr("可匯出"):
+                    if not {p.stem.casefold() for p in selected}.issubset({p.stem.casefold() for p in translated}):
                         raise RuntimeError(tr("翻譯結果不完整，未執行後續動作"))
+                    whole_chapter = status == tr("可匯出")
+                    if not whole_chapter:
+                        completion_note = tr("指定頁面已完成；全章結果尚未齊全，略過自動匯出與清理")
+                        logger.info("[%s] partial_range_completed export_cleanup_skipped", job_id)
                     result_path = translated[0].parent
                     logger.info("[%s] result_verified sources=%s results=%s", job_id, len(image_files(path)), len(translated))
                 if stop.is_set():
                     raise RuntimeError(tr("已停止"))
-                if action == "export" or (action == "translate" and settings.get("bt_export", False)):
+                if action == "export" or (action == "translate" and whole_chapter and settings.get("bt_export", False)):
                     if not str(output).strip():
                         raise ValueError(tr("請設定 Komga 輸出路徑"))
                     target = Path(output).resolve()
@@ -215,14 +247,14 @@ def run_jobs(jobs, settings, output, skip, stop, emit):
                     emit(("stage", "匯出", 100))
                 if stop.is_set():
                     raise RuntimeError(tr("已停止，未執行後續清理"))
-                if action == "cleanup" or (settings.get("bt_cleanup", False) and action in ("translate", "export")):
+                if action == "cleanup" or (whole_chapter and settings.get("bt_cleanup", False) and action in ("translate", "export")):
                     folders, removed, errors = clear_work_folders(path)
                     logger.info("[%s] cleanup_result folders=%s removed=%s errors=%s", job_id, folders, removed, errors)
                     if errors:
                         raise RuntimeError("\n".join(errors))
                 if stop.is_set():
                     raise RuntimeError(tr("已停止"))
-                emit(("status", index, "done", ""))
+                emit(("status", index, "done", completion_note))
                 if action == "translate":
                     emit(("result", result_path))
                 logger.info("[%s] job_done", job_id)

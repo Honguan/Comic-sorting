@@ -11,6 +11,7 @@ from queue_worker import BT_STAGES, Job, run_jobs, translator_command
 from app_logging import logger, log_path
 from ui_language import tr
 from bt_settings import ConfigEditor
+from comic_core import image_files
 
 
 ACTIONS = {"translate": "翻譯", "export": "匯出", "cleanup": "清理"}
@@ -65,6 +66,7 @@ class TranslationQueue:
         self.button(row, tr("加入上方選取項目"), self.add_selected)
         self.button(row, tr("加入指定路徑"), self.add_directory)
         self.button(row, tr("一鍵整合＋主佇列"), self.integrate)
+        self.range_button = self.button(row, tr("翻譯頁數"), self.edit_page_range)
         row = ttk.Frame(box)
         row.pack(fill="x")
         for text, variable in ((tr("翻譯成功後匯出 CBZ"), self.export),
@@ -76,11 +78,12 @@ class TranslationQueue:
         footer.pack(side="bottom", fill="x")
         tree_frame = ttk.Frame(box)
         tree_frame.pack(fill="both", expand=True, pady=4)
-        self.tree = ttk.Treeview(tree_frame, columns=("action", "status"), show="tree headings", height=3)
-        for column, text in (("#0", "漫畫路徑"), ("action", "動作"), ("status", "狀態")):
+        self.tree = ttk.Treeview(tree_frame, columns=("action", "pages", "status"), show="tree headings", height=3)
+        for column, text in (("#0", "漫畫路徑"), ("action", "動作"), ("pages", "翻譯頁數"), ("status", "狀態")):
             self.tree.heading(column, text=tr(text))
         self.tree.column("#0", width=480)
         self.tree.column("action", width=110, stretch=False)
+        self.tree.column("pages", width=130, stretch=False)
         self.tree.column("status", width=140, stretch=False)
         vertical = ttk.Scrollbar(tree_frame, command=self.tree.yview)
         horizontal = ttk.Scrollbar(tree_frame, orient="horizontal", command=self.tree.xview)
@@ -91,6 +94,7 @@ class TranslationQueue:
         tree_frame.rowconfigure(0, weight=1)
         tree_frame.columnconfigure(0, weight=1)
         self.tree.bind("<Double-1>", self.show_details)
+        self.tree.bind("<<TreeviewSelect>>", lambda _event: self.update_controls())
         row = ttk.Frame(footer)
         row.pack(fill="x")
         for text, command in (("移除選取", self.remove), ("上移", lambda: self.move(-1)),
@@ -132,7 +136,8 @@ class TranslationQueue:
                 status, error = "cancelled", tr("上次執行中斷，請確認結果後重試")
             elif status not in STATUSES:
                 status = "pending"
-            self.jobs.append(Job(Path(record["path"]).resolve(), record["action"], status, error))
+            self.jobs.append(Job(Path(record["path"]).resolve(), record["action"], status, error,
+                                 record.get("start_page", 1), record.get("end_page")))
         self.render()
         self.update_controls()
 
@@ -145,7 +150,8 @@ class TranslationQueue:
     def settings(self):
         return dict(bt_path=self.installation.get(), bt_config=self.config.get(),
                     bt_python=self.python.get(), bt_export=self.export.get(), bt_cleanup=self.cleanup.get(),
-                    bt_jobs=[dict(path=str(job.path), action=job.action, status=job.status, error=job.error)
+                    bt_jobs=[dict(path=str(job.path), action=job.action, status=job.status, error=job.error,
+                                  start_page=job.start_page, end_page=job.end_page)
                              for job in self.jobs])
 
     def reset_bt_progress(self, total=None, enabled=None):
@@ -174,6 +180,16 @@ class TranslationQueue:
         self.action_choice.configure(state="disabled" if busy else "readonly")
         self.start_button.configure(state="normal" if not busy and any(j.status == "pending" for j in self.jobs) else "disabled")
         self.stop_button.configure(state="normal" if self.running else "disabled")
+        selection = self.tree.selection()
+        single_translation = len(selection) == 1 and any(str(id(j)) == selection[0] and j.action == "translate" for j in self.jobs)
+        self.range_button.configure(state="normal" if not busy and single_translation else "disabled")
+
+    def page_range_text(self, job):
+        if job.action != "translate":
+            return "—"
+        if job.start_page == 1 and job.end_page is None:
+            return tr("全部頁面")
+        return tr("第 {0}–{1} 頁").format(job.start_page, job.end_page if job.end_page is not None else tr("最後"))
 
     def render(self):
         view = self.tree.yview()
@@ -183,7 +199,7 @@ class TranslationQueue:
         for job in self.jobs:
             item = str(id(job))
             self.tree.insert("", "end", iid=item, text=str(job.path),
-                             values=(tr(ACTIONS[job.action]), tr(STATUSES[job.status])))
+                             values=(tr(ACTIONS[job.action]), self.page_range_text(job), tr(STATUSES[job.status])))
             if item in selected:
                 self.tree.selection_add(item)
             if item == focus:
@@ -317,8 +333,58 @@ class TranslationQueue:
         selected = set(self.tree.selection())
         for job in self.jobs:
             if str(id(job)) in selected:
-                messagebox.showinfo(tr("工作詳情"), f"{job.path}\n{tr(ACTIONS[job.action])} / {tr(STATUSES[job.status])}\n\n{job.error}")
+                messagebox.showinfo(tr("工作詳情"), f"{job.path}\n{tr(ACTIONS[job.action])} / {tr(STATUSES[job.status])}\n{self.page_range_text(job)}\n\n{job.error}")
                 break
+
+    def edit_page_range(self):
+        selection = self.tree.selection()
+        if self.running or self.app.manga_busy or len(selection) != 1:
+            return
+        job = next((j for j in self.jobs if str(id(j)) == selection[0] and j.action == "translate"), None)
+        if job is None:
+            return
+        images = image_files(job.path)
+        if not images:
+            messagebox.showerror(tr("翻譯頁數"), tr("指定路徑沒有圖片，請選擇章節或整合輸出"))
+            return
+        dialog = tk.Toplevel(self.app.root)
+        dialog.title(tr("翻譯頁數"))
+        dialog.transient(self.app.root)
+        dialog.resizable(False, False)
+        box = ttk.Frame(dialog, padding=12)
+        box.pack(fill="both", expand=True)
+        ttk.Label(box, text=job.path.name).grid(row=0, column=0, columnspan=2, sticky="w")
+        ttk.Label(box, text=tr("共 {0} 頁，依檔名自然排序；包含起訖頁").format(len(images))).grid(row=1, column=0, columnspan=2, sticky="w", pady=6)
+        start = tk.StringVar(dialog, value=str(job.start_page))
+        end = tk.StringVar(dialog, value="" if job.end_page is None else str(job.end_page))
+        for row, title, variable in ((2, "起始頁", start), (3, "結束頁（空白到最後）", end)):
+            ttk.Label(box, text=tr(title)).grid(row=row, column=0, sticky="w", pady=3)
+            ttk.Spinbox(box, from_=1, to=len(images), textvariable=variable, width=12).grid(row=row, column=1, padx=(12, 0))
+
+        def save():
+            try:
+                first = int(start.get())
+                last = int(end.get()) if end.get().strip() else None
+                Job(job.path, "translate", start_page=first, end_page=last).select_pages(images)
+            except ValueError:
+                messagebox.showerror(tr("翻譯頁數"), tr("翻譯頁數必須介於 1 至 {0}，且起始頁不可大於結束頁").format(len(images)), parent=dialog)
+                return
+            if (job.start_page, job.end_page) != (first, last):
+                job.start_page, job.end_page = first, last
+                job.status, job.error = "pending", ""
+                self.changed()
+            dialog.destroy()
+
+        buttons = ttk.Frame(box)
+        buttons.grid(row=4, column=0, columnspan=2, pady=(12, 0))
+        ttk.Button(buttons, text=tr("全部頁面"), command=lambda: (start.set("1"), end.set(""))).pack(side="left", padx=3)
+        ttk.Button(buttons, text=tr("套用"), command=save).pack(side="left", padx=3)
+        ttk.Button(buttons, text=tr("取消"), command=dialog.destroy).pack(side="left", padx=3)
+        dialog.bind("<Return>", lambda _event: save())
+        dialog.bind("<Escape>", lambda _event: dialog.destroy())
+        dialog.grab_set()
+        box.grid_slaves(row=2, column=1)[0].focus_set()
+        return dialog
 
     def confirm_cleanup(self):
         needs_cleanup = self.cleanup.get() or any(j.action == "cleanup" and j.status == "pending" for j in self.jobs)
@@ -356,6 +422,8 @@ class TranslationQueue:
                     raise ValueError(tr("請先重試此路徑的失敗工作：{0}").format(job.path))
                 if not job.path.is_dir():
                     raise ValueError(f"{job.path}: {tr('漫畫路徑不存在')}")
+                if job.action == "translate":
+                    job.select_pages(image_files(job.path))
                 if job.action == "export" or (job.action == "translate" and self.export.get()):
                     target = Path(self.app.komga_path.get()).resolve()
                     if target.is_relative_to(job.path) or job.path.is_relative_to(target):
