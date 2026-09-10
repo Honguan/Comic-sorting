@@ -127,6 +127,7 @@ class FileAggregatorApp:
         list_frame.rowconfigure(0, weight=1)
         list_frame.columnconfigure(0, weight=1)
         self.folder_tree.bind("<<TreeviewSelect>>", self.on_tree_select)
+        self.folder_tree.bind("<Double-1>", self.add_chapter_to_queue)
 
         scan_row = ttk.Frame(manga_footer)
         scan_row.pack(fill="x")
@@ -435,6 +436,14 @@ class FileAggregatorApp:
             else:
                 paths.append(path)
         return list(dict.fromkeys(paths))
+
+    def add_chapter_to_queue(self, event):
+        if self.folder_tree.identify_region(event.x, event.y) not in ("tree", "cell"):
+            return
+        item = self.tree_items.get(self.folder_tree.identify_row(event.y))
+        if item and item[0] == "chapter":
+            self.translation_queue.add_paths([item[1]])
+            return "break"
 
     @staticmethod
     def get_folders_with_numbers(base_path):

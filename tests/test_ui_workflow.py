@@ -96,6 +96,63 @@ class WorkflowTests(unittest.TestCase):
         restored.clear_completed()
         self.assertEqual(restored.jobs, [])
 
+    def double_click(self, x, y, timestamp):
+        tree = self.app.folder_tree
+        for event, offset in (("<ButtonPress-1>", 0), ("<ButtonRelease-1>", 10),
+                              ("<ButtonPress-1>", 50), ("<ButtonRelease-1>", 60)):
+            tree.event_generate(event, x=x, y=y, time=timestamp + offset)
+        self.root.update()
+
+    def test_double_click_adds_only_clicked_chapter_with_selected_action_and_deduplicates(self):
+        from comic_core import load_json
+        from ui_language import tr
+        first, second = self.chapter("Chapter 1"), self.chapter("Chapter 2")
+        base = self.folder / "Comics"
+        self.app.apply_scan_data(base, self.app.scan_folder_data(base))
+        tree, q = self.app.folder_tree, self.app.translation_queue
+        parent = tree.get_children()[0]
+        tree.item(parent, open=True)
+        children = tree.get_children(parent)
+        tree.selection_set(*children)
+        self.app.work_tabs.select(self.app.export_tab)
+        self.root.deiconify()
+        self.root.update()
+        q.action.set(tr("匯出"))
+        x, y, _, height = tree.bbox(children[1])
+        self.double_click(x + 80, y + height // 2, 10000)
+        self.assertEqual([(j.path, j.action) for j in q.jobs], [(second, "export")])
+        self.assertEqual(self.app.work_tabs.select(), str(self.app.queue_tab))
+        self.double_click(x + 80, y + height // 2, 11000)
+        self.assertEqual(len(q.jobs), 1)
+        saved = load_json(self.settings, {})["bt_jobs"]
+        self.assertEqual([(r["path"], r["action"]) for r in saved], [(str(second), "export")])
+        q.action.set(tr("翻譯"))
+        x, y, _, height = tree.bbox(children[0])
+        self.double_click(x + 80, y + height // 2, 12000)
+        self.assertEqual([(j.path, j.action) for j in q.jobs], [(second, "export"), (first, "translate")])
+
+    def test_double_click_series_heading_empty_space_and_busy_chapter_do_not_add(self):
+        chapter = self.chapter("Chapter 1")
+        base = self.folder / "Comics"
+        self.app.apply_scan_data(base, self.app.scan_folder_data(base))
+        tree = self.app.folder_tree
+        parent = tree.get_children()[0]
+        tree.item(parent, open=True)
+        child = tree.get_children(parent)[0]
+        self.root.deiconify()
+        self.root.update()
+        x, y, _, height = tree.bbox(parent)
+        self.double_click(x + 80, y + height // 2, 20000)
+        self.assertFalse(tree.item(parent, "open"))
+        self.double_click(100, 5, 21000)
+        self.double_click(100, tree.winfo_height() - 3, 22000)
+        tree.item(parent, open=True)
+        self.root.update()
+        self.app.set_manga_busy(True)
+        x, y, _, height = tree.bbox(child)
+        self.double_click(x + 80, y + height // 2, 23000)
+        self.assertEqual(self.app.translation_queue.jobs, [])
+
     def test_cancelled_predecessor_cannot_be_bypassed(self):
         chapter = self.chapter("Chapter 1")
         q = self.app.translation_queue
