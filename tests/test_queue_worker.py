@@ -15,7 +15,7 @@ class QueueWorkerTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name)
+        self.root = Path(temporary.name).resolve()
 
     def chapter(self, name="Chapter 1"):
         chapter = self.root / "漫畫" / name
