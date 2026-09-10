@@ -7,7 +7,7 @@ import os
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from queue_worker import Job, run_jobs, translator_command
+from queue_worker import BT_STAGES, Job, run_jobs, translator_command
 from app_logging import logger, log_path
 from ui_language import tr
 from bt_settings import ConfigEditor
@@ -76,7 +76,7 @@ class TranslationQueue:
         footer.pack(side="bottom", fill="x")
         tree_frame = ttk.Frame(box)
         tree_frame.pack(fill="both", expand=True, pady=4)
-        self.tree = ttk.Treeview(tree_frame, columns=("action", "status"), show="tree headings", height=5)
+        self.tree = ttk.Treeview(tree_frame, columns=("action", "status"), show="tree headings", height=3)
         for column, text in (("#0", "漫畫路徑"), ("action", "動作"), ("status", "狀態")):
             self.tree.heading(column, text=tr(text))
         self.tree.column("#0", width=480)
@@ -107,7 +107,20 @@ class TranslationQueue:
         self.label = tk.StringVar(value=tr("BallonsTranslator：待命"))
         ttk.Label(footer, textvariable=self.label).pack(anchor="w")
         self.stage = ttk.Progressbar(footer)
-        self.stage.pack(fill="x")
+        progress_grid = ttk.Frame(footer)
+        self.bt_frame = progress_grid
+        progress_grid.pack(fill="x", pady=(4, 0))
+        progress_grid.columnconfigure(1, weight=1)
+        self.bt_bars = {}
+        self.bt_labels = {}
+        self.bt_progress = {}
+        for row, name in enumerate(BT_STAGES):
+            ttk.Label(progress_grid, text=tr(name)).grid(row=row, column=0, sticky="w", padx=(0, 8))
+            self.bt_bars[name] = ttk.Progressbar(progress_grid)
+            self.bt_bars[name].grid(row=row, column=1, sticky="ew", padx=(0, 8), pady=2)
+            self.bt_labels[name] = tk.StringVar()
+            ttk.Label(progress_grid, textvariable=self.bt_labels[name]).grid(row=row, column=2, sticky="w")
+        self.reset_bt_progress()
         records = settings.get("bt_jobs", [])
         for record in records if isinstance(records, list) else []:
             if (not isinstance(record, dict) or record.get("action") not in ACTIONS
@@ -134,6 +147,25 @@ class TranslationQueue:
                     bt_python=self.python.get(), bt_export=self.export.get(), bt_cleanup=self.cleanup.get(),
                     bt_jobs=[dict(path=str(job.path), action=job.action, status=job.status, error=job.error)
                              for job in self.jobs])
+
+    def reset_bt_progress(self, total=None, enabled=None):
+        for name in BT_STAGES:
+            active = enabled is None or enabled.get(name, True)
+            self.bt_progress[name] = (0, 0 if total is not None else None, total, None, active)
+            self.show_bt_progress(name)
+
+    def show_bt_progress(self, name, terminal=None):
+        percent, current, total, eta, active = self.bt_progress[name]
+        self.bt_bars[name].configure(value=percent)
+        if not active:
+            text = tr("未啟用")
+        else:
+            remaining = eta if eta is not None else tr("估算中")
+            if terminal and (current is None or total is None or current < total):
+                remaining = tr(terminal)
+            text = tr("{0}%｜{1}/{2} 頁｜剩餘 {3}").format(
+                percent, current if current is not None else "—", total if total is not None else "—", remaining)
+        self.bt_labels[name].set(text)
 
     def update_controls(self):
         busy = self.running or self.app.manga_busy
@@ -351,6 +383,8 @@ class TranslationQueue:
         self.app.work_tabs.select(self.app.queue_tab)
         self.total.configure(maximum=len(self.active_jobs), value=0)
         self.stage.configure(value=0)
+        self.stage.pack_forget()
+        self.reset_bt_progress()
         options = (self.settings(), self.app.komga_path.get(), self.app.skip_unchanged.get())
         threading.Thread(target=run_jobs, args=(self.active_jobs, *options, self.stop, self.events.put), daemon=True).start()
         self.app.root.after(50, self.poll)
@@ -371,9 +405,21 @@ class TranslationQueue:
                 if job.status == "running":
                     self.tree.see(str(id(job)))
                     self.stage.configure(value=0)
+                    self.stage.pack_forget()
+                    self.reset_bt_progress()
                     self.label.set(tr("正在處理：{0}").format(job.path.name))
+                elif job.status in ("failed", "cancelled"):
+                    for name in BT_STAGES:
+                        self.show_bt_progress(name, STATUSES[job.status])
+            elif event[0] == "bt_reset":
+                self.reset_bt_progress(event[1], event[2])
+            elif event[0] == "bt_progress":
+                name, percent, current, total, eta = event[1:]
+                self.bt_progress[name] = (percent, current, total, eta, True)
+                self.show_bt_progress(name)
             elif event[0] == "stage":
                 self.label.set(f"{tr(event[1])}: {event[2]}%")
+                self.stage.pack(fill="x", before=self.bt_frame)
                 self.stage.configure(value=event[2])
             elif event[0] == "total":
                 self.total.configure(value=event[1])

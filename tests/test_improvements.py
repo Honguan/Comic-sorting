@@ -357,9 +357,16 @@ class UIImprovementsTests(unittest.TestCase):
                     window.geometry("820x640")
                     app = comic.FileAggregatorApp(window)
                     self.pump(.1)
+                    for name in app.translation_queue.bt_bars:
+                        app.translation_queue.bt_progress[name] = (60, 582, 960, "4:00:04", True)
+                        app.translation_queue.show_bt_progress(name)
+                    app.translation_queue.stage.pack(fill="x", before=app.translation_queue.bt_frame)
+                    details = [widget for widget in next(iter(app.translation_queue.bt_bars.values())).master.winfo_children()
+                               if isinstance(widget, tk.ttk.Label)]
                     for tab, controls in (
                             (app.queue_tab, (app.translation_queue.start_button, app.translation_queue.stop_button,
-                                             app.translation_queue.total, app.translation_queue.stage)),
+                                             app.translation_queue.total, app.translation_queue.stage,
+                                             *app.translation_queue.bt_bars.values(), *details)),
                             (app.export_tab, (app.export_selected_button, app.export_all_button, app.cleanup_button)),
                             (app.settings_tab, (app.translation_queue.controls[0],))):
                         app.work_tabs.select(tab)

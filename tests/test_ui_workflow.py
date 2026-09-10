@@ -108,3 +108,41 @@ class WorkflowTests(unittest.TestCase):
         self.root.update_idletasks()
         self.assertLessEqual(self.root.winfo_reqheight(), 780)
         self.assertEqual(len(self.app.work_tabs.tabs()), 3)
+
+    def test_four_stage_progress_remains_independent_and_resets_per_job(self):
+        from queue_worker import BT_STAGES
+        from ui_language import tr
+        q = self.app.translation_queue
+        q.jobs = [Job(self.folder / "Chapter 1", "translate"), Job(self.folder / "Chapter 2", "translate")]
+        q.active_jobs = tuple(q.jobs)
+        q.render()
+        for event in (("status", 0, "running", ""), ("bt_reset", 100, dict.fromkeys(BT_STAGES, True)),
+                      ("bt_progress", "Text Detection", 90, 90, 100, "00:10"),
+                      ("bt_progress", "OCR", 60, 60, 100, "01:30"),
+                      ("bt_progress", "Inpaint", 55, 55, 100, "02:00"),
+                      ("bt_progress", "Translation", 40, 40, 100, "12:34")):
+            q.events.put(event)
+        q.poll()
+        self.assertEqual([q.bt_bars[name]["value"] for name in BT_STAGES], [90, 60, 55, 40])
+        self.assertIn("90/100", q.bt_labels["Text Detection"].get())
+        self.assertIn("12:34", q.bt_labels["Translation"].get())
+        q.events.put(("status", 0, "cancelled", "stop"))
+        q.poll()
+        self.assertIn(tr("已停止"), q.bt_labels["Translation"].get())
+        self.assertNotIn("12:34", q.bt_labels["Translation"].get())
+        q.events.put(("status", 1, "running", ""))
+        q.events.put(("bt_reset", 20, {name: name != "OCR" for name in BT_STAGES}))
+        q.poll()
+        self.assertEqual(q.bt_labels["OCR"].get(), tr("未啟用"))
+        self.assertIn("0/20", q.bt_labels["Translation"].get())
+        self.assertEqual(q.bt_bars["Text Detection"]["value"], 0)
+
+    def test_export_progress_does_not_overwrite_translation_bars(self):
+        q = self.app.translation_queue
+        q.events.put(("bt_progress", "Translation", 100, 960, 960, "00:00"))
+        q.events.put(("stage", "匯出", 50))
+        q.poll()
+        self.assertEqual(q.stage["value"], 50)
+        self.assertEqual(q.stage.winfo_manager(), "pack")
+        self.assertEqual(q.bt_bars["Translation"]["value"], 100)
+        self.assertIn("960/960", q.bt_labels["Translation"].get())

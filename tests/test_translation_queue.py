@@ -63,7 +63,7 @@ class TranslationQueueTests(unittest.TestCase):
         run_translation([sys.executable, "-u", "-c",
                          "print('Translation: 100%'); print('finished translating all dirs'); input()"],
                         Path.cwd(), None, threading.Event(), lambda *p: progress.append(p))
-        self.assertEqual(progress, [("Translation", 100)])
+        self.assertEqual(progress, [("Translation", 100, None, None, None)])
         with self.assertRaises(RuntimeError):
             run_translation([sys.executable, "-c", "input()"], Path.cwd(), None,
                             threading.Event(), lambda *p: None)

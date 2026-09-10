@@ -15,6 +15,28 @@ from comic_core import (clear_work_folders, export_chapter, image_files,
 from ui_language import tr
 
 
+BT_STAGES = {"Text Detection": "enable_detect", "OCR": "enable_ocr",
+             "Inpaint": "enable_inpaint", "Translation": "enable_translate"}
+
+
+def parse_bt_progress(line):
+    """Read tqdm's completed-page counters and ETA without inferring page counts."""
+    match = re.match(r"(Text Detection|OCR|Inpaint|Translation):\s*(\d{1,3})%", line.lstrip())
+    if not match or int(match[2]) > 100:
+        return None
+    current = total = eta = None
+    detail = re.match(r"\|[^|]*\|\s*(\d+)/(\d+)\s*\[([^\]]*)\]", line.lstrip()[match.end():])
+    percent = int(match[2])
+    if detail:
+        current, total = int(detail[1]), int(detail[2])
+        if total <= 0 or current > total:
+            return None
+        percent = current * 100 // total
+        remaining = re.search(r"<((?:\d+:)?\d{2}:\d{2})(?:,|$)", detail[3])
+        eta = "00:00" if current == total else remaining[1] if remaining else None
+    return match[1], percent, current, total, eta
+
+
 @dataclass
 class Job:
     path: Path
@@ -94,9 +116,9 @@ def run_translation(command, root, env, stop, progress, log_context=""):
                   or re.search(r"module_manager:.* - Image translation pipeline stopped", diagnostic)):
                 fatal_count += 1
                 failures.append(line)
-            match = re.search(r"(Text Detection|OCR|Translation|Inpaint).*?(\d+)%", line)
-            if match:
-                progress(match[1], int(match[2]))
+            stage_progress = parse_bt_progress(line)
+            if stage_progress:
+                progress(*stage_progress)
         code = process.wait()
         logger.info("[%s] translator_exit=%s completed=%s fatal_errors=%s retry_diagnostics=%s stopped=%s",
                     log_context, code, completed, fatal_count, retries, stop.is_set())
@@ -160,11 +182,15 @@ def run_jobs(jobs, settings, output, skip, stop, emit):
                 if not path.is_dir():
                     raise ValueError(tr("漫畫路徑不存在"))
                 if action == "translate":
-                    if not image_files(path):
+                    sources = image_files(path)
+                    if not sources:
                         raise ValueError(tr("指定路徑沒有圖片，請選擇章節或整合輸出"))
+                    module = load_json(settings["bt_config"], {}).get("module", {})
+                    emit(("bt_reset", len(sources), {name: module.get(flag, True) is not False
+                                                   for name, flag in BT_STAGES.items()}))
                     run_translation(*translator_command(settings["bt_path"], settings["bt_config"],
                                                         settings.get("bt_python", ""), path), stop,
-                                    lambda name, value: emit(("stage", name, value)), log_context=job_id)
+                                    lambda *values: emit(("bt_progress", *values)), log_context=job_id)
                     status, translated = translation_status(path)
                     if status != tr("可匯出"):
                         raise RuntimeError(tr("翻譯結果不完整，未執行後續動作"))

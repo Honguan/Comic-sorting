@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest import mock
 
 from comic_core import output_path_for
-from queue_worker import Job, run_jobs, run_translation
+from queue_worker import BT_STAGES, Job, parse_bt_progress, run_jobs, run_translation
 
 
 class QueueWorkerTests(unittest.TestCase):
@@ -27,6 +27,54 @@ class QueueWorkerTests(unittest.TestCase):
             (chapter / "result" / f"{index}.png").write_bytes(b"translated")
         return chapter
 
+    def test_native_progress_counters_and_independent_eta(self):
+        examples = (
+            ("Text Detection:   0%|          | 0/960 [00:00<?, ?it/s]", ("Text Detection", 0, 0, 960, None)),
+            ("OCR:   0%|          | 1/960 [00:15<4:00:04, 15.02s/it]", ("OCR", 0, 1, 960, "4:00:04")),
+            ("Translation:  55%|#####     | 417/755 [52:41<33:36, 5.97s/it]", ("Translation", 55, 417, 755, "33:36")),
+            ("Inpaint: 100%|##########| 2/2 [00:47<00:00, 23.79s/it]", ("Inpaint", 100, 2, 2, "00:00")),
+            ("Translation: 100%|##########| 999/1000 [12:00<00:01, 1it/s]", ("Translation", 99, 999, 1000, "00:01")),
+            ("OCR: 50%", ("OCR", 50, None, None, None)),
+        )
+        for line, expected in examples:
+            with self.subTest(line=line):
+                self.assertEqual(parse_bt_progress(line), expected)
+        for line in ("[DEBUG] reply='Translation: 80%'", "Translation: 150%", "OCR: 0%| | 2/1 [00:00<00:00]"):
+            self.assertIsNone(parse_bt_progress(line))
+
+    def test_progress_survives_carriage_returns_ansi_and_attached_logs(self):
+        output = ("\x1b[32mText Detection: 50%|#####| 1/2 [00:01<00:01, 1it/s]\x1b[0m\r"
+                  "OCR: 0%| | 0/2 [00:00<?, ?it/s]\x1b[A\r"
+                  "Translation: 50%|#####| 1/2 [00:08<00:08, 8s/it][DEBUG  ] trans_llm:_translate:100 - example\n"
+                  "Inpaint: 100%|##########| 2/2 [00:03<00:00, 1it/s]\n"
+                  "finished translating all dirs\n")
+        progress = []
+        run_translation([sys.executable, "-u", "-c", f"import sys; sys.stdout.write({output!r}); sys.stdout.flush(); input()"],
+                        self.root, None, threading.Event(), lambda *values: progress.append(values))
+        self.assertEqual([p[0] for p in progress], ["Text Detection", "OCR", "Translation", "Inpaint"])
+        self.assertEqual(progress[2][2:], (1, 2, "00:08"))
+
+    def test_each_translation_job_resets_real_total_and_enabled_stages(self):
+        import json
+        first = self.chapter()
+        second = self.chapter("Chapter 2")
+        config = self.root / "config.json"
+        config.write_text(json.dumps({"module": {"enable_ocr": False}}), encoding="utf-8")
+        events = []
+        def translate(command, root, env, stop, progress, **kwargs):
+            progress("Translation", 33, 1, 3, "00:20")
+        settings = dict(bt_path="installed", bt_config=str(config))
+        with mock.patch("queue_worker.translator_command", return_value=([], self.root, None)), \
+                mock.patch("queue_worker.run_translation", side_effect=translate):
+            run_jobs([Job(first, "translate"), Job(second, "translate")], settings, "", True,
+                     threading.Event(), events.append)
+        resets = [event for event in events if event[0] == "bt_reset"]
+        self.assertEqual(len(resets), 2)
+        self.assertEqual(resets[0][1], 3)
+        self.assertFalse(resets[0][2]["OCR"])
+        self.assertEqual(set(resets[0][2]), set(BT_STAGES))
+        self.assertEqual(sum(e == ("bt_progress", "Translation", 33, 1, 3, "00:20") for e in events), 2)
+
     def test_subprocess_cancel_terminates_child_and_joins_watcher(self):
         stop = threading.Event()
         processes, watchers = [], []
@@ -42,7 +90,7 @@ class QueueWorkerTests(unittest.TestCase):
             watchers.append(watcher)
             return watcher
 
-        def progress(name, percent):
+        def progress(name, percent, current, total, eta):
             self.assertEqual((name, percent), ("Translation", 1))
             stop.set()
 

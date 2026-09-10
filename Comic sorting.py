@@ -109,7 +109,7 @@ class FileAggregatorApp:
         list_frame.pack(fill="both", expand=True, pady=8)
         self.folder_tree = ttk.Treeview(
             list_frame, columns=("status", "size", "updated"), show="tree headings",
-            selectmode="extended", height=8)
+            selectmode="extended", height=6)
         self.folder_tree.heading("#0", text=tr("序號｜系列 / 章節"))
         self.folder_tree.heading("status", text=tr("狀態"))
         self.folder_tree.heading("size", text=tr("資料夾大小"))

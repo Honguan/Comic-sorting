@@ -9,6 +9,9 @@ def tr(text):
     return TRANSLATIONS.get(text, {}).get(_language, text)
 
 TRANSLATIONS = {
+    '未啟用': {'en': 'Disabled', 'ja': '無効'},
+    '估算中': {'en': 'Estimating', 'ja': '計算中'},
+    '{0}%｜{1}/{2} 頁｜剩餘 {3}': {'en': '{0}% | {1}/{2} pages | ETA {3}', 'ja': '{0}%｜{1}/{2} ページ｜残り {3}'},
     '編輯設定檔': {'en': 'Edit configuration', 'ja': '設定ファイルを編集'},
     '編輯 BallonsTranslator 設定檔': {'en': 'Edit BallonsTranslator configuration', 'ja': 'BallonsTranslator 設定ファイルを編集'},
     '請先儲存並關閉設定編輯器': {'en': 'Save and close the configuration editor first', 'ja': '先に設定を保存してエディターを閉じてください'},
