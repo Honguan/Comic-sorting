@@ -98,8 +98,9 @@ def translator_command(installation, config, python_path="", chapter=None, page_
         command += ["--headless", "--exec_dirs", str(Path(chapter).resolve())]
         if page_manifest is not None:
             script_dir = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
-            command[3] = f"import sys; sys.path.insert(0, {str(script_dir)!r}); from bt_run_bridge import main; main()"
-            command.insert(4, str(page_manifest))
+            # Keep the bundled Python extensions off the external runtime's import path.
+            command[3] = "import runpy, sys; runpy.run_path(sys.argv.pop(1), run_name='__main__')"
+            command[4:4] = [str(script_dir / "bt_run_bridge.py"), str(page_manifest)]
     env = os.environ.copy()
     env["PATH"] = os.pathsep.join((str(python.parent), str(python.parent / "Scripts"), env.get("PATH", "")))
     env["PYTHONIOENCODING"] = "utf-8"

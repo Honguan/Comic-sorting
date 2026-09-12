@@ -12,6 +12,21 @@ from queue_worker import Job, run_jobs
 
 
 class PageRangeTests(unittest.TestCase):
+    def test_selected_pages_do_not_import_bundled_python_modules(self):
+        bundle = self.root / 'bundle'
+        bundle.mkdir()
+        (bundle / 'bt_run_bridge.py').write_bytes(
+            (Path(__file__).resolve().parents[1] / 'bt_run_bridge.py').read_bytes())
+        (bundle / 'socket.py').write_text("raise ImportError('bundled Python version mismatch')\n")
+        launch = Path(self.settings['bt_path']) / 'ballontranslator' / 'launch.py'
+        launch.write_text('import socket\n' + launch.read_text(encoding='utf-8'), encoding='utf-8')
+        job = Job(self.chapter, 'translate', start_page=1, end_page=2)
+        with mock.patch.object(sys, '_MEIPASS', str(bundle), create=True):
+            events = self.run_job(job)
+        done = [event for event in events if event[0] == 'status'][-1]
+        self.assertEqual(done[2], 'done', done[3])
+        self.assertEqual({p.name for p in (self.chapter / 'result').iterdir()}, {'1.png', '2.png'})
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
