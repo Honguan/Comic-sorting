@@ -1,6 +1,7 @@
 """BallonsTranslator subprocesses and UI-independent queue execution."""
 from collections import deque
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 import os
 from pathlib import Path
 import re
@@ -19,6 +20,22 @@ from ui_language import tr
 
 BT_STAGES = {"Text Detection": "enable_detect", "OCR": "enable_ocr",
              "Inpaint": "enable_inpaint", "Translation": "enable_translate"}
+
+
+def parse_bt_usage(line):
+    match = re.search(r"\[INFO\s*\]\s+module_manager:_finish_llm_usage_run:\d+ - LLM (?:(OCR|translation) )?run usage: (.*)", line)
+    if not match:
+        return None
+    fields = dict(part.split('=', 1) for part in match[2].split(', ') if '=' in part)
+    try:
+        counts = {name: int(fields[name]) for name in
+                  ('requests', 'total_tokens', 'missing_usage_requests', 'unpriced_requests')}
+        cost = Decimal(fields['estimated_cost_usd']) if fields['estimated_cost_usd'] != 'unavailable' else None
+        if any(value < 0 for value in counts.values()) or (cost is not None and (not cost.is_finite() or cost < 0)):
+            return None
+    except (KeyError, ValueError, InvalidOperation):
+        return None
+    return dict(scope=match[1] or 'total', cost=cost, **counts)
 
 
 def parse_bt_progress(line):
@@ -89,7 +106,7 @@ def translator_command(installation, config, python_path="", chapter=None, page_
     return command, root, env
 
 
-def run_translation(command, root, env, stop, progress, log_context=""):
+def run_translation(command, root, env, stop, progress, log_context="", usage=None):
     completed = False
     failures = deque(maxlen=5)
     fatal_count = 0
@@ -130,6 +147,9 @@ def run_translation(command, root, env, stop, progress, log_context=""):
             if line:
                 logger.info("[%s] BT %s", log_context, line)
             recent.append(line)
+            consumption = parse_bt_usage(line)
+            if consumption is not None and usage is not None:
+                usage(consumption)
             completed |= "finished translating all dirs" in line
             record = re.search(r"\[(?:ERROR|WARNING|INFO|DEBUG)\s*\]\s+\w+:\w+:\d+ - ", line)
             diagnostic = line[record.start():] if record else line
@@ -235,7 +255,8 @@ def run_jobs(jobs, settings, output, skip, stop, emit):
                         command_options = {"page_manifest": page_manifest} if page_manifest else {}
                         diagnostic = run_translation(*translator_command(settings["bt_path"], settings["bt_config"],
                                                             settings.get("bt_python", ""), path, **command_options), stop,
-                                        lambda *values: emit(("bt_progress", *values)), log_context=job_id)
+                                        lambda *values: emit(("bt_progress", *values)), log_context=job_id,
+                                        usage=lambda values: emit(("usage", index, values)))
                         if isinstance(diagnostic, str):
                             completion_note = diagnostic
                     status, translated = translation_status(path)

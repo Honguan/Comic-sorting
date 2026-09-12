@@ -126,6 +126,16 @@ class TranslationQueue:
             self.bt_labels[name] = tk.StringVar()
             ttk.Label(progress_grid, textvariable=self.bt_labels[name]).grid(row=row, column=2, sticky="w")
         self.reset_bt_progress()
+        self.usage_records = {}
+        self.usage_labels = {}
+        self.usage_frame = ttk.LabelFrame(footer, text=tr("本次佇列 LLM 消耗（非實際帳單）"), padding=(6, 2))
+        self.usage_frame.pack(fill="x", pady=(4, 0))
+        for row, (scope, title) in enumerate((("OCR", "OCR"), ("translation", "翻譯"), ("total", "合計"))):
+            ttk.Label(self.usage_frame, text=tr(title), width=8).grid(row=row, column=0, sticky="w")
+            self.usage_labels[scope] = tk.StringVar()
+            ttk.Label(self.usage_frame, textvariable=self.usage_labels[scope]).grid(row=row, column=1, sticky="w")
+        ttk.Label(self.usage_frame, text=tr("金額依翻譯器估算；僅累計已回報用量。")).grid(row=3, column=0, columnspan=2, sticky="w")
+        self.show_usage()
         records = settings.get("bt_jobs", [])
         for record in records if isinstance(records, list) else []:
             if (not isinstance(record, dict) or record.get("action") not in ACTIONS
@@ -141,6 +151,20 @@ class TranslationQueue:
                                  record.get("start_page", 1), record.get("end_page"), record.get("range_export") is True))
         self.render()
         self.update_controls()
+
+    def show_usage(self):
+        for scope, label in self.usage_labels.items():
+            records = [value for (_, kind), value in self.usage_records.items() if kind == scope]
+            if not records:
+                label.set(tr("尚未回報"))
+                continue
+            tokens = sum(value['total_tokens'] for value in records)
+            cost = (tr("預估金額未完整提供") if any(value['cost'] is None or value['unpriced_requests'] for value in records)
+                    else f"US${sum(value['cost'] for value in records):,.6f}")
+            text = tr("{0} tokens｜預估 {1}｜{2} 次請求").format(f"{tokens:,}", cost, sum(value['requests'] for value in records))
+            if any(value['missing_usage_requests'] for value in records):
+                text += tr("（Token 回報不完整）")
+            label.set(text)
 
     def button(self, parent, text, command):
         button = ttk.Button(parent, text=text, command=command)
@@ -459,6 +483,8 @@ class TranslationQueue:
         if not self.app.save_settings():
             return
         self.running = True
+        self.usage_records.clear()
+        self.show_usage()
         self.stop.clear()
         self.app.set_manga_busy(True)
         self.app.work_tabs.select(self.app.queue_tab)
@@ -492,6 +518,9 @@ class TranslationQueue:
                 elif job.status in ("failed", "cancelled"):
                     for name in BT_STAGES:
                         self.show_bt_progress(name, STATUSES[job.status])
+            elif event[0] == "usage":
+                self.usage_records[event[1], event[2]['scope']] = event[2]
+                self.show_usage()
             elif event[0] == "bt_reset":
                 self.reset_bt_progress(event[1], event[2])
             elif event[0] == "bt_progress":

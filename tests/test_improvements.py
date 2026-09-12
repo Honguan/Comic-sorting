@@ -349,6 +349,8 @@ class UIImprovementsTests(unittest.TestCase):
         self.assertEqual(len(comic_core.image_files(self.folder / "Series/Chapter 1-46")), 2)
 
     def test_minimum_window_keeps_actions_visible_in_all_languages(self):
+        from queue_worker import parse_bt_usage
+        from test_bt_usage import usage_line
         self.root.withdraw()
         try:
             for language in LANGUAGES:
@@ -356,6 +358,10 @@ class UIImprovementsTests(unittest.TestCase):
                     window = tk.Toplevel(self.root)
                     window.geometry("820x640")
                     app = comic.FileAggregatorApp(window)
+                    for scope in ('OCR ', 'translation ', ''):
+                        record = parse_bt_usage(usage_line(scope))
+                        app.translation_queue.usage_records[0, record['scope']] = record
+                    app.translation_queue.show_usage()
                     self.pump(.1)
                     for name in app.translation_queue.bt_bars:
                         app.translation_queue.bt_progress[name] = (60, 582, 960, "4:00:04", True)
@@ -366,7 +372,8 @@ class UIImprovementsTests(unittest.TestCase):
                     for tab, controls in (
                             (app.queue_tab, (app.translation_queue.start_button, app.translation_queue.stop_button, app.translation_queue.range_button,
                                              app.translation_queue.total, app.translation_queue.stage,
-                                             *app.translation_queue.bt_bars.values(), *details)),
+                                             *app.translation_queue.bt_bars.values(), *details,
+                                             *app.translation_queue.usage_frame.winfo_children())),
                             (app.export_tab, (app.export_selected_button, app.export_all_button, app.cleanup_button)),
                             (app.settings_tab, (app.translation_queue.controls[0],))):
                         app.work_tabs.select(tab)

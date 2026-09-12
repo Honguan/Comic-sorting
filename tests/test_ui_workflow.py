@@ -337,9 +337,34 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual((q.jobs[0].status, q.jobs[0].error), ("pending", ""))
 
     def test_layout_fits_standard_desktop(self):
+        self.root.geometry('1024x780')
+        self.root.deiconify()
+        self.app.work_tabs.select(self.app.queue_tab)
+        self.root.update()
         self.root.update_idletasks()
-        self.assertLessEqual(self.root.winfo_reqheight(), 780)
+        footer = self.app.translation_queue.usage_frame
+        self.assertTrue(footer.winfo_ismapped())
+        self.assertLessEqual(footer.winfo_rooty() - self.root.winfo_rooty() + footer.winfo_reqheight(), 780)
         self.assertEqual(len(self.app.work_tabs.tabs()), 3)
+
+    def test_usage_totals_do_not_double_count_scopes_or_repeated_summaries(self):
+        from queue_worker import parse_bt_usage
+        from test_bt_usage import usage_line
+        q = self.app.translation_queue
+        records = [parse_bt_usage(usage_line(scope, tokens, cost)) for scope, tokens, cost in
+                   [('OCR ', 503029, '0.971684'), ('translation ', 771156, '1.511601'), ('', 1274185, '2.483284')]]
+        for record in records + [records[-1]]:
+            q.events.put(('usage', 0, record))
+        q.poll()
+        self.assertIn('1,274,185', q.usage_labels['total'].get())
+        self.assertIn('US$2.483284', q.usage_labels['total'].get())
+        q.events.put(('usage', 1, records[-1]))
+        q.poll()
+        self.assertIn('2,548,370', q.usage_labels['total'].get())
+        self.assertIn('US$4.966568', q.usage_labels['total'].get())
+        q.events.put(('usage', 1, parse_bt_usage(usage_line(cost='unavailable'))))
+        q.poll()
+        self.assertNotIn('US$', q.usage_labels['total'].get())
 
     def test_four_stage_progress_remains_independent_and_resets_per_job(self):
         from queue_worker import BT_STAGES

@@ -9,6 +9,13 @@ def tr(text):
     return TRANSLATIONS.get(text, {}).get(_language, text)
 
 TRANSLATIONS = {
+    '本次佇列 LLM 消耗（非實際帳單）': {'en': 'LLM usage for this queue run (not a bill)', 'ja': '今回のキューの LLM 使用量（請求額ではありません）'},
+    '合計': {'en': 'Total', 'ja': '合計'},
+    '金額依翻譯器估算；僅累計已回報用量。': {'en': 'Cost estimated by the translator; reported usage only.', 'ja': '金額は翻訳ツールの推定です。報告済みの使用量のみ集計します。'},
+    '尚未回報': {'en': 'Not reported yet', 'ja': '未報告'},
+    '預估金額未完整提供': {'en': 'cost estimate incomplete', 'ja': '推定金額が不完全'},
+    '{0} tokens｜預估 {1}｜{2} 次請求': {'en': '{0} tokens | Estimated {1} | {2} requests', 'ja': '{0} tokens｜推定 {1}｜{2} リクエスト'},
+    '（Token 回報不完整）': {'en': ' (incomplete token reports)', 'ja': '（Token 報告が不完全）'},
     '請至少啟用一個 BallonsTranslator 處理階段': {'en': 'Enable at least one BallonsTranslator processing stage', 'ja': 'BallonsTranslator の処理工程を少なくとも一つ有効にしてください'},
     '套用': {'en': 'Apply', 'ja': '適用'},
     '取消': {'en': 'Cancel', 'ja': 'キャンセル'},
