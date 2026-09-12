@@ -2,13 +2,14 @@ from copy import deepcopy
 import json
 from pathlib import Path
 import tempfile
+import sys
 import time
 import tkinter as tk
 import unittest
 from unittest import mock
 
 from bt_config_bridge import describe
-from bt_settings import ConfigDocument, ConfigEditor, merge_defaults, parse_json
+from bt_settings import ConfigDocument, ConfigEditor, bridge, merge_defaults, parse_json
 
 
 def metadata():
@@ -41,6 +42,16 @@ class ConfigFixture:
 
 
 class ConfigDocumentTests(ConfigFixture, unittest.TestCase):
+
+    def test_bridge_does_not_import_modules_from_exe_bundle(self):
+        with tempfile.TemporaryDirectory() as bundle:
+            folder = Path(bundle)
+            (folder / 'socket.py').write_text("raise ImportError('bundled Python version mismatch')\n")
+            (folder / 'bt_config_bridge.py').write_text(
+                "import socket, json, sys\njson.load(sys.stdin)\nprint(json.dumps({'loaded': True}))\n")
+            with mock.patch('bt_settings.translator_command', return_value=([sys.executable], self.path.parent, None)), \
+                    mock.patch.object(sys, '_MEIPASS', bundle, create=True):
+                self.assertEqual(bridge({'bt_path': '', 'bt_config': ''}, 'metadata'), {'loaded': True})
 
     def test_missing_fields_and_unknown_values_survive_round_trip(self):
         del self.raw["module"]["llm_profiles"][0]["temperature"]

@@ -77,7 +77,9 @@ def parse_json(text):
 def bridge(settings, operation, data=None):
     command, root, env = translator_command(settings["bt_path"], settings["bt_config"], settings.get("bt_python", ""))
     script = Path(getattr(sys, "_MEIPASS", Path(__file__).parent)) / "bt_config_bridge.py"
-    process = subprocess.run([command[0], "-u", str(script)], cwd=root, env=env,
+    # Do not put the EXE bundle's incompatible Python extensions on the child import path.
+    process = subprocess.run([command[0], "-u", "-c",
+                              "import runpy, sys; runpy.run_path(sys.argv[1], run_name='__main__')", str(script)], cwd=root, env=env,
                              input=json.dumps({"operation": operation, "data": data}, ensure_ascii=False, allow_nan=False),
                              capture_output=True, text=True, encoding="utf-8", timeout=45,
                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
