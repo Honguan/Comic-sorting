@@ -51,7 +51,7 @@ CBZ 根目錄只包含 `result` 內的 `.png`、`.jpg`、`.jpeg`、`.webp` 圖�
 
 ## BallonsTranslator 佇列
 
-- 設定安裝路徑、既有 config JSON；Python 留白時使用安裝目錄的 `ballontrans_pylibs_win/python.exe`，其他環境可指定其 Python。
+- 設定安裝路徑、既有 config JSON；Python 留白時依序尋找安裝目錄的 `ballontrans_pylibs_win/python.exe`、`.venv/Scripts/python.exe`，其他環境可指定其 Python。手動指定的 Python 優先使用。
 - 新設定的安裝路徑留空，請先瀏覽選擇；既有設定會保留，選擇安裝目錄時會帶入其 `config/config.json`。
 - 「開啟原生設定介面」直接啟動 BallonsTranslator，設定模型、OCR、翻譯器及排版後儲存並關閉，再開始佇列。環境、模型及工具均使用該安裝。
 - 「編輯設定檔」可直接在 Comic sorting 內編輯所選 config JSON，詳見下方說明。

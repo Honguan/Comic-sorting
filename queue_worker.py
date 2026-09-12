@@ -64,7 +64,10 @@ class Job:
 
 def translator_command(installation, config, python_path="", chapter=None, page_manifest=None):
     root = Path(installation).resolve()
-    python = (Path(python_path) if python_path else root / "ballontrans_pylibs_win" / "python.exe").resolve()
+    runtimes = (root / "ballontrans_pylibs_win" / "python.exe",
+                root / ".venv" / "Scripts" / "python.exe")
+    python = (Path(python_path) if python_path else
+              next((path for path in runtimes if path.is_file()), runtimes[0])).resolve()
     if not (root / "ballontranslator" / "__main__.py").is_file() or not python.is_file():
         raise ValueError(tr("請設定有效的 BallonsTranslator 安裝目錄及其 Python 執行檔"))
     config = Path(config).resolve()

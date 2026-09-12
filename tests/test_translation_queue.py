@@ -11,6 +11,26 @@ from test_comic_sorting import comic
 
 
 class TranslationQueueTests(unittest.TestCase):
+    def test_runtime_selection_after_installation_moves(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            (root / "ballontranslator").mkdir()
+            (root / "ballontranslator/__main__.py").touch()
+            config = root / "config.json"
+            config.write_text("{}")
+            venv = root / ".venv/Scripts/python.exe"
+            venv.parent.mkdir(parents=True)
+            venv.touch()
+            for chapter in (None, root / "漫畫"):
+                self.assertEqual(translator_command(root, config, chapter=chapter)[0][0], str(venv))
+            bundled = root / "ballontrans_pylibs_win/python.exe"
+            bundled.parent.mkdir()
+            bundled.touch()
+            self.assertEqual(translator_command(root, config)[0][0], str(bundled))
+            self.assertEqual(translator_command(root, config, venv)[0][0], str(venv))
+            with self.assertRaises(ValueError):
+                translator_command(root, config, root / "missing.exe")
+
     def test_installed_runtime_and_unicode_paths(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp).resolve()
