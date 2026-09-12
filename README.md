@@ -115,7 +115,12 @@ Komga 匯出會在狀態檔保存成功後，自動清理實際匯出成功章�
 
 增量狀態依圖片名稱、大小及修改時間判斷來源是否變更，並檢查 CBZ 大小與修改時間。CBZ 被改動時重新建立；舊版狀態首次沿用 CBZ 前會驗證內容。不同來源的同名系列／章節若會覆蓋已記錄的輸出，會明確報錯，請改用不同的 Komga 路徑或系列名稱。
 
+設定、翻譯器 config 或匯出狀態 JSON 若損壞、根層不是物件或無法讀取，程式會指出檔案路徑並停止相關操作，保留原檔。請檢查權限、修正 JSON，或還原已知完好的備份後重試；不會把壞檔當成空設定覆寫。首次使用尚無設定／狀態檔仍採預設值，並支援 UTF-8 BOM。
+
+JSON 與 CBZ 使用同目錄的唯一暫存檔，完成後原子替換。這能避免暫存檔互相干擾，但沒有提供多個 EXE 同時修改同一設定、漫畫或 Komga 狀態的交易／合併功能，請一次使用一個操作實例。
+
 改善項目、架構取捨與驗證結果見 [改善計畫](IMPROVEMENT_PLAN.md)。
+本輪完整審查、優先級、修正證據與尚未處理的技術債見 [2026-09-12 審查報告](AUDIT_2026-09-12.md)。
 
 ## 開發與建置
 
@@ -125,11 +130,13 @@ Komga 匯出會在狀態檔保存成功後，自動清理實際匯出成功章�
 - `bt_settings.py`：完整設定欄位編輯、型別檢查、備份及存檔衝突檢查；`bt_config_bridge.py` 使用所選翻譯器環境讀取定義、檢查設定與保存金鑰。
 - `Comic sorting.py`：漫畫列表、整合與主視窗協調；`ui_language.py` 管理三語文字。
 
-需求：Python 3.10、PyInstaller 6.14.1。
+需求：Python 3.10、PyInstaller 6.22.2。執行原始碼僅需 Python 內建模組；PyInstaller 只用於建置。
 
 ```powershell
+py -3.10 -m pip install pyinstaller==6.22.2
 py -3.10 -B -m unittest discover -s tests -v
 py -3.10 -m PyInstaller --clean --noconfirm "Comic sorting.spec"
 ```
 
 建置輸出位於 `dist\Comic sorting.exe`。推送 `v*` 標籤時，GitHub Actions 會執行測試、建置並建立 Release。
+推送 `main` 或建立 Pull Request 時，唯讀 Verify workflow 也會執行測試及建置，不會發佈 Release。

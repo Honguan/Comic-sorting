@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import stat
+import tempfile
 import zipfile
 from decimal import Decimal
 from pathlib import Path
@@ -239,9 +240,10 @@ def validate_cbz(archive, expected_images):
 def create_cbz(images, output, progress=None):
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
-    temporary = output.with_suffix(output.suffix + ".tmp")
+    descriptor, name = tempfile.mkstemp(dir=output.parent, prefix=f".{output.name}.", suffix=".tmp")
+    os.close(descriptor)
+    temporary = Path(name)
     try:
-        temporary.unlink(missing_ok=True)
         with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_STORED) as cbz:
             for index, image in enumerate(images, 1):
                 cbz.write(image, image.name)
@@ -254,21 +256,28 @@ def create_cbz(images, output, progress=None):
         raise
 
 
-def load_json(path, default):
+def load_json(path, default, *, strict=False):
     try:
-        with open(path, "r", encoding="utf-8") as file:
+        with open(path, "r", encoding="utf-8-sig") as file:
             value = json.load(file)
+            if strict and not isinstance(value, type(default)):
+                raise ValueError("Unexpected JSON root type")
             return value if isinstance(value, type(default)) else default
+    except FileNotFoundError:
+        return default
     except (OSError, ValueError):
+        if strict:
+            raise ValueError(tr("無法讀取 JSON：{0}。請檢查權限與內容，或還原備份後再試；原檔未變更。").format(path)) from None
         return default
 
 
 def save_json(path, data):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
+    descriptor, name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    temporary = Path(name)
     try:
-        with open(temporary, "w", encoding="utf-8") as file:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as file:
             json.dump(data, file, ensure_ascii=False, indent=2)
         os.replace(temporary, path)
     except Exception:

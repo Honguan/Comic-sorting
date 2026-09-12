@@ -179,7 +179,7 @@ def run_translation(command, root, env, stop, progress, log_context="", usage=No
                     log_context, code, completed, fatal_count, retries, stop.is_set())
         if stop.is_set():
             raise RuntimeError(tr("已停止；未執行此項目的後續動作"))
-        if code or not completed or failures:
+        if code or not completed or failures or any(value < 100 for value in stages.values()):
             finished_with_anomalies = completed and stages and all(value == 100 for value in stages.values())
             detail = (tr("流程已完成但發現異常（exit={0}）") if finished_with_anomalies else
                       tr("BallonsTranslator 未成功完成（exit={0}）；請查看其 logs")).format(code)
@@ -249,7 +249,7 @@ def run_jobs(jobs, settings, output, skip, stop, emit):
                     if not sources:
                         raise ValueError(tr("指定路徑沒有圖片，請選擇章節或整合輸出"))
                     selected = job.select_pages(sources)
-                    module = load_json(settings["bt_config"], {}).get("module", {})
+                    module = load_json(settings["bt_config"], {}, strict=True).get("module", {})
                     enabled = {name: module.get(flag, True) is not False for name, flag in BT_STAGES.items()}
                     if not any(enabled.values()):
                         raise ValueError(tr("請至少啟用一個 BallonsTranslator 處理階段"))
@@ -287,7 +287,7 @@ def run_jobs(jobs, settings, output, skip, stop, emit):
                     if target.is_relative_to(path) or path.is_relative_to(target):
                         raise ValueError(tr("匯出與漫畫路徑不可互相包含"))
                     state_file = target / ".comic-sorting-state.json"
-                    state = load_json(state_file, {})
+                    state = load_json(state_file, {}, strict=True)
                     emit(("stage", "匯出", 0))
                     export_action, archive = export_chapter(path.parent, path, target, state, skip,
                                                             progress=export_progress)

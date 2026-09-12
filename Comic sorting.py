@@ -37,7 +37,7 @@ class FileAggregatorApp:
     def __init__(self, root):
         self.root = root
         self.root.report_callback_exception = self.report_callback_exception
-        settings = load_json(settings_path(), {})
+        settings = load_json(settings_path(), {}, strict=True)
         language = settings.get("ui_language", "zh-TW")
         set_language(language)
         self.ui_language = tk.StringVar(value=LANGUAGES.get(language, LANGUAGES["zh-TW"]))
@@ -699,8 +699,14 @@ class FileAggregatorApp:
         logger.info("export_start chapters=%s output=%s skip_unchanged=%s", len(chapters), komga_path, skip_unchanged)
         root = Path(komga_path)
         state_file = root / ".comic-sorting-state.json"
-        state = load_json(state_file, {})
         counts = {"created": 0, "updated": 0, "skipped": 0, "failed": 0}
+        try:
+            state = load_json(state_file, {}, strict=True)
+        except ValueError as error:
+            logger.exception("export_state_read_failed path=%s", state_file)
+            counts["failed"] = len(chapters)
+            self.events.put(("done", counts, [str(error)], str(root), None))
+            return
         errors = []
         output_folders = set()
         exported_chapters = []
@@ -819,7 +825,11 @@ class FileAggregatorApp:
                 else:
                     messagebox.showinfo(tr("Komga 匯出完成"), summary)
                 if self.open_after_export.get() and Path(output_folder).is_dir():
-                    os.startfile(output_folder)
+                    try:
+                        os.startfile(output_folder)
+                    except OSError as error:
+                        logger.exception("export_result_open_failed path=%s", output_folder)
+                        messagebox.showwarning(tr("無法開啟結果位置"), f"{output_folder}\n\n{error}")
                 done = True
                 rescan = bool(cleanup and cleanup[1])
         if done:

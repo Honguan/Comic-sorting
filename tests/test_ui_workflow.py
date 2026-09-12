@@ -296,6 +296,19 @@ class WorkflowTests(unittest.TestCase):
                 q.start()  # Already completed jobs must not reopen their results.
                 self.assertEqual(startfile.call_count + explorer.call_count, 1)
 
+    def test_manual_export_open_failure_releases_busy_state(self):
+        self.app.set_manga_busy(True)
+        self.app.open_after_export.set(True)
+        counts = dict(created=1, updated=0, skipped=0, failed=0)
+        self.app.events.put(('done', counts, [], str(self.folder), None))
+        with mock.patch.object(comic.os, 'startfile', side_effect=OSError('Explorer unavailable')), \
+                mock.patch.object(comic.messagebox, 'showinfo'), \
+                mock.patch.object(comic.messagebox, 'showwarning') as warning:
+            self.app.poll_events()
+        self.assertFalse(self.app.manga_busy)
+        warning.assert_called_once()
+        self.assertIn(str(self.folder), warning.call_args.args[1])
+
     def test_result_open_failure_does_not_interrupt_queue_completion(self):
         q = self.app.translation_queue
         chapter = self.chapter("Chapter 1")

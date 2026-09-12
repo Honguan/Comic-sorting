@@ -85,6 +85,56 @@ class ComicSortingTests(unittest.TestCase):
             path.write_text("[]", encoding="utf-8")
             self.assertEqual(comic.load_json(path, {}), {})
 
+    def test_strict_json_read_preserves_bad_settings_and_accepts_new_installation(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'settings.json'
+            self.assertEqual(comic.load_json(path, {}, strict=True), {})
+            for data in (b'{broken', b'[]', b'\xff'):
+                path.write_bytes(data)
+                with mock.patch.object(comic, 'settings_path', return_value=path):
+                    with self.assertRaises(ValueError):
+                        comic.FileAggregatorApp(mock.Mock())
+                self.assertEqual(path.read_bytes(), data)
+            path.write_text('{"manga_path": "test"}', encoding='utf-8-sig')
+            self.assertEqual(comic.load_json(path, {}, strict=True), {'manga_path': 'test'})
+            with mock.patch('builtins.open', side_effect=PermissionError('denied')):
+                with self.assertRaises(ValueError):
+                    comic.load_json(path, {}, strict=True)
+
+    def test_bad_export_state_blocks_both_export_routes_without_deleting_data(self):
+        import threading
+        from queue_worker import Job, run_jobs
+        with tempfile.TemporaryDirectory() as temp:
+            series, chapter, _, output = fixture(temp)
+            archive = comic.output_path_for(output, series, chapter)
+            archive.parent.mkdir(parents=True)
+            (chapter / 'mask').mkdir()
+            sentinel = chapter / 'mask' / 'keep.png'
+            state = output / '.comic-sorting-state.json'
+            for data in ('{broken', '[]'):
+                for route in ('manual', 'queue'):
+                    with self.subTest(data=data, route=route):
+                        state.write_text(data)
+                        archive.write_bytes(b'original archive')
+                        sentinel.write_bytes(b'keep')
+                        if route == 'manual':
+                            app = comic.FileAggregatorApp.__new__(comic.FileAggregatorApp)
+                            app.events = comic.queue.Queue()
+                            app.export_worker([chapter], str(output), False)
+                            event = app.events.get_nowait()
+                            self.assertEqual(event[0], 'done')
+                            self.assertEqual(event[1]['failed'], 1)
+                            self.assertTrue(event[2])
+                        else:
+                            events = []
+                            run_jobs([Job(chapter, 'export'), Job(chapter, 'cleanup')], {},
+                                     str(output), False, threading.Event(), events.append)
+                            self.assertEqual([e[2] for e in events if e[0] == 'status'],
+                                             ['running', 'failed', 'blocked'])
+                        self.assertEqual(state.read_text(), data)
+                        self.assertEqual(archive.read_bytes(), b'original archive')
+                        self.assertEqual(sentinel.read_bytes(), b'keep')
+
     def test_settings_save_failure_is_reported(self):
         app = comic.FileAggregatorApp.__new__(comic.FileAggregatorApp)
         value = lambda text: type("Value", (), {"get": lambda self: text})()
@@ -215,6 +265,39 @@ class ComicSortingTests(unittest.TestCase):
             warning.assert_called_once_with(
                 "警告", "匯出與漫畫路徑不可互相包含")
 
+    def test_parallel_atomic_writes_keep_complete_outputs_and_unrelated_temp_files(self):
+        from concurrent.futures import ThreadPoolExecutor
+        import json
+        import threading
+        with tempfile.TemporaryDirectory() as temp:
+            _, _, result, root = fixture(temp)
+            root.mkdir()
+            state = root / 'state.json'
+            archive = root / 'chapter.cbz'
+            sentinels = [state.with_suffix('.json.tmp'), archive.with_suffix('.cbz.tmp')]
+            for path in sentinels:
+                path.write_bytes(b'unrelated')
+            barrier = threading.Barrier(2)
+            dump = json.dump
+            def concurrent_dump(*args, **kwargs):
+                dump(*args, **kwargs)
+                barrier.wait(timeout=5)
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                with mock.patch('comic_core.json.dump', side_effect=concurrent_dump):
+                    futures = [pool.submit(comic.save_json, state, {'writer': index}) for index in (1, 2)]
+                    for future in futures:
+                        future.result(timeout=10)
+                self.assertIn(json.loads(state.read_text()), [{'writer': 1}, {'writer': 2}])
+                image = comic.image_files(result)[0]
+                futures = [pool.submit(comic.create_cbz, [image], archive,
+                                       lambda *_: barrier.wait(timeout=5)) for _ in range(2)]
+                for future in futures:
+                    future.result(timeout=10)
+            comic.validate_cbz(archive, [image])
+            for path in sentinels:
+                self.assertEqual(path.read_bytes(), b'unrelated')
+            self.assertEqual(set(root.iterdir()), {state, archive, *sentinels})
+
     def test_create_cbz(self):
         with tempfile.TemporaryDirectory() as temp:
             series, chapter, _, output_root = fixture(temp)
@@ -255,7 +338,7 @@ class ComicSortingTests(unittest.TestCase):
                 comic.create_cbz(comic.image_files(result), output,
                                  lambda *_: (_ for _ in ()).throw(OSError("stop")))
             self.assertEqual(output.read_bytes(), original)
-            self.assertFalse(output.with_suffix(".cbz.tmp").exists())
+            self.assertEqual(list(output.parent.glob('*.tmp')), [])
 
     def test_translation_states(self):
         with tempfile.TemporaryDirectory() as temp:

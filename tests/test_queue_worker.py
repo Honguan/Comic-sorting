@@ -49,8 +49,9 @@ class QueueWorkerTests(unittest.TestCase):
                   "Inpaint: 100%|##########| 2/2 [00:03<00:00, 1it/s]\n"
                   "finished translating all dirs\n")
         progress = []
-        run_translation([sys.executable, "-u", "-c", f"import sys; sys.stdout.write({output!r}); sys.stdout.flush(); input()"],
-                        self.root, None, threading.Event(), lambda *values: progress.append(values))
+        with self.assertRaises(RuntimeError):  # Output ends with unfinished stages.
+            run_translation([sys.executable, "-u", "-c", f"import sys; sys.stdout.write({output!r}); sys.stdout.flush(); input()"],
+                            self.root, None, threading.Event(), lambda *values: progress.append(values))
         self.assertEqual([p[0] for p in progress], ["Text Detection", "OCR", "Translation", "Inpaint"])
         self.assertEqual(progress[2][2:], (1, 2, "00:08"))
 
@@ -162,6 +163,22 @@ class QueueWorkerTests(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     run_translation(*args)
 
+    def test_incomplete_normal_exit_preserves_old_results_and_blocks_followups(self):
+        chapter = self.chapter()
+        output = self.root / 'output'
+        script = "print('Translation: 50%'); print('finished translating all dirs'); input()"
+        events = []
+        with mock.patch('queue_worker.translator_command', return_value=(
+                [sys.executable, '-u', '-c', script], self.root, None)):
+            run_jobs([Job(chapter, 'translate'), Job(chapter, 'cleanup')],
+                     dict(bt_path='', bt_config='', bt_export=True, bt_cleanup=True),
+                     str(output), False, threading.Event(), events.append)
+        self.assertEqual([event[2] for event in events if event[0] == 'status'],
+                         ['running', 'failed', 'blocked'])
+        self.assertFalse(output.exists())
+        self.assertTrue((chapter / 'mask' / 'keep.png').exists())
+        self.assertEqual((chapter / 'result' / '0.png').read_bytes(), b'translated')
+
     def test_fatal_error_is_kept_even_when_progress_pushes_it_out_of_tail(self):
         script = ("print('[ERROR] message:create_error_dialog:33 - LLM output limit reached (8192)'); "
                   "[print('progress '+str(i)) for i in range(30)]; "
@@ -199,6 +216,18 @@ class QueueWorkerTests(unittest.TestCase):
                          [("total", 1), ("total", 2), ("total", 3)])
         self.assertEqual(events[-1], ("done",))
         self.assertFalse(any(e[0] == "result" for e in events))
+
+    def test_bad_translator_config_fails_before_starting_process(self):
+        chapter = self.chapter()
+        config = self.root / 'config.json'
+        config.write_text('{broken')
+        events = []
+        with mock.patch('queue_worker.run_translation') as translate:
+            run_jobs([Job(chapter, 'translate')], dict(bt_config=str(config)), '', False,
+                     threading.Event(), events.append)
+        translate.assert_not_called()
+        self.assertEqual([e[2] for e in events if e[0] == 'status'], ['running', 'failed'])
+        self.assertEqual(config.read_text(), '{broken')
 
     def test_export_state_save_failure_prevents_cleanup(self):
         chapter = self.chapter()

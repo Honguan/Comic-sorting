@@ -21,8 +21,9 @@ class UsageTests(unittest.TestCase):
                  'Inpaint: 50%|#####     | 1/2 [00:99<00:04, 1.0s/it]',
                  'finished translating all dirs']
         times = []
-        run_translation([sys.executable, '-c', f'print({chr(10).join(lines)!r})'], Path.cwd(), None,
-                        threading.Event(), lambda *args: None, timing=lambda *args: times.append(args))
+        with self.assertRaises(RuntimeError):  # Timing must survive an incomplete run.
+            run_translation([sys.executable, '-c', f'print({chr(10).join(lines)!r})'], Path.cwd(), None,
+                            threading.Event(), lambda *args: None, timing=lambda *args: times.append(args))
         self.assertEqual(times, [('OCR', 62), ('Translation', 3723)])
 
     def test_real_summary_values_and_missing_estimates(self):

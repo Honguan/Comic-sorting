@@ -104,7 +104,7 @@ class ConfigDocumentTests(ConfigFixture, unittest.TestCase):
             doc.save(lambda data: data)
         self.assertEqual(self.path.read_bytes(), self.before)
         self.assertEqual(next(self.path.parent.glob("*.bak")).read_bytes(), self.before)
-        self.assertFalse(self.path.with_suffix(".json.tmp").exists())
+        self.assertEqual(list(self.path.parent.glob('*.tmp')), [])
 
     def test_types_non_finite_and_duplicate_json_keys_rejected(self):
         doc = self.document()
