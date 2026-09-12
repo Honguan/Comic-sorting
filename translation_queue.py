@@ -1,5 +1,6 @@
 """Queue controls; background work lives in queue_worker and filesystem work in comic_core."""
 from pathlib import Path
+from decimal import Decimal, ROUND_CEILING
 import queue
 import threading
 import subprocess
@@ -159,9 +160,14 @@ class TranslationQueue:
                 label.set(tr("尚未回報"))
                 continue
             tokens = sum(value['total_tokens'] for value in records)
+            token_text = str(tokens)
+            for scale, unit in ((1_000_000_000, 'B'), (1_000_000, 'M'), (1_000, 'K')):
+                if tokens >= scale:
+                    token_text = f'{tokens / scale:.2f}{unit}'
+                    break
             cost = (tr("預估金額未完整提供") if any(value['cost'] is None or value['unpriced_requests'] for value in records)
-                    else f"US${sum(value['cost'] for value in records):,.6f}")
-            text = tr("{0} tokens｜預估 {1}｜{2} 次請求").format(f"{tokens:,}", cost, sum(value['requests'] for value in records))
+                    else f"US${sum(value['cost'] for value in records).quantize(Decimal('0.01'), rounding=ROUND_CEILING):,.2f}")
+            text = tr("{0} tokens｜預估 {1}｜{2} 次請求").format(token_text, cost, sum(value['requests'] for value in records))
             if any(value['missing_usage_requests'] for value in records):
                 text += tr("（Token 回報不完整）")
             label.set(text)
