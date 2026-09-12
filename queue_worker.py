@@ -106,7 +106,7 @@ def translator_command(installation, config, python_path="", chapter=None, page_
     return command, root, env
 
 
-def run_translation(command, root, env, stop, progress, log_context="", usage=None):
+def run_translation(command, root, env, stop, progress, log_context="", usage=None, timing=None):
     completed = False
     failures = deque(maxlen=5)
     fatal_count = 0
@@ -165,6 +165,14 @@ def run_translation(command, root, env, stop, progress, log_context="", usage=No
             if stage_progress:
                 stages[stage_progress[0]] = stage_progress[1]
                 progress(*stage_progress)
+                elapsed = re.search(r"\[(\d+(?::\d{2}){1,2})<", line)
+                if elapsed and timing is not None:
+                    parts = [int(part) for part in elapsed[1].split(':')]
+                    if all(part < 60 for part in parts[1:]):
+                        seconds = 0
+                        for part in parts:
+                            seconds = seconds * 60 + part
+                        timing(stage_progress[0], seconds)
         code = process.wait()
         logger.info("[%s] translator_exit=%s completed=%s fatal_errors=%s retry_diagnostics=%s stopped=%s",
                     log_context, code, completed, fatal_count, retries, stop.is_set())
@@ -256,7 +264,8 @@ def run_jobs(jobs, settings, output, skip, stop, emit):
                         diagnostic = run_translation(*translator_command(settings["bt_path"], settings["bt_config"],
                                                             settings.get("bt_python", ""), path, **command_options), stop,
                                         lambda *values: emit(("bt_progress", *values)), log_context=job_id,
-                                        usage=lambda values: emit(("usage", index, values)))
+                                        usage=lambda values: emit(("usage", index, values)),
+                                        timing=lambda name, seconds: emit(("stage_time", index, name, seconds)))
                         if isinstance(diagnostic, str):
                             completion_note = diagnostic
                     status, translated = translation_status(path)

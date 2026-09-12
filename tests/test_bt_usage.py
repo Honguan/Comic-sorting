@@ -15,6 +15,16 @@ def usage_line(scope='', tokens=1274185, cost='2.483284'):
 
 
 class UsageTests(unittest.TestCase):
+    def test_stage_elapsed_time_comes_from_progress_not_eta(self):
+        lines = ['OCR: 50%|#####     | 1/2 [01:02<00:04, 1.0s/it]',
+                 'Translation: 100%|##########| 2/2 [1:02:03<00:00, 1.0s/it]',
+                 'Inpaint: 50%|#####     | 1/2 [00:99<00:04, 1.0s/it]',
+                 'finished translating all dirs']
+        times = []
+        run_translation([sys.executable, '-c', f'print({chr(10).join(lines)!r})'], Path.cwd(), None,
+                        threading.Event(), lambda *args: None, timing=lambda *args: times.append(args))
+        self.assertEqual(times, [('OCR', 62), ('Translation', 3723)])
+
     def test_real_summary_values_and_missing_estimates(self):
         for scope, tokens, cost in [('OCR ', 503029, '0.971684'), ('translation ', 771156, '1.511601'), ('', 1274185, '2.483284')]:
             record = parse_bt_usage(usage_line(scope, tokens, cost))

@@ -11,7 +11,7 @@ from unittest import mock
 import comic_core
 from queue_worker import Job, run_jobs
 from test_comic_sorting import comic
-from ui_language import LANGUAGES, set_language
+from ui_language import LANGUAGES, set_language, tr
 
 
 class FileImprovementsTests(unittest.TestCase):
@@ -364,6 +364,7 @@ class UIImprovementsTests(unittest.TestCase):
                     app.translation_queue.show_usage()
                     self.pump(.1)
                     for name in app.translation_queue.bt_bars:
+                        app.translation_queue.time_labels[name].set(tr('累計耗時：{0}').format('25:01:01'))
                         app.translation_queue.bt_progress[name] = (60, 582, 960, "4:00:04", True)
                         app.translation_queue.show_bt_progress(name)
                     app.translation_queue.stage.pack(fill="x", before=app.translation_queue.bt_frame)

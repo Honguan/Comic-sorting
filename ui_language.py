@@ -9,6 +9,8 @@ def tr(text):
     return TRANSLATIONS.get(text, {}).get(_language, text)
 
 TRANSLATIONS = {
+    '累計耗時：{0}': {'en': 'Elapsed: {0}', 'ja': '累計時間：{0}'},
+    '總耗時：{0}': {'en': 'Total time: {0}', 'ja': '総時間：{0}'},
     '本次佇列 LLM 消耗（非實際帳單）': {'en': 'LLM usage for this queue run (not a bill)', 'ja': '今回のキューの LLM 使用量（請求額ではありません）'},
     '合計': {'en': 'Total', 'ja': '合計'},
     '金額依翻譯器估算；僅累計已回報用量。': {'en': 'Cost estimated by the translator; reported usage only.', 'ja': '金額は翻訳ツールの推定です。報告済みの使用量のみ集計します。'},

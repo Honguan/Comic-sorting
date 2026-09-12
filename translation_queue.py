@@ -3,6 +3,7 @@ from pathlib import Path
 from decimal import Decimal, ROUND_CEILING
 import queue
 import threading
+import time
 import subprocess
 import os
 import tkinter as tk
@@ -21,6 +22,13 @@ STATUSES = {"pending": "等待", "running": "執行中", "done": "完成",
             "failed": "失敗", "cancelled": "已停止", "blocked": "前置工作失敗"}
 
 
+def elapsed_text(seconds):
+    seconds = max(0, int(seconds))
+    hours, seconds = divmod(seconds, 3600)
+    minutes, seconds = divmod(seconds, 60)
+    return f'{hours:02}:{minutes:02}:{seconds:02}'
+
+
 class TranslationQueue:
     def __init__(self, app, settings):
         self.app = app
@@ -29,6 +37,8 @@ class TranslationQueue:
         self.events = queue.Queue()
         self.stop = threading.Event()
         self.running = False
+        self.started_at = None
+        self.stage_times = {}
         self.editor = None
         self.config_editor = None
         self.controls = []
@@ -120,17 +130,22 @@ class TranslationQueue:
         self.bt_bars = {}
         self.bt_labels = {}
         self.bt_progress = {}
+        self.time_labels = {}
         for row, name in enumerate(BT_STAGES):
             ttk.Label(progress_grid, text=tr(name)).grid(row=row, column=0, sticky="w", padx=(0, 8))
             self.bt_bars[name] = ttk.Progressbar(progress_grid)
             self.bt_bars[name].grid(row=row, column=1, sticky="ew", padx=(0, 8), pady=2)
             self.bt_labels[name] = tk.StringVar()
             ttk.Label(progress_grid, textvariable=self.bt_labels[name]).grid(row=row, column=2, sticky="w")
+            self.time_labels[name] = tk.StringVar(value=tr("累計耗時：{0}").format('—'))
+            ttk.Label(progress_grid, textvariable=self.time_labels[name]).grid(row=row, column=3, sticky="w", padx=(8, 0))
         self.reset_bt_progress()
         self.usage_records = {}
         self.usage_labels = {}
         self.usage_frame = ttk.LabelFrame(footer, text=tr("本次佇列 LLM 消耗（非實際帳單）"), padding=(6, 2))
         self.usage_frame.pack(fill="x", pady=(4, 0))
+        self.elapsed_label = tk.StringVar(value=tr("總耗時：{0}").format('00:00:00'))
+        ttk.Label(self.usage_frame, textvariable=self.elapsed_label).grid(row=0, column=2, rowspan=3, padx=(12, 0), sticky="ne")
         for row, (scope, title) in enumerate((("OCR", "OCR"), ("translation", "翻譯"), ("total", "合計"))):
             ttk.Label(self.usage_frame, text=tr(title), width=8).grid(row=row, column=0, sticky="w")
             self.usage_labels[scope] = tk.StringVar()
@@ -489,6 +504,11 @@ class TranslationQueue:
         if not self.app.save_settings():
             return
         self.running = True
+        self.started_at = time.monotonic()
+        self.stage_times.clear()
+        self.elapsed_label.set(tr("總耗時：{0}").format('00:00:00'))
+        for label in self.time_labels.values():
+            label.set(tr("累計耗時：{0}").format('—'))
         self.usage_records.clear()
         self.show_usage()
         self.stop.clear()
@@ -503,6 +523,8 @@ class TranslationQueue:
         self.app.root.after(50, self.poll)
 
     def poll(self):
+        if self.running and self.started_at is not None:
+            self.elapsed_label.set(tr("總耗時：{0}").format(elapsed_text(time.monotonic() - self.started_at)))
         changed = False
         for _ in range(100):
             try:
@@ -524,6 +546,11 @@ class TranslationQueue:
                 elif job.status in ("failed", "cancelled"):
                     for name in BT_STAGES:
                         self.show_bt_progress(name, STATUSES[job.status])
+            elif event[0] == "stage_time":
+                _, index, name, seconds = event
+                self.stage_times[index, name] = max(seconds, self.stage_times.get((index, name), 0))
+                total = sum(value for (_, stage), value in self.stage_times.items() if stage == name)
+                self.time_labels[name].set(tr("累計耗時：{0}").format(elapsed_text(total)))
             elif event[0] == "usage":
                 self.usage_records[event[1], event[2]['scope']] = event[2]
                 self.show_usage()

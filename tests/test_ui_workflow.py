@@ -370,6 +370,23 @@ class WorkflowTests(unittest.TestCase):
         q.poll()
         self.assertNotIn('US$', q.usage_labels['total'].get())
 
+    def test_elapsed_time_accumulates_per_job_and_freezes_on_completion(self):
+        from translation_queue import elapsed_text
+        self.assertEqual(elapsed_text(90061), '25:01:01')
+        q = self.app.translation_queue
+        q.running, q.started_at = True, 100
+        for event in [('stage_time', 0, 'OCR', 120), ('stage_time', 0, 'OCR', 119),
+                      ('stage_time', 1, 'OCR', 60), ('stage_time', 0, 'Translation', 30), ('done',)]:
+            q.events.put(event)
+        with mock.patch('translation_queue.time.monotonic', return_value=3761):
+            q.poll()
+        self.assertIn('01:01:01', q.elapsed_label.get())
+        self.assertIn('00:03:00', q.time_labels['OCR'].get())
+        self.assertIn('00:00:30', q.time_labels['Translation'].get())
+        with mock.patch('translation_queue.time.monotonic', return_value=9000):
+            q.poll()
+        self.assertIn('01:01:01', q.elapsed_label.get())
+
     def test_four_stage_progress_remains_independent_and_resets_per_job(self):
         from queue_worker import BT_STAGES
         from ui_language import tr
