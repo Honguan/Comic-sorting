@@ -767,7 +767,8 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(len(self.app.work_tabs.tabs()), 3)
 
     def test_window_resize_grip_expands_queue_and_keeps_minimum_size(self):
-        self.root.geometry('1024x780+50+50')
+        # Keep both sizes inside the 1024x768 desktop used by Windows CI.
+        self.root.geometry('820x640+10+10')
         self.root.deiconify()
         self.root.update()
         grip, tree = self.app.window_grip, self.app.translation_queue.tree
@@ -776,10 +777,10 @@ class WorkflowTests(unittest.TestCase):
         initial_width, initial_height = tree.winfo_width(), tree.winfo_height()
         x, y = grip.winfo_rootx() + 2, grip.winfo_rooty() + 2
         grip.event_generate('<ButtonPress-1>', x=2, y=2, rootx=x, rooty=y)
-        grip.event_generate('<B1-Motion>', x=162, y=122, rootx=x + 160, rooty=y + 120)
-        grip.event_generate('<ButtonRelease-1>', x=162, y=122, rootx=x + 160, rooty=y + 120)
+        grip.event_generate('<B1-Motion>', x=162, y=82, rootx=x + 160, rooty=y + 80)
+        grip.event_generate('<ButtonRelease-1>', x=162, y=82, rootx=x + 160, rooty=y + 80)
         self.root.update()
-        self.assertEqual((self.root.winfo_width(), self.root.winfo_height()), (1184, 900))
+        self.assertEqual((self.root.winfo_width(), self.root.winfo_height()), (980, 720))
         self.assertGreater(tree.winfo_width(), initial_width)
         self.assertGreater(tree.winfo_height(), initial_height)
         self.root.geometry('600x400')
@@ -790,8 +791,11 @@ class WorkflowTests(unittest.TestCase):
         from queue_worker import parse_bt_usage
         from test_bt_usage import usage_line
         q = self.app.translation_queue
-        self.root.geometry('1024x960')
+        self.root.geometry('980x720')
         self.root.deiconify()
+        self.root.update()
+        # Reserve queue space so expanded content is visible on small CI desktops.
+        self.app.panes.sashpos(0, 120)
         self.root.update()
         progress_grid = q.bt_bars['OCR'].master
         usage_grid = q.usage_frame.winfo_children()[0]
@@ -799,16 +803,17 @@ class WorkflowTests(unittest.TestCase):
         self.assertFalse(usage_grid.winfo_ismapped())
         q.bt_toggle.invoke()
         q.usage_toggle.invoke()
-        self.root.update_idletasks()
+        self.root.update()
         self.assertTrue(progress_grid.winfo_ismapped())
         self.assertTrue(usage_grid.winfo_ismapped())
+        self.assertTrue(q.tree.winfo_ismapped())
         expanded_height = q.tree.winfo_height()
         self.app.set_manga_busy(True)
         q.running, q.started_at = True, 100
         self.assertFalse(q.bt_toggle.instate(['disabled']))
         self.assertFalse(q.usage_toggle.instate(['disabled']))
         q.bt_toggle.invoke()
-        self.root.update_idletasks()
+        self.root.update()
         self.assertFalse(progress_grid.winfo_ismapped())
         self.assertTrue(usage_grid.winfo_ismapped())
         self.assertGreater(q.tree.winfo_height(), expanded_height)
@@ -838,7 +843,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertTrue(q.stage.winfo_ismapped())
 
     def test_window_size_survives_close_and_sections_restart_collapsed(self):
-        self.root.geometry('1100x800')
+        self.root.geometry('900x700')
         self.root.deiconify()
         self.root.update()
         q = self.app.translation_queue
@@ -847,19 +852,19 @@ class WorkflowTests(unittest.TestCase):
         self.root.update()
         self.app.close()
         saved = comic.load_json(self.settings, {})
-        self.assertEqual(saved['window_size'], [1100, 800])
+        self.assertEqual(saved['window_size'], [900, 700])
         self.assertIs(saved['window_maximized'], False)
         self.root = tk.Tk()
         self.app = comic.FileAggregatorApp(self.root)
         self.root.update()
-        self.assertEqual((self.root.winfo_width(), self.root.winfo_height()), (1100, 800))
+        self.assertEqual((self.root.winfo_width(), self.root.winfo_height()), (900, 700))
         q = self.app.translation_queue
         self.assertFalse(q.bt_bars['OCR'].master.winfo_ismapped())
         self.assertFalse(q.usage_frame.winfo_children()[0].winfo_ismapped())
 
     @unittest.skipUnless(comic.os.name == 'nt', 'Windows maximized state')
     def test_maximized_window_keeps_normal_size_through_minimize_and_restart(self):
-        self.root.geometry('1080x760')
+        self.root.geometry('900x700')
         self.root.deiconify()
         self.root.update()
         self.root.state('zoomed')
@@ -868,7 +873,7 @@ class WorkflowTests(unittest.TestCase):
         self.root.update()
         self.app.close()
         saved = comic.load_json(self.settings, {})
-        self.assertEqual(saved['window_size'], [1080, 760])
+        self.assertEqual(saved['window_size'], [900, 700])
         self.assertIs(saved['window_maximized'], True)
         self.root = tk.Tk()
         self.app = comic.FileAggregatorApp(self.root)
@@ -876,7 +881,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(self.root.state(), 'zoomed')
         self.root.state('normal')
         self.root.update()
-        self.assertEqual((self.root.winfo_width(), self.root.winfo_height()), (1080, 760))
+        self.assertEqual((self.root.winfo_width(), self.root.winfo_height()), (900, 700))
 
     def test_usage_totals_do_not_double_count_scopes_or_repeated_summaries(self):
         from queue_worker import parse_bt_usage

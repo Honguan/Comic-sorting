@@ -435,7 +435,7 @@ class ComicSortingTests(unittest.TestCase):
 
     def test_merge_can_remove_last_selected_source_but_preserves_output_and_unselected(self):
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
+            root = Path(temp).resolve()
             chapters = []
             for number in (1, 2, 3):
                 folder = root / f"Chapter {number}"
