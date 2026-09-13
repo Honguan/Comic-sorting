@@ -341,7 +341,8 @@ class UIImprovementsTests(unittest.TestCase):
                 mock.patch.object(comic.threading, "Thread") as thread:
             self.app.confirm_aggregate()
         warning.assert_not_called()
-        chapters, start, end, cleanup = thread.call_args.kwargs["args"]
+        chapters, start, end, cleanup, keep_last = thread.call_args.kwargs["args"]
+        self.assertTrue(keep_last)
         self.assertEqual([item[1] for item in chapters], ["Chapter 1-45", "Chapter 46"])
         self.assertEqual((start, end), (0, 1))
         self.app.aggregate_worker(chapters, start, end, True)
@@ -358,6 +359,8 @@ class UIImprovementsTests(unittest.TestCase):
                     window = tk.Toplevel(self.root)
                     window.geometry("820x640")
                     app = comic.FileAggregatorApp(window)
+                    app.translation_queue.bt_toggle.invoke()
+                    app.translation_queue.usage_toggle.invoke()
                     for scope in ('OCR ', 'translation ', ''):
                         record = parse_bt_usage(usage_line(scope))
                         app.translation_queue.usage_records[0, record['scope']] = record
@@ -373,13 +376,16 @@ class UIImprovementsTests(unittest.TestCase):
                     for tab, controls in (
                             (app.queue_tab, (app.translation_queue.start_button, app.translation_queue.stop_button, app.translation_queue.range_button,
                                              app.translation_queue.total, app.translation_queue.stage,
+                                             app.translation_queue.history_button,
+                                             *(w for w in app.translation_queue.controls if isinstance(w, tk.ttk.Checkbutton)),
                                              *app.translation_queue.bt_bars.values(), *details,
                                              *app.translation_queue.usage_frame.winfo_children())),
                             (app.export_tab, (app.export_selected_button, app.export_all_button, app.cleanup_button)),
                             (app.settings_tab, (app.translation_queue.controls[0],))):
                         app.work_tabs.select(tab)
                         self.pump(.04)
-                        for widget in (*controls, app.aggregate_button):
+                        for widget in (*controls, app.aggregate_button, app.sort_button,
+                                       app.remove_sources_checkbox, app.keep_last_source_checkbox):
                             self.assertTrue(widget.winfo_ismapped(), str(widget))
                             self.assertGreater(widget.winfo_width(), 1)
                             self.assertLessEqual(widget.winfo_rootx() - window.winfo_rootx() + widget.winfo_reqwidth(), 820)

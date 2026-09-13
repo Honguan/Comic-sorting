@@ -2,6 +2,7 @@
 from collections import deque
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
+from datetime import datetime
 import os
 from pathlib import Path
 import re
@@ -9,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import uuid
 
 from app_logging import logger, log_path, redact
@@ -35,7 +37,8 @@ def parse_bt_usage(line):
             return None
     except (KeyError, ValueError, InvalidOperation):
         return None
-    return dict(scope=match[1] or 'total', cost=cost, **counts)
+    return dict(scope=match[1] or 'total', cost=cost, price_basis=fields.get('price_basis'),
+                rates_date=fields.get('rates_date'), **counts)
 
 
 def parse_bt_progress(line):
@@ -214,6 +217,8 @@ def run_translation(command, root, env, stop, progress, log_context="", usage=No
 
 def run_jobs(jobs, settings, output, skip, stop, emit):
     """Run a pending-job snapshot; only the event consumer mutates Job state."""
+    run_started = time.monotonic()
+    run_timestamp = datetime.now().astimezone().isoformat(timespec='seconds')
     def export_progress(count, total):
         if stop.is_set():
             raise RuntimeError(tr("已停止；未執行此項目的後續動作"))
@@ -236,6 +241,8 @@ def run_jobs(jobs, settings, output, skip, stop, emit):
                 emit(("total", index + 1))
                 continue
             emit(("status", index, "running", ""))
+            job_started = time.monotonic()
+            job_timestamp = datetime.now().astimezone().isoformat(timespec='seconds')
             try:
                 whole_chapter = True
                 completion_note = ""
@@ -313,7 +320,11 @@ def run_jobs(jobs, settings, output, skip, stop, emit):
                                  "cancelled" if stop.is_set() else "failed", action, path)
                 failed_paths.add(path)
                 emit(("status", index, "cancelled" if stop.is_set() else "failed", redact(str(error))))
+            emit(("job_time", index, job_timestamp, datetime.now().astimezone().isoformat(timespec='seconds'),
+                  time.monotonic() - job_started))
             emit(("total", index + 1))
     finally:
         logger.info("[%s] queue_end stopped=%s failed_paths=%s", run_id, stop.is_set(), len(failed_paths))
+        emit(("run_time", run_timestamp, datetime.now().astimezone().isoformat(timespec='seconds'),
+              time.monotonic() - run_started))
         emit(("done",))

@@ -4,3 +4,4 @@ build/
 dist/
 logs/
 comic-sorting.settings.json
+comic-sorting.history.sqlite3*

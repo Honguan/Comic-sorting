@@ -21,7 +21,7 @@ def log_path():
 def redact(text):
     text = re.sub(r"(?i)\b(Bearer|Basic)\s+[a-z0-9._~+/=-]+", r"\1 <REDACTED>", str(text))
     text = re.sub(
-        r"(?i)(\b(?:api[_ -]?key|access[_ -]?token|authorization|password|secret)\b[\"']?\s*[:=]\s*)"
+        r"(?i)(\b(?:[a-z0-9]+[_-])*(?:api[_ -]?key|access[_ -]?token|authorization|password|secret)\b[\"']?\s*[:=]\s*)"
         r"(?:\"[^\"]*\"|'[^']*'|[^\s,;&]+)", r"\1<REDACTED>", text)
     return re.sub(r"\bsk-[a-zA-Z0-9_-]{12,}\b", "<REDACTED>", text)
 

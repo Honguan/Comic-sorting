@@ -15,7 +15,7 @@ from bt_settings import ConfigDocument, ConfigEditor, bridge, merge_defaults, pa
 def metadata():
     profile = dict(id="demo", name="Demo", api_key="", model="model-a", model_options=["model-a", "model-b"],
                    max_tokens=8192, temperature=0.1, prompt="translate", support_text=True,
-                   support_vision=True, support_image=False, built_in=False)
+                   support_vision=True, support_image=False, built_in=False, require_api_key=True)
     defaults = dict(module=dict(enable_translate=True, translator_llm_id="demo", ocr_llm_id="demo", inpaint_llm_id="",
                                 llm_profiles=[profile], translator_params={"LLM": {"delay": 0.3}}),
                     imgsave_quality=100, mirrors={"huggingface": None}, ocr_sublist=[])
@@ -196,6 +196,26 @@ class ConfigEditorTests(ConfigFixture, unittest.TestCase):
         self.editor.reload()
         self.wait_idle()
         self.assertEqual(self.editor.document.data, saved)
+
+    def test_api_key_requirement_edits_as_boolean_and_keeps_secret(self):
+        from bt_settings import secret_path
+        from ui_language import tr
+        self.select(("module", "llm_profiles", 0, "require_api_key"))
+        switches = [w for w in self.editor.panel.winfo_children()
+                    if isinstance(w, tk.ttk.Checkbutton) and w["text"] == tr("啟用")]
+        self.assertEqual(len(switches), 1)
+        switches[0].invoke()
+        self.editor.save()
+        self.wait_idle()
+        saved = json.loads(self.path.read_text(encoding="utf-8"))["module"]["llm_profiles"][0]
+        self.assertIs(saved["require_api_key"], False)
+        self.assertEqual(saved["api_key"], self.raw["module"]["llm_profiles"][0]["api_key"])
+        self.editor.reload()
+        self.wait_idle()
+        self.assertIs(self.editor.document.data["module"]["llm_profiles"][0]["require_api_key"], False)
+        self.select(("module", "llm_profiles", 0, "api_key"))
+        self.assertTrue(self.entry().cget("show"))
+        self.assertTrue(secret_path(("api_key", "require_api_key")))
 
     def test_search_and_prompt_unicode_newlines(self):
         self.editor.search.set("溫度")

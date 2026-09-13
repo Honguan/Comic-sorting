@@ -1,6 +1,8 @@
 """Queue controls; background work lives in queue_worker and filesystem work in comic_core."""
 from pathlib import Path
-from decimal import Decimal, ROUND_CEILING
+from datetime import datetime
+import sqlite3
+import uuid
 import queue
 import threading
 import time
@@ -14,19 +16,13 @@ from app_logging import logger, log_path
 from ui_language import tr
 from bt_settings import ConfigEditor
 from comic_core import image_files
+from queue_history import HistoryWindow, elapsed_text, save_run, usage_text
 
 
 ACTIONS = {"translate": "翻譯", "export": "匯出", "cleanup": "清理"}
 STATUSES = {"pending": "等待", "running": "執行中", "done": "完成",
             "done_warning": "完成（有異常）",
             "failed": "失敗", "cancelled": "已停止", "blocked": "前置工作失敗"}
-
-
-def elapsed_text(seconds):
-    seconds = max(0, int(seconds))
-    hours, seconds = divmod(seconds, 3600)
-    minutes, seconds = divmod(seconds, 60)
-    return f'{hours:02}:{minutes:02}:{seconds:02}'
 
 
 class TranslationQueue:
@@ -38,6 +34,9 @@ class TranslationQueue:
         self.stop = threading.Event()
         self.running = False
         self.started_at = None
+        self.history_run = None
+        self.history_window = None
+        self.history_save_failed = False
         self.stage_times = {}
         self.editor = None
         self.config_editor = None
@@ -49,6 +48,7 @@ class TranslationQueue:
         self.action = tk.StringVar(value=tr("翻譯"))
         self.export = tk.BooleanVar(value=settings.get("bt_export", False))
         self.cleanup = tk.BooleanVar(value=settings.get("bt_cleanup", False))
+        self.open_after_completion = tk.BooleanVar(value=settings.get("bt_open_after_completion") is True)
         box = ttk.Frame(app.queue_tab, padding=8)
         box.pack(fill="both", expand=True)
         config_box = ttk.LabelFrame(app.settings_tab, text="BallonsTranslator", padding=8)
@@ -77,12 +77,13 @@ class TranslationQueue:
         self.action_choice.pack(side="left", padx=(0, 4))
         self.button(row, tr("加入上方選取項目"), self.add_selected)
         self.button(row, tr("加入指定路徑"), self.add_directory)
-        self.button(row, tr("一鍵整合＋主佇列"), self.integrate)
+        self.button(row, tr("整合＋加入佇列"), self.integrate)
         self.range_button = self.button(row, tr("翻譯頁數"), self.edit_page_range)
         row = ttk.Frame(box)
         row.pack(fill="x")
         for text, variable in ((tr("翻譯成功後匯出 CBZ"), self.export),
-                               (tr("成功後清理 mask / inpainted"), self.cleanup)):
+                               (tr("成功後清理 mask / inpainted"), self.cleanup),
+                               (tr("完成後開啟資料夾"), self.open_after_completion)):
             check = ttk.Checkbutton(row, text=text, variable=variable, command=app.save_settings)
             check.pack(side="left", padx=(0, 8))
             self.controls.append(check)
@@ -107,6 +108,9 @@ class TranslationQueue:
         tree_frame.columnconfigure(0, weight=1)
         self.tree.bind("<Double-1>", self.show_details)
         self.tree.bind("<<TreeviewSelect>>", lambda _event: self.update_controls())
+        self.context_menu = tk.Menu(self.tree, tearoff=False)
+        self.context_menu.add_command(label=tr("移除佇列項目"), command=lambda: self.remove(confirm=True))
+        self.tree.bind("<Button-3>", self.show_context_menu)
         row = ttk.Frame(footer)
         row.pack(fill="x")
         for text, command in (("移除選取", self.remove), ("上移", lambda: self.move(-1)),
@@ -121,11 +125,9 @@ class TranslationQueue:
         self.total = ttk.Progressbar(footer)
         self.total.pack(fill="x")
         self.label = tk.StringVar(value=tr("BallonsTranslator：待命"))
-        ttk.Label(footer, textvariable=self.label).pack(anchor="w")
         self.stage = ttk.Progressbar(footer)
-        progress_grid = ttk.Frame(footer)
-        self.bt_frame = progress_grid
-        progress_grid.pack(fill="x", pady=(4, 0))
+        self.bt_frame, progress_grid, self.bt_toggle = self.collapsible_frame(footer, tr("各階段進度"))
+        ttk.Label(self.bt_toggle.master, textvariable=self.label).pack(side="left", fill="x", expand=True, padx=(8, 0))
         progress_grid.columnconfigure(1, weight=1)
         self.bt_bars = {}
         self.bt_labels = {}
@@ -134,7 +136,7 @@ class TranslationQueue:
         for row, name in enumerate(BT_STAGES):
             ttk.Label(progress_grid, text=tr(name)).grid(row=row, column=0, sticky="w", padx=(0, 8))
             self.bt_bars[name] = ttk.Progressbar(progress_grid)
-            self.bt_bars[name].grid(row=row, column=1, sticky="ew", padx=(0, 8), pady=2)
+            self.bt_bars[name].grid(row=row, column=1, sticky="ew", padx=(0, 8), pady=1)
             self.bt_labels[name] = tk.StringVar()
             ttk.Label(progress_grid, textvariable=self.bt_labels[name]).grid(row=row, column=2, sticky="w")
             self.time_labels[name] = tk.StringVar(value=tr("累計耗時：{0}").format('—'))
@@ -142,15 +144,17 @@ class TranslationQueue:
         self.reset_bt_progress()
         self.usage_records = {}
         self.usage_labels = {}
-        self.usage_frame = ttk.LabelFrame(footer, text=tr("本次佇列 LLM 消耗（非實際帳單）"), padding=(6, 2))
-        self.usage_frame.pack(fill="x", pady=(4, 0))
+        self.usage_frame, usage_grid, self.usage_toggle = self.collapsible_frame(
+            footer, tr("本次佇列 LLM 消耗（非實際帳單）"))
+        self.history_button = ttk.Button(self.usage_toggle.master, text=tr("歷史紀錄"), command=self.open_history, padding=0)
+        self.history_button.pack(side='left', padx=(8, 0))
         self.elapsed_label = tk.StringVar(value=tr("總耗時：{0}").format('00:00:00'))
-        ttk.Label(self.usage_frame, textvariable=self.elapsed_label).grid(row=0, column=2, rowspan=3, padx=(12, 0), sticky="ne")
+        ttk.Label(usage_grid, textvariable=self.elapsed_label).grid(row=0, column=2, rowspan=3, padx=(12, 0), sticky="ne")
         for row, (scope, title) in enumerate((("OCR", "OCR"), ("translation", "翻譯"), ("total", "合計"))):
-            ttk.Label(self.usage_frame, text=tr(title), width=8).grid(row=row, column=0, sticky="w")
+            ttk.Label(usage_grid, text=tr(title), width=8).grid(row=row, column=0, sticky="w")
             self.usage_labels[scope] = tk.StringVar()
-            ttk.Label(self.usage_frame, textvariable=self.usage_labels[scope]).grid(row=row, column=1, sticky="w")
-        ttk.Label(self.usage_frame, text=tr("金額依翻譯器估算；僅累計已回報用量。")).grid(row=3, column=0, columnspan=2, sticky="w")
+            ttk.Label(usage_grid, textvariable=self.usage_labels[scope]).grid(row=row, column=1, sticky="w")
+        ttk.Label(usage_grid, text=tr("累計本次所有資料夾已回報用量；金額依翻譯器估算。")).grid(row=3, column=0, columnspan=2, sticky="w")
         self.show_usage()
         records = settings.get("bt_jobs", [])
         for record in records if isinstance(records, list) else []:
@@ -168,24 +172,60 @@ class TranslationQueue:
         self.render()
         self.update_controls()
 
+    def collapsible_frame(self, parent, title):
+        frame = ttk.Frame(parent)
+        frame.pack(fill="x", pady=(2, 0))
+        content = ttk.Frame(frame, padding=(6, 0))
+
+        def toggle():
+            if content.winfo_manager():
+                content.pack_forget()
+                button.configure(text=f"▶ {title}")
+            else:
+                content.pack(fill="x")
+                button.configure(text=f"▼ {title}")
+
+        header = ttk.Frame(frame)
+        header.pack(fill="x")
+        button = ttk.Button(header, text=f"▶ {title}", command=toggle, padding=0)
+        button.pack(side="left")
+        return frame, content, button
+
     def show_usage(self):
         for scope, label in self.usage_labels.items():
             records = [value for (_, kind), value in self.usage_records.items() if kind == scope]
-            if not records:
-                label.set(tr("尚未回報"))
-                continue
-            tokens = sum(value['total_tokens'] for value in records)
-            token_text = str(tokens)
-            for scale, unit in ((1_000_000_000, 'B'), (1_000_000, 'M'), (1_000, 'K')):
-                if tokens >= scale:
-                    token_text = f'{tokens / scale:.2f}{unit}'
-                    break
-            cost = (tr("預估金額未完整提供") if any(value['cost'] is None or value['unpriced_requests'] for value in records)
-                    else f"US${sum(value['cost'] for value in records).quantize(Decimal('0.01'), rounding=ROUND_CEILING):,.2f}")
-            text = tr("{0} tokens｜預估 {1}｜{2} 次請求").format(token_text, cost, sum(value['requests'] for value in records))
-            if any(value['missing_usage_requests'] for value in records):
-                text += tr("（Token 回報不完整）")
-            label.set(text)
+            label.set(usage_text(records))
+
+    def open_history(self):
+        if self.history_window and self.history_window.winfo_exists():
+            self.history_window.refresh()
+            self.history_window.lift()
+        else:
+            self.history_window = HistoryWindow(self.app.root, self.app.history_path, ACTIONS, STATUSES)
+
+    def save_history(self, refresh=True):
+        if self.history_run is None:
+            return True
+        record = self.history_run
+        record['saved_at'] = datetime.now().astimezone().isoformat(timespec='seconds')
+        if refresh:
+            for index, (job, saved) in enumerate(zip(self.active_jobs, record['jobs'])):
+                saved.update(status=job.status, error=job.error,
+                             stage_seconds={stage: value for (item, stage), value in self.stage_times.items() if item == index},
+                             usage={scope: dict(value, cost=str(value['cost']) if value['cost'] is not None else None)
+                                    for (item, scope), value in self.usage_records.items() if item == index})
+        try:
+            save_run(self.app.history_path, record)
+        except (OSError, sqlite3.Error, ValueError) as error:
+            logger.exception("queue_history_save_failed path=%s", self.app.history_path)
+            self.stop.set()
+            if not self.history_save_failed:
+                messagebox.showerror(tr("歷史紀錄儲存失敗"),
+                                     tr("已要求停止佇列；請檢查歷史檔寫入權限及磁碟空間後重試。\n{0}\n\n{1}").format(self.app.history_path, error))
+            self.history_save_failed = True
+            return False
+        self.history_save_failed = False
+        return True
 
     def button(self, parent, text, command):
         button = ttk.Button(parent, text=text, command=command)
@@ -196,6 +236,7 @@ class TranslationQueue:
     def settings(self):
         return dict(bt_path=self.installation.get(), bt_config=self.config.get(),
                     bt_python=self.python.get(), bt_export=self.export.get(), bt_cleanup=self.cleanup.get(),
+                    bt_open_after_completion=self.open_after_completion.get(),
                     bt_jobs=[dict(path=str(job.path), action=job.action, status=job.status, error=job.error,
                                   start_page=job.start_page, end_page=job.end_page, range_export=job.range_export)
                              for job in self.jobs])
@@ -242,8 +283,14 @@ class TranslationQueue:
         focus = self.tree.focus()
         selected = set(self.tree.selection())
         self.tree.delete(*self.tree.get_children())
+        self.pending_file_counts = {}
         for job in self.jobs:
             item = str(id(job))
+            if job.action == "translate" and job.status == "pending":
+                try:
+                    self.pending_file_counts[item] = len(job.select_pages(image_files(job.path)))
+                except (OSError, ValueError):
+                    self.pending_file_counts[item] = None
             self.tree.insert("", "end", iid=item, text=str(job.path),
                              values=(tr(ACTIONS[job.action]), self.page_range_text(job), tr(STATUSES[job.status])))
             if item in selected:
@@ -255,10 +302,16 @@ class TranslationQueue:
         self.update_summary()
 
     def update_summary(self):
+        counts = [self.pending_file_counts.get(str(id(job))) for job in self.jobs
+                  if job.action == "translate" and job.status == "pending"]
+        files = tr("｜待翻譯檔案 {0} 張").format(f"{sum(count for count in counts if count is not None):,}")
+        unknown = counts.count(None)
+        if unknown:
+            files += tr("（{0} 項無法計數）").format(unknown)
         self.summary.set(tr("佇列 {0} 項｜等待 {1}｜完成 {2}｜需處理 {3}").format(
             len(self.jobs), sum(j.status == "pending" for j in self.jobs),
             sum(j.status in ("done", "done_warning") for j in self.jobs),
-            sum(j.status in ("failed", "cancelled", "blocked") for j in self.jobs)))
+            sum(j.status in ("failed", "cancelled", "blocked") for j in self.jobs)) + files)
 
     def browse(self, variable, directory):
         selected = filedialog.askdirectory(initialdir=variable.get() or None) if directory else filedialog.askopenfilename()
@@ -339,11 +392,35 @@ class TranslationQueue:
         if path:
             self.add_paths([path])
 
-    def remove(self):
-        if not self.app.manga_busy:
-            selected = set(self.tree.selection())
-            self.jobs[:] = [job for job in self.jobs if str(id(job)) not in selected]
-            self.changed()
+    def show_context_menu(self, event):
+        if self.tree.identify_region(event.x, event.y) not in ("tree", "cell"):
+            return
+        item = self.tree.identify_row(event.y)
+        if not item:
+            return
+        if item not in self.tree.selection():
+            self.tree.selection_set(item)
+        self.tree.focus(item)
+        self.context_menu.entryconfigure(0, state="disabled" if self.running or self.app.manga_busy else "normal")
+        try:
+            self.context_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self.context_menu.grab_release()
+        return "break"
+
+    def remove(self, confirm=False):
+        if self.running or self.app.manga_busy:
+            return
+        selected = set(self.tree.selection())
+        if not selected:
+            return
+        if confirm and not messagebox.askyesno(
+                tr("移除佇列項目"),
+                tr("確定移除選取的 {0} 個佇列項目？\n漫畫資料夾與檔案會保留。").format(len(selected)),
+                parent=self.app.root, default=messagebox.NO):
+            return
+        self.jobs[:] = [job for job in self.jobs if str(id(job)) not in selected]
+        self.changed()
 
     def clear_completed(self):
         if not self.app.manga_busy:
@@ -450,7 +527,7 @@ class TranslationQueue:
             tr("確認清理"), tr("佇列將清空指定路徑的 mask / inpainted 內容，無法復原。繼續？"))
 
     def integrate(self):
-        if not self.app.manga_busy and self.validate(True) and self.confirm_cleanup():
+        if not self.app.manga_busy:
             self.app.confirm_aggregate(translate_after=True)
 
     def validate(self, translate=False):
@@ -496,6 +573,9 @@ class TranslationQueue:
     def start(self, cleanup_confirmed=False):
         if self.running or self.app.manga_busy:
             return
+        if self.history_save_failed and not self.save_history(refresh=False):
+            return
+        self.render()
         self.active_jobs = tuple(job for job in self.jobs if job.status == "pending")
         if not self.active_jobs or not self.validate():
             return
@@ -503,13 +583,22 @@ class TranslationQueue:
             return
         if not self.app.save_settings():
             return
+        self.stage_times.clear()
+        self.usage_records.clear()
+        self.history_run = dict(id=uuid.uuid4().hex, started_at=datetime.now().astimezone().isoformat(timespec='seconds'),
+                                finished_at=None, elapsed_seconds=None, status='running',
+                                jobs=[dict(path=str(job.path), action=job.action, start_page=job.start_page,
+                                           end_page=job.end_page, range_export=job.range_export)
+                                      for job in self.active_jobs])
+        if not self.save_history():
+            self.history_run = None
+            self.history_save_failed = False
+            return
         self.running = True
         self.started_at = time.monotonic()
-        self.stage_times.clear()
         self.elapsed_label.set(tr("總耗時：{0}").format('00:00:00'))
         for label in self.time_labels.values():
             label.set(tr("累計耗時：{0}").format('—'))
-        self.usage_records.clear()
         self.show_usage()
         self.stop.clear()
         self.app.set_manga_busy(True)
@@ -554,6 +643,13 @@ class TranslationQueue:
             elif event[0] == "usage":
                 self.usage_records[event[1], event[2]['scope']] = event[2]
                 self.show_usage()
+            elif event[0] == "job_time" and self.history_run is not None:
+                self.history_run['jobs'][event[1]].update(started_at=event[2], finished_at=event[3], elapsed_seconds=event[4])
+            elif event[0] == "run_time":
+                if self.history_run is not None:
+                    self.history_run.update(started_at=event[1], finished_at=event[2], elapsed_seconds=event[3])
+                self.started_at = None
+                self.elapsed_label.set(tr("總耗時：{0}").format(elapsed_text(event[3])))
             elif event[0] == "bt_reset":
                 self.reset_bt_progress(event[1], event[2])
             elif event[0] == "bt_progress":
@@ -566,7 +662,12 @@ class TranslationQueue:
                 self.stage.configure(value=event[2])
             elif event[0] == "total":
                 self.total.configure(value=event[1])
+                if self.history_run is not None:
+                    self.history_run['elapsed_seconds'] = time.monotonic() - self.started_at
+                    self.save_history()
             elif event[0] == "result":
+                if not self.open_after_completion.get():
+                    continue
                 path = event[1]
                 try:
                     if path.is_dir():
@@ -580,6 +681,10 @@ class TranslationQueue:
                     logger.exception("translation_result_open_failed path=%s", path)
                     messagebox.showwarning(tr("無法開啟結果位置"), f"{path}\n\n{error}")
             elif event[0] == "done":
+                if self.history_run is not None:
+                    self.history_run['status'] = ('cancelled' if self.stop.is_set() else 'done'
+                                                  if all(job.status == 'done' for job in self.active_jobs) else 'done_warning')
+                    self.save_history()
                 self.running = False
                 self.app.set_manga_busy(False)
                 self.label.set(tr("佇列已停止") if self.stop.is_set() else tr("佇列結束，請查看各項狀態"))

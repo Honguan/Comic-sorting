@@ -141,7 +141,10 @@ class ComicSortingTests(unittest.TestCase):
         app.base_path = value("manga")
         app.komga_path = value("komga")
         app.remove_sources_after_aggregate = value(False)
+        app.keep_last_source = value(True)
         app.skip_unchanged, app.open_after_export = value(True), value(False)
+        app.series_sort, app.series_sort_descending = "updated", True
+        app.window_size, app.window_maximized = None, False
         with mock.patch.object(comic, "save_json", side_effect=OSError("denied")), \
                 mock.patch.object(comic.messagebox, "showerror") as error:
             self.assertFalse(app.save_settings())
@@ -154,11 +157,15 @@ class ComicSortingTests(unittest.TestCase):
             app.base_path = value("manga")
             app.komga_path = value("komga")
             app.remove_sources_after_aggregate = value(True)
+            app.keep_last_source = value(False)
             app.skip_unchanged, app.open_after_export = value(True), value(False)
+            app.series_sort, app.series_sort_descending = "updated", True
+            app.window_size, app.window_maximized = None, False
             path = Path(temp) / "settings.json"
             with mock.patch.object(comic, "settings_path", return_value=path):
                 self.assertTrue(app.save_settings())
             self.assertIs(comic.load_json(path, {})["remove_sources_after_aggregate"], True)
+            self.assertIs(comic.load_json(path, {})["keep_last_source"], False)
 
     def test_high_level_discovery(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -421,10 +428,33 @@ class ComicSortingTests(unittest.TestCase):
         app.aggregate_events = comic.queue.Queue()
         with mock.patch.object(app, "aggregate_folders", side_effect=OSError("stop")), \
                 mock.patch.object(comic, "remove_aggregated_folders") as remove:
-            app.aggregate_worker([], 0, 0, True)
+            app.aggregate_worker([], 0, 0, True, False)
 
         remove.assert_not_called()
         self.assertEqual(app.aggregate_events.get_nowait()[0], "error")
+
+    def test_merge_can_remove_last_selected_source_but_preserves_output_and_unselected(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            chapters = []
+            for number in (1, 2, 3):
+                folder = root / f"Chapter {number}"
+                folder.mkdir()
+                (folder / "1.png").write_bytes(str(number).encode())
+                chapters.append((str(folder), folder.name, comic.Decimal(number)))
+            app = comic.FileAggregatorApp.__new__(comic.FileAggregatorApp)
+            app.aggregate_events = comic.queue.Queue()
+            app.aggregate_worker(chapters, 0, 1, True, False)
+            events = list(app.aggregate_events.queue)
+            output = root / "Chapter 1-2"
+            self.assertEqual(events[-1], ("done", output, (["Chapter 1", "Chapter 2"], [])))
+            self.assertFalse((root / "Chapter 1").exists())
+            self.assertFalse((root / "Chapter 2").exists())
+            self.assertEqual((root / "Chapter 3/1.png").read_bytes(), b"3")
+            self.assertEqual([(output / f"{n}.png").read_bytes() for n in (1, 2)], [b"1", b"2"])
+            selected_output = [(str(output), output.name, comic.Decimal(1))]
+            self.assertEqual(comic.remove_aggregated_folders(selected_output, 0, 0, output, keep_last=False), ([], []))
+            self.assertEqual(len(comic.image_files(output)), 2)
 
     def test_long_confirmation_summary(self):
         names = [f"Chapter {number}" for number in range(1, 13)]
@@ -528,6 +558,7 @@ class ComicSortingTests(unittest.TestCase):
             app.base_path = type("Value", (), {"get": lambda self: str(root)})()
             app.folder_tree = Tree()
             app.scan_data = None
+            app.series_sort, app.series_sort_descending = "updated", True
             app.manga_busy = False
             app.selection_text = mock.Mock()
             app.start_entry, app.end_entry = mock.Mock(), mock.Mock()

@@ -7,6 +7,7 @@ import re
 import shutil
 import stat
 import tempfile
+import time
 import zipfile
 from decimal import Decimal
 from pathlib import Path
@@ -124,6 +125,32 @@ def _check_cleanup_path(path, root):
         raise ValueError(tr("不允許刪除系列目錄外或符號連結資料夾"))
 
 
+def delete_manga_folder(folder, root):
+    """Recycle one folder strictly below the scanned root, rejecting linked paths."""
+    root = Path(root).resolve()
+    folder = Path(os.path.abspath(folder))
+    if folder == root or not folder.is_relative_to(root):
+        raise ValueError(tr("只能刪除漫畫路徑內的系列或章節，不能刪除漫畫根目錄"))
+    current = folder
+    while True:
+        _check_cleanup_path(current, root)
+        if current == root:
+            break
+        current = current.parent
+    if not folder.is_dir():
+        raise ValueError(tr("來源不是資料夾"))
+
+    def fail(error):
+        raise error
+
+    for current, directories, files in os.walk(folder, onerror=fail):
+        for name in directories + files:
+            _check_cleanup_path(Path(current) / name, root)
+    _check_cleanup_path(folder, root)
+    from windows_recycle import recycle_folder
+    recycle_folder(folder)
+
+
 def clear_work_folders(root):
     root = Path(root)
     root_resolved = root.resolve()
@@ -180,14 +207,14 @@ def clear_work_folders(root):
     return len(targets), removed, errors
 
 
-def remove_aggregated_folders(chapters, start_idx, end_idx, output):
+def remove_aggregated_folders(chapters, start_idx, end_idx, output, keep_last=True):
     output = Path(output)
     output_resolved = output.resolve()
     parent = output.parent.resolve()
     selected = [Path(item[0]) for item in chapters[start_idx:end_idx + 1]]
     removed = []
     errors = []
-    for folder in selected[:-1]:
+    for folder in selected[:-1] if keep_last else selected:
         try:
             resolved = folder.resolve()
             if resolved == output_resolved:
@@ -237,6 +264,18 @@ def validate_cbz(archive, expected_images):
         raise ValueError(tr("CBZ 含有子資料夾或非圖片檔案"))
 
 
+def _replace_file(source, target):
+    # Windows readers or a pending deletion can briefly block atomic replacement.
+    for attempt in range(6):
+        try:
+            os.replace(source, target)
+            return
+        except OSError as error:
+            if getattr(error, "winerror", None) not in (5, 32, 33) or attempt == 5:
+                raise
+            time.sleep(0.02 * 2 ** attempt)
+
+
 def create_cbz(images, output, progress=None):
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -250,7 +289,7 @@ def create_cbz(images, output, progress=None):
                 if progress:
                     progress(index, len(images))
         validate_cbz(temporary, images)
-        os.replace(temporary, output)
+        _replace_file(temporary, output)
     except Exception:
         temporary.unlink(missing_ok=True)
         raise
@@ -279,7 +318,7 @@ def save_json(path, data):
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as file:
             json.dump(data, file, ensure_ascii=False, indent=2)
-        os.replace(temporary, path)
+        _replace_file(temporary, path)
     except Exception:
         temporary.unlink(missing_ok=True)
         raise

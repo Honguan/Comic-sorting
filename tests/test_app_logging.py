@@ -58,6 +58,21 @@ class AppLoggingTests(unittest.TestCase):
             logger.info("x" * 200)
         self.assertEqual(len(list(self.log.parent.glob("test.log*"))), 4)
 
+    def test_prefixed_credentials_are_redacted_in_worker_errors_and_logs(self):
+        script = self.root / "failure.py"
+        script.write_text(
+            "print('OPENAI_API_KEY=sentinel-one total_tokens=123')\n"
+            "raise RuntimeError('OPEN_ROUTER_ACCESS_TOKEN=sentinel-two')\n", encoding="utf-8")
+        logger.info('config: {"service-api-key": "sentinel-three", "total_tokens": 456}')
+        with self.assertRaises(RuntimeError) as caught:
+            run_translation([sys.executable, "-u", str(script)], self.root, None,
+                            threading.Event(), lambda *p: None)
+        for text in (str(caught.exception), self.log.read_text(encoding="utf-8")):
+            for secret in ("sentinel-one", "sentinel-two", "sentinel-three"):
+                self.assertNotIn(secret, text)
+            self.assertIn("total_tokens=123", text)
+        self.assertIn('"total_tokens": 456', self.log.read_text(encoding="utf-8"))
+
     def test_queue_failure_has_job_path_and_traceback(self):
         events = []
         run_jobs([Job(self.root / "missing", "translate")], {}, "", True, threading.Event(), events.append)

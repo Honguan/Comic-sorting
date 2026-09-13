@@ -53,7 +53,8 @@ def field_name(key):
 
 
 def secret_path(path):
-    return any(re.search(r"(?i)(api[ _-]?key|password|secret|access[ _-]?token|authorization)", str(p)) for p in path)
+    return any(re.search(r"(?i)(api[ _-]?key|password|secret|access[ _-]?token|authorization)", str(p))
+               for p in path if str(p).casefold() != "require_api_key")
 
 
 def kind(value):
