@@ -96,6 +96,52 @@ class WorkflowTests(unittest.TestCase):
         restored.clear_completed()
         self.assertEqual(restored.jobs, [])
 
+    def test_queue_error_columns_update_persist_show_details_and_clear_on_retry(self):
+        first = self.chapter('Chapter 1')
+        q = self.app.translation_queue
+        q.add_paths([first], 'translate')
+        with mock.patch.object(q, 'validate', return_value=True), mock.patch('translation_queue.threading.Thread'):
+            q.start()
+        original = 'Codex turn failed: Selected model is at capacity. Please try a different model.'
+        q.events.put(('status', 0, 'failed', original))
+        q.events.put(('done',))
+        q.poll()
+        item = str(id(q.jobs[0]))
+        self.assertEqual(q.tree.set(item, 'status'), '失敗')
+        self.assertEqual(q.tree.set(item, 'error_code'), 'LLM_CAPACITY')
+        self.assertIn('滿載', q.tree.set(item, 'error_reason'))
+        q.tree.selection_set(item)
+        with mock.patch('translation_queue.messagebox.showinfo') as detail:
+            q.show_details()
+        self.assertIn('LLM_CAPACITY', detail.call_args.args[1])
+        self.assertIn(original, detail.call_args.args[1])
+        q.open_history()
+        history = q.history_window
+        batch = history.tree.get_children()[0]
+        folder = history.tree.get_children(batch)[0]
+        self.assertEqual(history.tree.set(folder, 'error_code'), 'LLM_CAPACITY')
+        history.tree.selection_set(folder)
+        history.show_details()
+        self.assertIn(original, history.details.get('1.0', 'end'))
+        self.assertIn('LLM_CAPACITY', history.details.get('1.0', 'end'))
+        # Existing persisted raw errors remain sufficient after restart.
+        saved = comic.load_json(self.settings, {})
+        self.assertEqual(saved['bt_jobs'][0]['error'], original)
+        restored_root = tk.Toplevel(self.root)
+        try:
+            restored = comic.FileAggregatorApp(restored_root).translation_queue
+            item = str(id(restored.jobs[0]))
+            self.assertEqual(restored.tree.set(item, 'error_code'), 'LLM_CAPACITY')
+            restored.tree.selection_set(item)
+            restored.retry()
+            self.assertEqual(restored.tree.set(item, 'error_code'), '')
+            self.assertEqual(restored.tree.set(item, 'error_reason'), '')
+        finally:
+            restored_root.destroy()
+        history.refresh()
+        folder = history.tree.get_children(history.tree.get_children()[0])[0]
+        self.assertEqual(history.tree.set(folder, 'error_code'), 'LLM_CAPACITY')
+
     def test_merge_enqueues_without_starting_or_requiring_translation_settings(self):
         first, second = self.chapter("Chapter 1"), self.chapter("Chapter 2")
         for chapter, content in ((first, b"first"), (second, b"second")):
@@ -1039,7 +1085,7 @@ class WorkflowTests(unittest.TestCase):
         q.history_button.invoke()
         window = q.history_window
         self.assertEqual(len(window.tree.get_children()), 1)
-        self.assertIn('2.55M', window.tree.item(window.tree.get_children()[0], 'values')[-1])
+        self.assertIn('2.55M', window.tree.set(window.tree.get_children()[0], 'usage'))
         self.assertIn('未完整提供', window.details.get('1.0', 'end'))
         batch = window.tree.get_children()[0]
         self.assertFalse(window.tree.item(batch, 'open'))

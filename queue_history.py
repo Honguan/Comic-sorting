@@ -9,6 +9,7 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 from queue_worker import BT_STAGES
+from queue_errors import error_details, error_info
 from ui_language import tr
 
 
@@ -109,14 +110,14 @@ class HistoryWindow(tk.Toplevel):
         listing, detail = ttk.Frame(panes), ttk.Frame(panes)
         panes.add(listing, weight=1)
         panes.add(detail, weight=1)
-        columns = ('end', 'status', 'jobs', 'elapsed', 'usage')
+        columns = ('end', 'status', 'jobs', 'elapsed', 'usage', 'error_code', 'error_reason')
         self.tree = ttk.Treeview(listing, columns=columns, show='tree headings', selectmode='browse', height=8)
         self.tree.heading('#0', text=tr("開始時間／資料夾"))
         self.tree.column('#0', width=320, minwidth=160)
-        for key, title, width in zip(columns, (tr("完成時間"), tr("狀態"), tr("工作數"),
-                                               tr("耗時"), tr("合計用量／預估金額")), (160, 100, 65, 90, 350)):
+        for key, title, width in zip(columns, (tr("完成時間"), tr("狀態"), tr("工作數"), tr("耗時"),
+                                               tr("合計用量／預估金額"), tr("錯誤碼"), tr("錯誤原因")), (160, 100, 65, 90, 350, 170, 300)):
             self.tree.heading(key, text=title)
-            self.tree.column(key, width=width, stretch=key == 'usage')
+            self.tree.column(key, width=width, minwidth=300 if key == 'usage' else 20, stretch=key == 'usage')
         scroll = ttk.Scrollbar(listing, command=self.tree.yview)
         horizontal = ttk.Scrollbar(listing, orient='horizontal', command=self.tree.xview)
         self.tree.configure(yscrollcommand=scroll.set, xscrollcommand=horizontal.set)
@@ -147,20 +148,21 @@ class HistoryWindow(tk.Toplevel):
                 (record.get('finished_at') or '—')[:19].replace('T', ' '),
                 tr("未結束") if record['status'] == 'running' else tr(self.statuses[record['status']]),
                 len(record['jobs']), elapsed_text(record.get('elapsed_seconds')),
-                usage_text(scope_records(record, 'total'))))
+                usage_text(scope_records(record, 'total')), '', ''))
             self.records[record['id']] = record, None
             for index, job in enumerate(record['jobs'], 1):
                 usage = job.get('usage', {})
                 item = self.tree.insert(record['id'], 'end', open=False, text=f"{index}. {job['path']}", values=(
                     (job.get('finished_at') or '—')[:19].replace('T', ' '),
                     tr(self.statuses[job['status']]), '', elapsed_text(job.get('elapsed_seconds')),
-                    usage_text([usage['total']] if 'total' in usage else [])))
+                    usage_text([usage['total']] if 'total' in usage else []),
+                    *error_info(job['status'], job.get('error', ''))))
                 self.records[item] = record, job
                 for scope, title, stage in (('OCR', 'OCR', 'OCR'), ('translation', tr("翻譯"), 'Translation'),
                                             ('total', tr("合計"), None)):
                     seconds = job.get('elapsed_seconds') if stage is None else job.get('stage_seconds', {}).get(stage)
                     child = self.tree.insert(item, 'end', text=title, values=(
-                        '', '', '', elapsed_text(seconds), usage_text([usage[scope]] if scope in usage else [])))
+                        '', '', '', elapsed_text(seconds), usage_text([usage[scope]] if scope in usage else []), '', ''))
                     self.records[child] = record, job
         self.note.set(tr("顯示 {0} 筆（最多 200 筆）；日期格式 YYYY-MM-DD，留白不限。展開佇列及資料夾查看用量，選取後查看詳細資料。").format(len(rows)))
         if rows:
@@ -197,8 +199,9 @@ class HistoryWindow(tk.Toplevel):
                         lines.append(tr("估價依據：{0}（費率日期：{1}）").format(value['price_basis'], value.get('rates_date') or '—'))
                 for stage in BT_STAGES:
                     lines.append(tr(stage) + ': ' + elapsed_text(job.get('stage_seconds', {}).get(stage)))
-                if job['error']:
-                    lines.append(job['error'])
+                diagnostic = error_details(job['status'], job.get('error', ''))
+                if diagnostic:
+                    lines.append(diagnostic)
             lines.append(tr("階段耗時可能重疊；金額為估算，僅包含已回報用量。"))
         self.details.configure(state='normal')
         self.details.delete('1.0', 'end')

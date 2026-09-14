@@ -18,6 +18,7 @@ from app_logging import logger, log_path, redact
 from comic_core import (clear_work_folders, export_chapter, image_files,
                         load_json, save_json, translation_status)
 from ui_language import tr
+from queue_errors import error_info
 
 
 BT_STAGES = {"Text Detection": "enable_detect", "OCR": "enable_ocr",
@@ -316,10 +317,12 @@ def run_jobs(jobs, settings, output, skip, stop, emit):
                     emit(("result", result_path))
                 logger.info("[%s] job_done", job_id)
             except Exception as error:
-                logger.exception("[%s] job_%s action=%s path=%s", job_id,
-                                 "cancelled" if stop.is_set() else "failed", action, path)
+                status = "cancelled" if stop.is_set() else "failed"
+                code, reason = error_info(status, str(error))
+                logger.exception("[%s] job_%s action=%s path=%s error_code=%s reason=%s", job_id,
+                                 status, action, path, code, reason)
                 failed_paths.add(path)
-                emit(("status", index, "cancelled" if stop.is_set() else "failed", redact(str(error))))
+                emit(("status", index, status, redact(str(error))))
             emit(("job_time", index, job_timestamp, datetime.now().astimezone().isoformat(timespec='seconds'),
                   time.monotonic() - job_started))
             emit(("total", index + 1))

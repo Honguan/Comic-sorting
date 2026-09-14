@@ -17,6 +17,7 @@ from ui_language import tr
 from bt_settings import ConfigEditor
 from comic_core import image_files
 from queue_history import HistoryWindow, elapsed_text, save_run, usage_text
+from queue_errors import error_details, error_info
 
 
 ACTIONS = {"translate": "翻譯", "export": "匯出", "cleanup": "清理"}
@@ -91,13 +92,16 @@ class TranslationQueue:
         footer.pack(side="bottom", fill="x")
         tree_frame = ttk.Frame(box)
         tree_frame.pack(fill="both", expand=True, pady=4)
-        self.tree = ttk.Treeview(tree_frame, columns=("action", "pages", "status"), show="tree headings", height=3)
-        for column, text in (("#0", "漫畫路徑"), ("action", "動作"), ("pages", "翻譯頁數"), ("status", "狀態")):
+        self.tree = ttk.Treeview(tree_frame, columns=("action", "pages", "status", "error_code", "error_reason"), show="tree headings", height=3)
+        for column, text in (("#0", "漫畫路徑"), ("action", "動作"), ("pages", "翻譯頁數"),
+                             ("status", "狀態"), ("error_code", "錯誤碼"), ("error_reason", "錯誤原因")):
             self.tree.heading(column, text=tr(text))
-        self.tree.column("#0", width=480)
-        self.tree.column("action", width=110, stretch=False)
-        self.tree.column("pages", width=130, stretch=False)
-        self.tree.column("status", width=140, stretch=False)
+        self.tree.column("#0", width=340, minwidth=180)
+        self.tree.column("action", width=85, stretch=False)
+        self.tree.column("pages", width=120, stretch=False)
+        self.tree.column("status", width=110, stretch=False)
+        self.tree.column("error_code", width=170, stretch=False)
+        self.tree.column("error_reason", width=320, minwidth=180)
         vertical = ttk.Scrollbar(tree_frame, command=self.tree.yview)
         horizontal = ttk.Scrollbar(tree_frame, orient="horizontal", command=self.tree.xview)
         self.tree.configure(yscrollcommand=vertical.set, xscrollcommand=horizontal.set)
@@ -292,7 +296,8 @@ class TranslationQueue:
                 except (OSError, ValueError):
                     self.pending_file_counts[item] = None
             self.tree.insert("", "end", iid=item, text=str(job.path),
-                             values=(tr(ACTIONS[job.action]), self.page_range_text(job), tr(STATUSES[job.status])))
+                             values=(tr(ACTIONS[job.action]), self.page_range_text(job), tr(STATUSES[job.status]),
+                                     *error_info(job.status, job.error)))
             if item in selected:
                 self.tree.selection_add(item)
             if item == focus:
@@ -456,7 +461,7 @@ class TranslationQueue:
         selected = set(self.tree.selection())
         for job in self.jobs:
             if str(id(job)) in selected:
-                messagebox.showinfo(tr("工作詳情"), f"{job.path}\n{tr(ACTIONS[job.action])} / {tr(STATUSES[job.status])}\n{self.page_range_text(job)}\n\n{job.error}")
+                messagebox.showinfo(tr("工作詳情"), f"{job.path}\n{tr(ACTIONS[job.action])} / {tr(STATUSES[job.status])}\n{self.page_range_text(job)}\n\n{error_details(job.status, job.error)}")
                 break
 
     def edit_page_range(self):
@@ -625,6 +630,9 @@ class TranslationQueue:
                 job.status, job.error = event[2], event[3]
                 changed = True
                 self.tree.set(str(id(job)), "status", tr(STATUSES[job.status]))
+                code, reason = error_info(job.status, job.error)
+                self.tree.set(str(id(job)), "error_code", code)
+                self.tree.set(str(id(job)), "error_reason", reason)
                 self.update_summary()
                 if job.status == "running":
                     self.tree.see(str(id(job)))
