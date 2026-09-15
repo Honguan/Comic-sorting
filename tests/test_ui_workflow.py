@@ -1,4 +1,5 @@
 import tempfile
+import threading
 import time
 import tkinter as tk
 import unittest
@@ -141,6 +142,95 @@ class WorkflowTests(unittest.TestCase):
         history.refresh()
         folder = history.tree.get_children(history.tree.get_children()[0])[0]
         self.assertEqual(history.tree.set(folder, 'error_code'), 'LLM_CAPACITY')
+
+    def test_ntfy_queue_events_include_final_usage_and_deduplicate(self):
+        q = self.app.translation_queue
+        q.add_paths([self.chapter('Chapter 1'), self.chapter('Chapter 2')], 'translate')
+        with mock.patch.object(q, 'validate', return_value=True), mock.patch('translation_queue.threading.Thread'):
+            q.start()
+        usage = dict(scope='total', total_tokens=1500, cost='0.011', requests=1, unpriced_requests=0, missing_usage_requests=0)
+        with mock.patch.object(q.notifications, 'send') as send:
+            for index, status, error in ((0, 'failed', 'Selected model is at capacity'), (1, 'done', '')):
+                q.events.put(('usage', index, usage))
+                q.events.put(('status', index, status, error))
+                q.events.put(('job_time', index, '2026-09-15T01:00:00+08:00', '2026-09-15T01:00:15+08:00', 15))
+                q.events.put(('job_time', index, '2026-09-15T01:00:00+08:00', '2026-09-15T01:00:15+08:00', 15))
+            q.events.put(('run_time', '2026-09-15T01:00:00+08:00', '2026-09-15T01:00:30+08:00', 30))
+            q.events.put(('done',))
+            q.poll()
+            q.notify_run()
+            self.assertEqual(send.call_count, 3)
+            failure, success, total = [call.args for call in send.call_args_list]
+            self.assertEqual((failure[0], success[0], total[0]), ('failed', 'success', 'done'))
+            self.assertIn('LLM_CAPACITY', failure[2])
+            self.assertIn('Series / Chapter 1', failure[2])
+            self.assertNotIn(str(self.folder), failure[2])
+            self.assertIn('1.50K', failure[2])
+            self.assertIn('US$0.02', failure[2])
+            self.assertIn('完成 1｜異常 0｜失敗 1', total[2])
+            self.assertIn('3.00K', total[2])
+            self.assertIn('US$0.03', total[2])
+            self.assertIn('00:00:30', total[2])
+            self.assertFalse(q.running)
+            self.assertFalse(q.stop.is_set())
+
+    def test_ntfy_settings_defaults_encrypted_token_and_restart(self):
+        n = self.app.translation_queue.notifications
+        self.assertFalse(n.enabled.get())
+        self.assertTrue(n.done.get())
+        self.assertTrue(n.failed.get())
+        self.assertFalse(n.success.get())
+        with mock.patch.object(n, 'enqueue') as enqueue:
+            n.send('done', 'title', 'body')
+            enqueue.assert_not_called()
+        n.enabled.set(True)
+        n.topic.set('comic-private')
+        n.token.set('tk_' + 'z' * 40)
+        n.success.set(True)
+        self.assertTrue(n.save())
+        saved = comic.load_json(self.settings, {})
+        self.assertNotIn('tk_' + 'z' * 40, self.settings.read_text(encoding='utf-8'))
+        self.assertTrue(saved['ntfy_token_protected'])
+        restored_root = tk.Toplevel(self.root)
+        try:
+            restored = comic.FileAggregatorApp(restored_root).translation_queue.notifications
+            self.assertTrue(restored.enabled.get())
+            self.assertTrue(restored.success.get())
+            self.assertEqual(restored.token.get(), 'tk_' + 'z' * 40)
+            with mock.patch.object(restored, 'enqueue') as enqueue:
+                restored.send('failed', 'title', 'body', 4)
+                self.assertEqual(enqueue.call_args.args[0]['token'], 'tk_' + 'z' * 40)
+            restored.token.set('')
+            restored.enabled.set(False)
+            self.assertTrue(restored.save())
+            self.assertEqual(comic.load_json(self.settings, {})['ntfy_token_protected'], '')
+        finally:
+            restored_root.destroy()
+
+    def test_ntfy_delivery_runs_in_background_and_failure_does_not_stop_queue(self):
+        n = self.app.translation_queue.notifications
+        entered, release = threading.Event(), threading.Event()
+
+        def delayed_publish(*_args):
+            entered.set()
+            release.wait(3)
+            return 'NTFY_HTTP_401'
+
+        with mock.patch('ntfy_notifications.publish', side_effect=delayed_publish):
+            n.test()  # Explicit test works even while automatic notifications are off.
+            self.assertTrue(entered.wait(2))
+            self.assertEqual(str(n.test_button['state']), 'disabled')
+            self.root.update()
+            self.assertEqual(n.pending, 1)
+            release.set()
+            deadline = time.monotonic() + 3
+            while n.pending and time.monotonic() < deadline:
+                self.root.update()
+                time.sleep(.01)
+            self.assertEqual(n.pending, 0)
+            self.assertIn('NTFY_HTTP_401', n.status.get())
+            self.assertFalse(self.app.translation_queue.stop.is_set())
+            self.assertEqual(str(n.test_button['state']), 'normal')
 
     def test_merge_enqueues_without_starting_or_requiring_translation_settings(self):
         first, second = self.chapter("Chapter 1"), self.chapter("Chapter 2")
@@ -810,7 +900,12 @@ class WorkflowTests(unittest.TestCase):
         footer = self.app.translation_queue.usage_frame
         self.assertTrue(footer.winfo_ismapped())
         self.assertLessEqual(footer.winfo_rooty() - self.root.winfo_rooty() + footer.winfo_reqheight(), 780)
-        self.assertEqual(len(self.app.work_tabs.tabs()), 3)
+        self.assertEqual(len(self.app.work_tabs.tabs()), 4)
+        n = self.app.translation_queue.notifications
+        self.app.work_tabs.select(n.tab)
+        self.root.update()
+        self.assertTrue(n.test_button.winfo_ismapped())
+        self.assertLessEqual(n.test_button.winfo_rooty() - self.root.winfo_rooty() + n.test_button.winfo_height(), 780)
 
     def test_window_resize_grip_expands_queue_and_keeps_minimum_size(self):
         # Keep both sizes inside the 1024x768 desktop used by Windows CI.

@@ -18,6 +18,7 @@ from bt_settings import ConfigEditor
 from comic_core import image_files
 from queue_history import HistoryWindow, elapsed_text, save_run, usage_text
 from queue_errors import error_details, error_info
+from ntfy_notifications import NtfyNotifications
 
 
 ACTIONS = {"translate": "翻譯", "export": "匯出", "cleanup": "清理"}
@@ -38,6 +39,8 @@ class TranslationQueue:
         self.history_run = None
         self.history_window = None
         self.history_save_failed = False
+        self.notified_jobs = set()
+        self.notified_run = None
         self.stage_times = {}
         self.editor = None
         self.config_editor = None
@@ -70,6 +73,7 @@ class TranslationQueue:
         self.button(settings_actions, tr("編輯設定檔"), self.edit_settings)
         self.button(settings_actions, tr("開啟原生設定介面"), self.open_settings)
         self.button(settings_actions, tr("開啟紀錄資料夾"), self.open_logs)
+        self.notifications = NtfyNotifications(app, settings)
         row = ttk.Frame(box)
         row.pack(fill="x", pady=(0, 4))
         self.action_choice = ttk.Combobox(row, textvariable=self.action,
@@ -243,7 +247,47 @@ class TranslationQueue:
                     bt_open_after_completion=self.open_after_completion.get(),
                     bt_jobs=[dict(path=str(job.path), action=job.action, status=job.status, error=job.error,
                                   start_page=job.start_page, end_page=job.end_page, range_export=job.range_export)
-                             for job in self.jobs])
+                             for job in self.jobs], **self.notifications.settings())
+
+    def notify_job(self, index):
+        job = self.active_jobs[index]
+        if index in self.notified_jobs or job.status not in ('done', 'done_warning', 'failed'):
+            return
+        self.notified_jobs.add(index)
+        record = self.history_run['jobs'][index]
+        lines = [f'{job.path.parent.name} / {job.path.name}',
+                 f'{tr(ACTIONS[job.action])}: {tr(STATUSES[job.status])}',
+                 tr('完成時間：{0}').format(record.get('finished_at') or '—'),
+                 tr('總耗時：{0}').format(elapsed_text(record.get('elapsed_seconds')))]
+        code, reason = error_info(job.status, job.error)
+        if code:
+            lines.append(f'{code}: {reason}')
+        for scope, title in (('OCR', 'OCR'), ('translation', '翻譯'), ('total', '合計')):
+            usage = self.usage_records.get((index, scope))
+            lines.append(f'{tr(title)}: {usage_text([usage] if usage else [])}')
+        lines.append(tr('預估金額非實際帳單；僅含已回報用量。'))
+        failed = job.status != 'done'
+        self.notifications.send('failed' if failed else 'success', tr('單項失敗／異常') if failed else tr('單項成功'),
+                                '\n'.join(lines), 4 if failed else 3)
+
+    def notify_run(self):
+        record = self.history_run
+        if record is None or record['id'] == self.notified_run:
+            return
+        self.notified_run = record['id']
+        counts = {status: sum(job.status == status for job in self.active_jobs) for status in STATUSES}
+        lines = [tr(STATUSES[record['status']]),
+                 tr('完成 {0}｜異常 {1}｜失敗 {2}｜略過 {3}｜停止 {4}｜未執行 {5}').format(
+                     counts['done'], counts['done_warning'], counts['failed'], counts['blocked'], counts['cancelled'], counts['pending']),
+                 tr('開始時間：{0}').format(record['started_at']),
+                 tr('完成時間：{0}').format(record.get('finished_at') or '—'),
+                 tr('總耗時：{0}').format(elapsed_text(record.get('elapsed_seconds')))]
+        for scope, title in (('OCR', 'OCR'), ('translation', '翻譯'), ('total', '合計')):
+            lines.append(f'{tr(title)}: {usage_text([value for (_, kind), value in self.usage_records.items() if kind == scope])}')
+        lines.append(tr('預估金額非實際帳單；僅含已回報用量。'))
+        if self.history_save_failed:
+            lines.append(tr('歷史紀錄儲存失敗'))
+        self.notifications.send('done', tr('整批結束'), '\n'.join(lines), 3 if record['status'] == 'done' else 4)
 
     def reset_bt_progress(self, total=None, enabled=None):
         for name in BT_STAGES:
@@ -590,6 +634,7 @@ class TranslationQueue:
             return
         self.stage_times.clear()
         self.usage_records.clear()
+        self.notified_jobs.clear()
         self.history_run = dict(id=uuid.uuid4().hex, started_at=datetime.now().astimezone().isoformat(timespec='seconds'),
                                 finished_at=None, elapsed_seconds=None, status='running',
                                 jobs=[dict(path=str(job.path), action=job.action, start_page=job.start_page,
@@ -653,6 +698,7 @@ class TranslationQueue:
                 self.show_usage()
             elif event[0] == "job_time" and self.history_run is not None:
                 self.history_run['jobs'][event[1]].update(started_at=event[2], finished_at=event[3], elapsed_seconds=event[4])
+                self.notify_job(event[1])
             elif event[0] == "run_time":
                 if self.history_run is not None:
                     self.history_run.update(started_at=event[1], finished_at=event[2], elapsed_seconds=event[3])
@@ -693,6 +739,7 @@ class TranslationQueue:
                     self.history_run['status'] = ('cancelled' if self.stop.is_set() else 'done'
                                                   if all(job.status == 'done' for job in self.active_jobs) else 'done_warning')
                     self.save_history()
+                    self.notify_run()
                 self.running = False
                 self.app.set_manga_busy(False)
                 self.label.set(tr("佇列已停止") if self.stop.is_set() else tr("佇列結束，請查看各項狀態"))
