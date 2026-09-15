@@ -109,7 +109,7 @@ def history_totals(path):
         counts['elapsed_seconds'] += record.get('elapsed_seconds') or 0
         for scope, values in usage.items():
             values.extend(scope_records(record, scope))
-    return dict(counts, usage={scope: usage_text(values) for scope, values in usage.items()})
+    return dict(counts, usage={scope: usage_text(values) for scope, values in usage.items()}, usage_records=usage)
 
 
 class HistoryWindow(tk.Toplevel):
@@ -139,11 +139,24 @@ class HistoryWindow(tk.Toplevel):
         ttk.Label(self, textvariable=self.note, padding=(8, 0), wraplength=780).pack(anchor='w')
         totals = ttk.LabelFrame(self, text=tr("全部總累計（所有歷史）"), padding=8)
         totals.pack(side='bottom', fill='x', padx=8, pady=(0, 8))
-        self.totals = tk.Text(totals, wrap='word', state='disabled', height=5)
-        totals_scroll = ttk.Scrollbar(totals, command=self.totals.yview)
-        self.totals.configure(yscrollcommand=totals_scroll.set)
-        totals_scroll.pack(side='right', fill='y')
+        summary = ttk.Frame(totals)
+        summary.pack(fill='x', pady=(0, 6))
+        self.total_counts = {}
+        for index, (key, label) in enumerate((('runs', '佇列批數'), ('jobs', '工作數'), ('elapsed', '累計耗時'))):
+            ttk.Label(summary, text=tr(label)).grid(row=0, column=index * 2, padx=(0, 6))
+            variable = tk.StringVar()
+            self.total_counts[key] = variable
+            ttk.Entry(summary, textvariable=variable, state='readonly', width=14).grid(row=0, column=index * 2 + 1, sticky='ew', padx=(0, 12))
+            summary.columnconfigure(index * 2 + 1, weight=1)
+        columns = ('scope', 'tokens', 'cost', 'requests', 'pricing', 'reporting')
+        self.totals = ttk.Treeview(totals, columns=columns, show='headings', height=3, selectmode='browse')
+        for key, title, width in zip(columns, ('項目', 'Token 數', '預估金額（USD）', '請求數', '金額完整性', 'Token 完整性'), (70, 130, 130, 80, 145, 145)):
+            self.totals.heading(key, text=tr(title))
+            self.totals.column(key, width=width, minwidth=40, anchor='w' if key in ('scope', 'pricing', 'reporting') else 'e')
         self.totals.pack(fill='x')
+        note = ttk.Label(totals, text=tr("全部歷史，含失敗／停止已回報用量，不受查詢條件影響；耗時為各批次加總，可能重疊。"), wraplength=780)
+        note.pack(fill='x', pady=(4, 0))
+        note.bind('<Configure>', lambda event: note.configure(wraplength=max(100, event.width)))
         panes = ttk.Panedwindow(self, orient='vertical')
         panes.pack(fill='both', expand=True, padx=8, pady=8)
         listing, detail = ttk.Frame(panes), ttk.Frame(panes)
@@ -180,15 +193,20 @@ class HistoryWindow(tk.Toplevel):
         except (OSError, sqlite3.Error, ValueError) as error:
             messagebox.showerror(tr("歷史紀錄讀取失敗"), str(error), parent=self)
             return
-        lines = [tr("佇列 {0} 批｜工作 {1} 項｜累計耗時：{2}").format(
-            totals['runs'], totals['jobs'], elapsed_text(totals['elapsed_seconds']))]
+        for key in ('runs', 'jobs'):
+            self.total_counts[key].set(f"{totals[key]:,}")
+        self.total_counts['elapsed'].set(elapsed_text(totals['elapsed_seconds']))
+        self.totals.delete(*self.totals.get_children())
         for scope, label in (('OCR', 'OCR'), ('translation', tr("翻譯")), ('total', tr("合計"))):
-            lines.append(label + ': ' + totals['usage'][scope])
-        lines.append(tr("全部歷史，含失敗／停止已回報用量，不受查詢條件影響；耗時為各批次加總，可能重疊。"))
-        self.totals.configure(state='normal')
-        self.totals.delete('1.0', 'end')
-        self.totals.insert('1.0', '\n'.join(lines))
-        self.totals.configure(state='disabled')
+            records = totals['usage_records'][scope]
+            costs = [Decimal(value['cost']) for value in records if value['cost'] is not None]
+            cost = f"US${sum(costs).quantize(Decimal('0.01'), rounding=ROUND_CEILING):,.2f}" if costs else tr("無法預估")
+            tokens = f"{sum(value['total_tokens'] for value in records):,}" if records else tr("尚未回報")
+            requests = f"{sum(value['requests'] for value in records):,}" if records else '—'
+            partial = any(value['cost'] is None or value['unpriced_requests'] for value in records)
+            pricing = tr("僅含已知金額") if costs and partial else tr("完整") if costs else tr("尚未回報")
+            reporting = tr("回報不完整") if any(value['missing_usage_requests'] for value in records) else tr("完整") if records else tr("尚未回報")
+            self.totals.insert('', 'end', iid=scope, values=(label, tokens, cost, requests, pricing, reporting))
         self.tree.delete(*self.tree.get_children())
         self.records = {}
         for record in rows:

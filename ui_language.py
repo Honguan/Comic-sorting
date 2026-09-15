@@ -574,3 +574,17 @@ TRANSLATIONS.update({
     '匯出失敗：{0}': {'en': 'Export failed: {0}', 'ja': 'エクスポート失敗：{0}'},
     '已匯出 {0} 個漫畫名稱：\n{1}': {'en': 'Exported {0} manga names:\n{1}', 'ja': '{0} 件の漫画名をエクスポートしました：\n{1}'},
 })
+
+TRANSLATIONS.update({
+    '佇列批數': {'en': 'Queue runs', 'ja': 'キュー実行数'},
+    '累計耗時': {'en': 'Total duration', 'ja': '累計時間'},
+    '項目': {'en': 'Item', 'ja': '項目'},
+    'Token 數': {'en': 'Tokens', 'ja': 'トークン数'},
+    '預估金額（USD）': {'en': 'Estimated cost (USD)', 'ja': '推定金額（USD）'},
+    '請求數': {'en': 'Requests', 'ja': 'リクエスト数'},
+    '金額完整性': {'en': 'Cost coverage', 'ja': '金額の網羅性'},
+    'Token 完整性': {'en': 'Token coverage', 'ja': 'トークンの網羅性'},
+    '僅含已知金額': {'en': 'Known costs only', 'ja': '既知の金額のみ'},
+    '完整': {'en': 'Complete', 'ja': '完全'},
+    '回報不完整': {'en': 'Incomplete reporting', 'ja': '報告が不完全'},
+})
