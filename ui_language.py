@@ -9,6 +9,8 @@ def tr(text):
     return TRANSLATIONS.get(text, {}).get(_language, text)
 
 TRANSLATIONS = {
+    '（{0} 項計算中）': {'en': ' ({0} counting)', 'ja': '（{0} 件を計算中）'},
+    '路徑已變更，請先成功重新掃描後再操作。': {'en': 'The path has changed. Rescan successfully before continuing.', 'ja': 'パスが変更されています。再スキャンが成功してから操作してください。'},
     'ntfy 通知': {'en': 'ntfy notifications', 'ja': 'ntfy 通知'},
     '通知設定欄位必須是文字': {'en': 'Notification settings must be text', 'ja': '通知設定の欄は文字列で指定してください'},
     '通知背景程序無法啟動': {'en': 'Cannot start notification worker', 'ja': '通知のバックグラウンド処理を開始できません'},

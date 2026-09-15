@@ -264,6 +264,7 @@ class ComicSortingTests(unittest.TestCase):
             app = comic.FileAggregatorApp.__new__(comic.FileAggregatorApp)
             value = lambda path: type("Value", (), {"get": lambda self: str(path)})()
             app.base_path = value(root)
+            app.scan_data = None
             app.komga_path = value(root / "Komga")
 
             with mock.patch.object(comic.messagebox, "showwarning") as warning:
@@ -489,6 +490,7 @@ class ComicSortingTests(unittest.TestCase):
 
     def test_aggregate_requires_tree_selection(self):
         app = comic.FileAggregatorApp.__new__(comic.FileAggregatorApp)
+        app.scan_data = None
         app.folder_tree = type("Tree", (), {"selection": lambda self: ()})()
         with mock.patch.object(comic.messagebox, "showwarning") as warning:
             app.confirm_aggregate()

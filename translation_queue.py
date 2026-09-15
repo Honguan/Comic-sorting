@@ -34,6 +34,12 @@ class TranslationQueue:
         self.jobs = []
         self.active_jobs = ()
         self.events = queue.Queue()
+        self.count_cache = {}
+        self.count_results = queue.Queue()
+        self.counting = False
+        self.count_generation = 0
+        self.count_after = None
+        app.root.bind("<Destroy>", self.close_counts, add="+")
         self.stop = threading.Event()
         self.pause_requested = threading.Event()
         self.paused_at = None
@@ -458,7 +464,10 @@ class TranslationQueue:
             return tr("全部頁面")
         return tr("第 {0}–{1} 頁").format(job.start_page, job.end_page if job.end_page is not None else tr("最後"))
 
-    def render(self):
+    def render(self, refresh_counts=False):
+        if refresh_counts:
+            self.count_cache.clear()
+            self.count_generation += 1
         view = self.tree.yview()
         focus = self.tree.focus()
         selected = set(self.tree.selection())
@@ -468,14 +477,14 @@ class TranslationQueue:
                 open_groups[item] = self.tree.item(item, "open")
         self.tree.delete(*self.tree.get_children())
         self.pending_file_counts = {}
+        keys = {(j.path, j.start_page, j.end_page) for j in self.jobs}
+        self.count_cache = {key: value for key, value in self.count_cache.items() if key in keys}
         single_root = len({job.path.parent.parent for job in self.jobs}) == 1
         for index, job in enumerate(self.jobs, 1):
             item = str(id(job))
             if job.action == "translate" and job.status == "pending":
-                try:
-                    self.pending_file_counts[item] = len(job.select_pages(image_files(job.path)))
-                except (OSError, ValueError):
-                    self.pending_file_counts[item] = None
+                key = (job.path, job.start_page, job.end_page)
+                self.pending_file_counts[item] = self.count_cache.get(key)
             root = "path:" + str(job.path.parent.parent)
             series = "series:" + str(job.path.parent)
             if not self.tree.exists(root):
@@ -497,14 +506,60 @@ class TranslationQueue:
         if view:
             self.tree.yview_moveto(view[0])
         self.update_summary()
+        self.count_pages()
+
+    def count_pages(self):
+        if self.counting:
+            return
+        keys = {(j.path, j.start_page, j.end_page) for j in self.jobs
+                if j.action == "translate" and j.status == "pending"}
+        missing = keys.difference(self.count_cache)
+        if not missing:
+            return
+        self.counting = True
+        generation = self.count_generation
+        def work():
+            results = {}
+            for path, first, last in missing:
+                try:
+                    results[path, first, last] = len(Job(path, "translate", start_page=first, end_page=last).select_pages(image_files(path)))
+                except (OSError, ValueError, TypeError):
+                    results[path, first, last] = None
+            self.count_results.put((generation, results))
+        threading.Thread(target=work, daemon=True).start()
+        self.count_after = self.app.root.after(50, self.poll_counts)
+
+    def close_counts(self, event):
+        if event.widget is self.app.root and self.count_after is not None:
+            self.app.root.after_cancel(self.count_after)
+            self.count_after = None
+
+    def poll_counts(self):
+        self.count_after = None
+        try:
+            generation, results = self.count_results.get_nowait()
+        except queue.Empty:
+            self.count_after = self.app.root.after(50, self.poll_counts)
+            return
+        self.counting = False
+        if generation == self.count_generation:
+            self.count_cache.update(results)
+        self.pending_file_counts = {str(id(j)): self.count_cache.get((j.path, j.start_page, j.end_page))
+                                    for j in self.jobs if j.action == "translate" and j.status == "pending"}
+        self.update_summary()
+        self.count_pages()
 
     def update_summary(self):
         counts = [self.pending_file_counts.get(str(id(job))) for job in self.jobs
                   if job.action == "translate" and job.status == "pending"]
         files = tr("｜待翻譯檔案 {0} 張").format(f"{sum(count for count in counts if count is not None):,}")
         unknown = counts.count(None)
-        if unknown:
-            files += tr("（{0} 項無法計數）").format(unknown)
+        calculating = sum((j.path, j.start_page, j.end_page) not in self.count_cache for j in self.jobs
+                          if j.action == "translate" and j.status == "pending")
+        if calculating:
+            files += tr("（{0} 項計算中）").format(calculating)
+        if unknown > calculating:
+            files += tr("（{0} 項無法計數）").format(unknown - calculating)
         self.summary.set(tr("佇列 {0} 項｜等待 {1}｜完成 {2}｜需處理 {3}").format(
             len(self.jobs), sum(j.status == "pending" for j in self.jobs),
             sum(j.status in ("done", "done_warning") for j in self.jobs),
@@ -567,6 +622,8 @@ class TranslationQueue:
             raise ValueError(action)
         for path in paths:
             path = Path(path).resolve()
+            self.count_generation += 1
+            self.count_cache = {key: value for key, value in self.count_cache.items() if key[0] != path}
             existing = next((job for job in self.jobs if job.path == path and job.action == action), None)
             if existing:
                 existing.status, existing.error = "pending", ""
@@ -578,6 +635,8 @@ class TranslationQueue:
         self.app.save_settings()
 
     def add_selected(self):
+        if not self.app.source_is_current():
+            return
         paths = self.app.selected_chapters()
         if not paths:
             messagebox.showinfo(tr("主佇列"), tr("請先選擇父系列或章節"))
@@ -651,6 +710,7 @@ class TranslationQueue:
             for job in self.jobs:
                 if str(id(job)) in selected and job.status in ("failed", "cancelled", "blocked", "done_warning"):
                     job.status, job.error = "pending", ""
+                    self.count_cache.pop((job.path, job.start_page, job.end_page), None)
             self.changed()
 
     def move(self, direction):
@@ -765,22 +825,6 @@ class TranslationQueue:
             if exporting and not self.app.komga_path.get().strip():
                 error_tab = self.app.export_tab
                 raise ValueError(tr("請設定 Komga 輸出路徑"))
-            previous_failures = set()
-            for job in self.jobs:
-                if job.status in ("failed", "cancelled", "blocked"):
-                    previous_failures.add(job.path)
-                if job.status != "pending":
-                    continue
-                if job.path in previous_failures:
-                    raise ValueError(tr("請先重試此路徑的失敗工作：{0}").format(job.path))
-                if not job.path.is_dir():
-                    raise ValueError(f"{job.path}: {tr('漫畫路徑不存在')}")
-                if job.action == "translate":
-                    job.select_pages(image_files(job.path))
-                if job.should_export(self.export.get()):
-                    target = Path(self.app.komga_path.get()).resolve()
-                    if target.is_relative_to(job.path) or job.path.is_relative_to(target):
-                        raise ValueError(tr("匯出與漫畫路徑不可互相包含"))
             return True
         except (OSError, ValueError) as error:
             logger.exception("queue_validation_failed")
@@ -843,10 +887,25 @@ class TranslationQueue:
         self.stage.configure(value=0)
         self.stage.pack_forget()
         self.reset_bt_progress()
+        previous_failures, blocked_jobs = set(), set()
+        indices = {id(job): index for index, job in enumerate(self.active_jobs)}
+        for job in self.jobs:
+            if job.status in ("failed", "cancelled", "blocked"):
+                previous_failures.add(job.path)
+            elif job.status == "pending" and job.path in previous_failures:
+                blocked_jobs.add(indices[id(job)])
         options = (self.settings(), self.app.komga_path.get(), self.app.skip_unchanged.get())
         threading.Thread(target=run_jobs, args=(self.active_jobs, *options, self.stop, self.events.put),
-                         kwargs={'pause': self.pause_requested}, daemon=True).start()
+                         kwargs={'pause': self.pause_requested, 'checkpoint': self.checkpoint, 'blocked_jobs': blocked_jobs}, daemon=True).start()
         self.app.root.after(50, self.poll)
+
+    def checkpoint(self):
+        ready = threading.Event()
+        self.events.put(("checkpoint", ready))
+        while not ready.wait(.1):
+            if self.stop.is_set():
+                return False
+        return not self.stop.is_set()
 
     def poll(self):
         if self.running and self.started_at is not None:
@@ -858,7 +917,17 @@ class TranslationQueue:
                 event = self.events.get_nowait()
             except queue.Empty:
                 break
-            if event[0] == "status":
+            if event[0] == "checkpoint":
+                try:
+                    if not self.app.save_settings() or not self.save_history():
+                        self.stop.set()
+                    changed = False
+                except Exception:
+                    self.stop.set()
+                    raise
+                finally:
+                    event[1].set()
+            elif event[0] == "status":
                 job = self.active_jobs[event[1]]
                 job.status, job.error = event[2], event[3]
                 changed = True

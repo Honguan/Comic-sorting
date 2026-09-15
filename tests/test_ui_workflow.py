@@ -36,6 +36,72 @@ class WorkflowTests(unittest.TestCase):
         self.temp.cleanup()
         set_language("zh-TW")
 
+    def wait_counts(self, q):
+        deadline = time.monotonic() + 3
+        while q.counting and time.monotonic() < deadline:
+            self.root.update()
+            time.sleep(.01)
+        self.assertFalse(q.counting)
+
+    def test_failed_scan_restores_visible_source_and_blocks_edited_path(self):
+        chapter = self.chapter('Chapter 1')
+        base = chapter.parent.parent
+        self.app.base_path.set(str(base))
+        self.app.apply_scan_data(base, self.app.scan_folder_data(base))
+        other = self.folder / 'other'
+        other.mkdir()
+        self.app.base_path.set(str(other))
+        with mock.patch.object(comic.messagebox, 'showwarning'), mock.patch.object(comic.threading, 'Thread') as worker:
+            self.app.confirm_cleanup()
+            worker.assert_not_called()
+        self.app.scan_events.put(('error', PermissionError('test')))
+        with mock.patch.object(comic.messagebox, 'showerror'):
+            self.app.poll_scan_events()
+        self.assertEqual(self.app.base_path.get(), str(base))
+        self.assertEqual(self.app.scan_data[0], base)
+
+    def test_queue_checkpoint_failure_never_starts_second_job(self):
+        from comic_core import load_json
+        q = self.app.translation_queue
+        for fail_at in ('settings', 'history'):
+            q.jobs = [Job(self.chapter(f'Checkpoint {fail_at} 1'), 'cleanup'), Job(self.chapter(f'Checkpoint {fail_at} 2'), 'cleanup')]
+            q.render()
+            save_settings, save_history = self.app.save_settings, q.save_history
+            def settings():
+                return False if fail_at == 'settings' and q.jobs[0].status == 'done' else save_settings()
+            def history(*args, **kwargs):
+                return False if fail_at == 'history' and q.jobs[0].status == 'done' else save_history(*args, **kwargs)
+            with mock.patch.object(q, 'confirm_cleanup', return_value=True), mock.patch.object(q, 'notify_job'), mock.patch.object(q, 'notify_run'), \
+                    mock.patch.object(self.app, 'save_settings', side_effect=settings), mock.patch.object(q, 'save_history', side_effect=history), \
+                    mock.patch('queue_worker.clear_work_folders', return_value=(0, 0, [])) as clean:
+                q.start()
+                deadline = time.monotonic() + 4
+                while q.running and time.monotonic() < deadline:
+                    self.root.update()
+                    time.sleep(.01)
+                self.assertFalse(q.running)
+                self.assertTrue(q.stop.is_set())
+                self.assertEqual(clean.call_count, 1)
+                self.assertEqual([j.status for j in q.jobs], ['done', 'pending'])
+            self.assertTrue(load_json(self.settings, {})['bt_jobs'])
+
+    def test_queue_count_cache_skips_disk_on_move_and_refreshes_on_rescan(self):
+        q = self.app.translation_queue
+        paths = [self.chapter('Chapter 1'), self.chapter('Chapter 2')]
+        for path in paths:
+            (path / '1.png').touch()
+        q.add_paths(paths)
+        self.wait_counts(q)
+        q.tree.selection_set(str(id(q.jobs[1])))
+        with mock.patch('translation_queue.image_files', side_effect=AssertionError('must not read disk')):
+            q.move(-1)
+            q.render()
+            self.assertFalse(q.counting)
+        (paths[0] / '2.png').touch()
+        q.render(refresh_counts=True)
+        self.wait_counts(q)
+        self.assertEqual(sum(q.pending_file_counts.values()), 3)
+
     def chapter(self, name):
         path = self.folder / "Comics" / "Series" / name
         (path / "result").mkdir(parents=True)
@@ -940,8 +1006,13 @@ class WorkflowTests(unittest.TestCase):
         q = self.app.translation_queue
         q.jobs = [Job(chapter, "export", "cancelled"), Job(chapter, "cleanup")]
         with mock.patch.object(comic.messagebox, "showerror") as error:
-            self.assertFalse(q.validate())
-        error.assert_called_once()
+            self.assertTrue(q.validate())
+        error.assert_not_called()
+        with mock.patch("translation_queue.threading.Thread") as worker, mock.patch.object(q, "confirm_cleanup", return_value=True):
+            q.start()
+        self.assertEqual(worker.call_args.kwargs["kwargs"]["blocked_jobs"], {0})
+        q.running = False
+        self.app.set_manga_busy(False)
 
     def test_page_range_edits_only_one_job_and_survives_restart(self):
         from comic_core import load_json
@@ -952,6 +1023,7 @@ class WorkflowTests(unittest.TestCase):
                 (chapter / f"{index}.png").touch()
         q = self.app.translation_queue
         q.add_paths([first, second], "translate")
+        self.wait_counts(q)
         self.assertIn("待翻譯檔案 10 張", q.summary.get())
         q.jobs[0].status = "done"
         q.tree.selection_set(str(id(q.jobs[0])))
@@ -970,12 +1042,14 @@ class WorkflowTests(unittest.TestCase):
         next(b for b in buttons if b["text"] == tr("套用")).invoke()
         self.assertEqual((q.jobs[0].start_page, q.jobs[0].end_page, q.jobs[0].status), (2, 4, "pending"))
         self.assertEqual((q.jobs[1].start_page, q.jobs[1].end_page), (1, None))
+        self.wait_counts(q)
         self.assertIn("待翻譯檔案 8 張", q.summary.get())
         self.assertEqual([j.range_export for j in q.jobs], [True, False])
         self.assertIn("2", q.tree.set(str(id(q.jobs[0])), "pages"))
         self.assertEqual(load_json(self.settings, {})["bt_jobs"][0]["end_page"], 4)
         another = tk.Toplevel(self.root)
         restored = comic.FileAggregatorApp(another).translation_queue
+        self.wait_counts(restored)
         self.assertIn("待翻譯檔案 8 張", restored.summary.get())
         self.assertEqual([(j.start_page, j.end_page) for j in restored.jobs], [(2, 4), (1, None)])
         self.assertEqual([j.range_export for j in restored.jobs], [True, False])
@@ -995,6 +1069,7 @@ class WorkflowTests(unittest.TestCase):
         next(b for b in buttons if b["text"] == tr("套用")).invoke()
         self.assertEqual((q.jobs[0].start_page, q.jobs[0].end_page), (1, None))
         self.assertFalse(q.jobs[0].range_export)
+        self.wait_counts(q)
         self.assertIn("待翻譯檔案 10 張", q.summary.get())
 
     def test_pending_file_total_tracks_jobs_retries_removal_and_rescan(self):
@@ -1006,29 +1081,36 @@ class WorkflowTests(unittest.TestCase):
         q = self.app.translation_queue
         q.add_paths([first, second], "translate")
         q.add_paths([first], "export")
+        self.wait_counts(q)
         self.assertIn("待翻譯檔案 5 張", q.summary.get())
         q.active_jobs = tuple(q.jobs)
         q.events.put(("status", 0, "running", ""))
         with mock.patch("translation_queue.image_files", side_effect=AssertionError("status must not rescan")):
             q.poll()
+        self.wait_counts(q)
         self.assertIn("待翻譯檔案 2 張", q.summary.get())
         q.events.put(("status", 0, "failed", "synthetic failure"))
         q.poll()
         q.tree.selection_set(str(id(q.jobs[0])))
         q.retry()
+        self.wait_counts(q)
         self.assertIn("待翻譯檔案 5 張", q.summary.get())
         q.tree.selection_set(str(id(q.jobs[1])))
         q.remove()
+        self.wait_counts(q)
         self.assertIn("待翻譯檔案 3 張", q.summary.get())
         q.add_paths([self.folder / "missing"], "translate")
+        self.wait_counts(q)
         self.assertIn("待翻譯檔案 3 張（1 項無法計數）", q.summary.get())
         with mock.patch("translation_queue.image_files", side_effect=PermissionError("synthetic denied")):
-            q.render()
+            q.render(refresh_counts=True)
+            self.wait_counts(q)
         self.assertIn("2 項無法計數", q.summary.get())
         (first / "4.png").touch()
         base = self.folder / "Comics"
         self.app.scan_events.put(("done", base, self.app.scan_folder_data(base)))
         self.app.poll_scan_events()
+        self.wait_counts(q)
         self.assertIn("待翻譯檔案 4 張（1 項無法計數）", q.summary.get())
 
     def test_range_export_controls_output_validation_and_legacy_jobs_default_off(self):
@@ -1046,7 +1128,7 @@ class WorkflowTests(unittest.TestCase):
             self.assertTrue(q.validate())
             error.assert_not_called()
             q.jobs[0].range_export = True
-            self.assertFalse(q.validate())  # Enabled range export still rejects overlapping paths.
+            self.assertTrue(q.validate())  # The worker rejects this job, without blocking other paths.
             q.export.set(False)
             q.app.komga_path.set("")
             self.assertFalse(q.validate())  # Per-job opt-in requires an output even when global export is off.

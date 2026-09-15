@@ -128,13 +128,40 @@ def run_translation(command, root, env, stop, progress, log_context="", usage=No
                                text=True, encoding="utf-8", errors="replace",
                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     logger.info("[%s] translator_pid=%s", log_context, process.pid)
+    process_job = None
+    if os.name == "nt":
+        import win32api
+        import win32con
+        import win32job
+        try:
+            process_job = win32job.CreateJobObject(None, "")
+            limits = win32job.QueryInformationJobObject(process_job, win32job.JobObjectExtendedLimitInformation)
+            limits['BasicLimitInformation']['LimitFlags'] |= win32job.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+            win32job.SetInformationJobObject(process_job, win32job.JobObjectExtendedLimitInformation, limits)
+            handle = win32api.OpenProcess(win32con.PROCESS_SET_QUOTA | win32con.PROCESS_TERMINATE, False, process.pid)
+            try:
+                win32job.AssignProcessToJobObject(process_job, handle)
+            finally:
+                handle.Close()
+        except Exception:
+            process.kill()
+            process.wait()
+            process.stdin.close()
+            process.stdout.close()
+            if process_job is not None:
+                process_job.Close()
+            raise
     finished = threading.Event()
+    fatal = threading.Event()
 
     def cancel():
-        while not finished.wait(.2) and process.poll() is None:
-            if stop.is_set():
+        while not finished.wait(.2):
+            if stop.is_set() or fatal.is_set() or process.poll() is not None:
                 try:
-                    process.terminate()
+                    if process_job is not None:
+                        win32job.TerminateJobObject(process_job, 1)
+                    elif process.poll() is None:
+                        process.terminate()
                     process.wait(timeout=5)
                 except subprocess.TimeoutExpired:
                     process.kill()
@@ -169,6 +196,8 @@ def run_translation(command, root, env, stop, progress, log_context="", usage=No
                   or re.search(r"module_manager:.* - Image translation pipeline stopped", diagnostic)):
                 fatal_count += 1
                 failures.append(line)
+                if "Image translation pipeline stopped" in diagnostic:
+                    fatal.set()
             stage_progress = parse_bt_progress(line)
             if stage_progress:
                 stages[stage_progress[0]] = stage_progress[1]
@@ -186,6 +215,8 @@ def run_translation(command, root, env, stop, progress, log_context="", usage=No
                     log_context, code, completed, fatal_count, retries, stop.is_set())
         if stop.is_set():
             raise RuntimeError(tr("已停止；未執行此項目的後續動作"))
+        if fatal.is_set():
+            raise RuntimeError("\n".join(failures) + tr("；紀錄：{0}").format(log_path()))
         if code or not completed or failures or any(value < 100 for value in stages.values()):
             finished_with_anomalies = completed and stages and all(value == 100 for value in stages.values())
             detail = (tr("流程已完成但發現異常（exit={0}）") if finished_with_anomalies else
@@ -217,9 +248,11 @@ def run_translation(command, root, env, stop, progress, log_context="", usage=No
                 pass
             process.stdout.close()
             watcher.join()
+            if process_job is not None:
+                process_job.Close()
 
 
-def run_jobs(jobs, settings, output, skip, stop, emit, *, pause=None):
+def run_jobs(jobs, settings, output, skip, stop, emit, *, pause=None, checkpoint=None, blocked_jobs=()):
     """Run a pending-job snapshot; only the event consumer mutates Job state."""
     run_started = time.monotonic()
     paused_seconds = 0
@@ -250,12 +283,18 @@ def run_jobs(jobs, settings, output, skip, stop, emit, *, pause=None):
             path, action = Path(job.path).resolve(), job.action
             job_id = f"{run_id}/{index + 1}"
             logger.info("[%s] job_start action=%s path=%s", job_id, action, path)
-            if path in failed_paths:
+            if path in failed_paths or index in blocked_jobs:
+                failed_paths.add(path)
                 logger.warning("[%s] job_blocked predecessor_failed", job_id)
                 emit(("status", index, "blocked", tr("此路徑前置工作失敗，跳過後續動作")))
                 emit(("total", index + 1))
+                if checkpoint is not None and not checkpoint():
+                    break
                 continue
             emit(("status", index, "running", ""))
+            if checkpoint is not None and not checkpoint():
+                emit(("status", index, "cancelled", tr("已停止；未執行此項目的後續動作")))
+                break
             job_started = time.monotonic()
             job_timestamp = datetime.now().astimezone().isoformat(timespec='seconds')
             try:
@@ -266,6 +305,10 @@ def run_jobs(jobs, settings, output, skip, stop, emit, *, pause=None):
                     raise ValueError(tr("不支援的佇列動作：{0}").format(action))
                 if not path.is_dir():
                     raise ValueError(tr("漫畫路徑不存在"))
+                if job.should_export(settings.get("bt_export", False)) and str(output).strip():
+                    target = Path(output).resolve()
+                    if target.is_relative_to(path) or path.is_relative_to(target):
+                        raise ValueError(tr("匯出與漫畫路徑不可互相包含"))
                 if action == "translate":
                     sources = image_files(path)
                     if not sources:
@@ -340,6 +383,8 @@ def run_jobs(jobs, settings, output, skip, stop, emit, *, pause=None):
             emit(("job_time", index, job_timestamp, datetime.now().astimezone().isoformat(timespec='seconds'),
                   time.monotonic() - job_started))
             emit(("total", index + 1))
+            if checkpoint is not None and not checkpoint():
+                break
     finally:
         logger.info("[%s] queue_end stopped=%s failed_paths=%s", run_id, stop.is_set(), len(failed_paths))
         emit(("run_time", run_timestamp, datetime.now().astimezone().isoformat(timespec='seconds'),

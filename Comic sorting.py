@@ -367,6 +367,12 @@ class FileAggregatorApp:
         threading.Thread(target=self.scan_worker, args=(base,), daemon=True).start()
         self.root.after(50, self.poll_scan_events)
 
+    def source_is_current(self):
+        if self.scan_data and self.base_path.get().strip() and Path(self.base_path.get()).resolve() != self.scan_data[0]:
+            messagebox.showwarning(tr("警告"), tr("路徑已變更，請先成功重新掃描後再操作。"), parent=self.root)
+            return False
+        return True
+
     def set_manga_busy(self, busy):
         self.manga_busy = busy
         state = "disabled" if busy else "normal"
@@ -419,12 +425,15 @@ class FileAggregatorApp:
         self.hide_scan_progress()
         self.set_manga_busy(False)
         if event[0] == "error":
+            if self.scan_data:
+                self.base_path.set(str(self.scan_data[0]))
             self.scan_status_text.set(tr("掃描失敗"))
             messagebox.showerror(tr("掃描失敗"), str(event[1]))
             return
         _, base, data = event
+        self.base_path.set(str(base))
         self.apply_scan_data(base, data)
-        self.translation_queue.render()
+        self.translation_queue.render(refresh_counts=True)
 
     @staticmethod
     def scan_folder_data(base):
@@ -580,6 +589,8 @@ class FileAggregatorApp:
         self.on_tree_select()
 
     def confirm_delete_folder(self, kind, path, base):
+        if not self.source_is_current():
+            return
         if (self.manga_busy or self.translation_queue.running or path == base
                 or not self.scan_data or self.scan_data[0] != base):
             return
@@ -633,6 +644,8 @@ class FileAggregatorApp:
             return
         item = self.tree_items.get(self.folder_tree.identify_row(event.y))
         if item and item[0] in FOLDER_KINDS:
+            if not self.source_is_current():
+                return "break"
             self.translation_queue.add_paths([item[1]])
             return "break"
 
@@ -724,6 +737,8 @@ class FileAggregatorApp:
 
     def confirm_aggregate(self, translate_after=False):
         if getattr(self, "manga_busy", False):
+            return
+        if not self.source_is_current():
             return
         selected = self.selected_tree_item()
         if not selected:
@@ -909,6 +924,8 @@ class FileAggregatorApp:
     def start_export(self, chapters):
         if getattr(self, "manga_busy", False):
             return
+        if not self.source_is_current():
+            return
         source_root = Path(self.base_path.get())
         output_root = Path(self.komga_path.get())
         if not source_root.is_dir() or not self.komga_path.get().strip():
@@ -988,6 +1005,8 @@ class FileAggregatorApp:
     def confirm_cleanup(self):
         if self.manga_busy:
             return
+        if not self.source_is_current():
+            return
         value = self.base_path.get().strip()
         root = Path(value)
         if not value or not root.is_dir():
@@ -995,7 +1014,7 @@ class FileAggregatorApp:
             return
         if not messagebox.askyesno(
                 tr("確認清理"),
-                tr("將清空目前漫畫路徑下所有 mask 與 inpainted 資料夾內容。\n資料夾本身會保留，此操作無法復原。確定繼續嗎？")):
+                tr("將清空目前漫畫路徑下所有 mask 與 inpainted 資料夾內容。\n資料夾本身會保留，此操作無法復原。確定繼續嗎？") + "\n\n" + str(root.resolve())):
             return
         self.set_manga_busy(True)
         self.show_export_progress("indeterminate")

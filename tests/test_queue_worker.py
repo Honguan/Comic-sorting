@@ -12,6 +12,36 @@ from queue_worker import BT_STAGES, Job, parse_bt_progress, run_jobs, run_transl
 
 
 class QueueWorkerTests(unittest.TestCase):
+    def test_pipeline_stop_terminates_process_without_user_stop(self):
+        import time
+        stop = threading.Event()
+        started = time.monotonic()
+        script = "import time; print('[INFO] module_manager:run:1 - Image translation pipeline stopped.', flush=True); time.sleep(20)"
+        with self.assertRaisesRegex(RuntimeError, 'pipeline stopped'):
+            run_translation([sys.executable, '-u', '-c', script], self.root, None, stop, lambda *args: None)
+        self.assertFalse(stop.is_set())
+        self.assertLess(time.monotonic() - started, 5)
+
+    @unittest.skipUnless(sys.platform == 'win32', 'Windows process tree')
+    def test_pipeline_stop_closes_descendant_stdout_pipe(self):
+        import time
+        script = ("import subprocess,sys,time; time.sleep(.1); "
+                  "subprocess.Popen([sys.executable,'-c','import time; time.sleep(15)']); "
+                  "print('[INFO] module_manager:run:1 - Image translation pipeline stopped.',flush=True); time.sleep(15)")
+        started = time.monotonic()
+        with self.assertRaisesRegex(RuntimeError, 'pipeline stopped'):
+            run_translation([sys.executable, '-u', '-c', script], self.root, None, threading.Event(), lambda *args: None)
+        self.assertLess(time.monotonic() - started, 5)
+
+    def test_missing_job_fails_and_other_path_continues(self):
+        events = []
+        chapter = self.chapter()
+        with mock.patch('queue_worker.clear_work_folders', return_value=(0, 0, [])) as cleanup:
+            run_jobs([Job(self.root / 'missing', 'cleanup'), Job(chapter, 'cleanup')], {}, '', True,
+                     threading.Event(), events.append)
+        self.assertEqual([event[2] for event in events if event[0] == 'status'], ['running', 'failed', 'running', 'done'])
+        cleanup.assert_called_once_with(chapter)
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)

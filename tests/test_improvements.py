@@ -365,8 +365,7 @@ class UIImprovementsTests(unittest.TestCase):
             self.assertFalse(q.validate())
             self.assertEqual(self.app.work_tabs.select(), str(self.app.export_tab))
             self.app.komga_path.set(str(self.folder / "Komga"))
-            self.assertFalse(q.validate())
-            self.assertEqual(self.app.work_tabs.select(), str(self.app.queue_tab))
+            self.assertTrue(q.validate())  # Missing folders fail per job inside the worker.
             q.jobs[0].action = "translate"
             self.assertFalse(q.validate())
             self.assertEqual(self.app.work_tabs.select(), str(self.app.settings_tab))
