@@ -184,14 +184,44 @@ class TranslationQueue:
         frame = ttk.Frame(parent)
         frame.pack(fill="x", pady=(2, 0))
         content = ttk.Frame(frame, padding=(6, 0))
+        borrowed_height = 0
 
         def toggle():
-            if content.winfo_manager():
+            nonlocal borrowed_height
+            panes = self.app.panes
+            layout_ready = panes.winfo_ismapped() and panes.sashpos(0) > 0
+            if layout_ready:
+                panes.update_idletasks()
+            sash = panes.sashpos(0)
+            old_height = frame.winfo_reqheight()
+            collapsing = bool(content.winfo_manager())
+            if collapsing:
                 content.pack_forget()
                 button.configure(text=f"▶ {title}")
             else:
                 content.pack(fill="x")
                 button.configure(text=f"▼ {title}")
+            if not layout_ready:
+                # Do not force an intermediate layout while the window is being built.
+                borrowed_height = 0
+                return
+            panes.update_idletasks()
+            row_height = int(ttk.Style(self.tree).lookup('Treeview', 'rowheight') or 20)
+            if collapsing:
+                # Return only space this section actually borrowed, including when
+                # sections close out of order or the user has moved the divider.
+                tabs = self.app.work_tabs
+                minimum_queue = (self.app.queue_tab.winfo_reqheight()
+                                 - max(0, int(self.tree['height']) - 1) * row_height
+                                 + tabs.winfo_height() - self.app.queue_tab.winfo_height())
+                panes.sashpos(0, sash + min(borrowed_height, max(0, tabs.winfo_height() - minimum_queue)))
+                borrowed_height = 0
+            else:
+                manga = panes.nametowidget(panes.panes()[0])
+                minimum_manga = manga.winfo_reqheight() - self.app.folder_tree.winfo_reqheight()
+                growth = max(0, frame.winfo_reqheight() - old_height)
+                target = sash - min(growth, max(0, sash - minimum_manga))
+                borrowed_height = sash - panes.sashpos(0, target)
 
         header = ttk.Frame(frame)
         header.pack(fill="x")

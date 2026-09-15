@@ -928,6 +928,66 @@ class WorkflowTests(unittest.TestCase):
         self.root.update()
         self.assertEqual((self.root.winfo_width(), self.root.winfo_height()), (820, 640))
 
+    def test_expanded_queue_sections_borrow_manga_space_and_restore_it(self):
+        self.root.geometry('980x900')
+        self.root.deiconify()
+        self.root.update()
+        q, panes = self.app.translation_queue, self.app.panes
+        manga = panes.nametowidget(panes.panes()[0])
+        panes.sashpos(0, 450)
+        self.root.update()
+        original_sash = panes.sashpos(0)
+        original_tree = q.tree.winfo_height()
+        original_manga = manga.winfo_height()
+        for _ in range(2):
+            q.bt_toggle.invoke()
+            self.root.update()
+            self.assertLess(manga.winfo_height(), original_manga)
+            self.assertAlmostEqual(q.tree.winfo_height(), original_tree, delta=1)
+            progress_sash = panes.sashpos(0)
+            q.usage_toggle.invoke()
+            self.root.update()
+            self.assertLess(panes.sashpos(0), progress_sash)
+            self.assertAlmostEqual(q.tree.winfo_height(), original_tree, delta=1)
+            # Close in a different order from opening; no cumulative sash drift.
+            q.bt_toggle.invoke()
+            self.root.update()
+            self.assertAlmostEqual(q.tree.winfo_height(), original_tree, delta=1)
+            q.usage_toggle.invoke()
+            self.root.update()
+            self.assertEqual(panes.sashpos(0), original_sash)
+            self.assertAlmostEqual(q.tree.winfo_height(), original_tree, delta=1)
+        # On a small desktop, the manga controls must remain accessible.
+        self.root.geometry('980x720')
+        self.root.update()
+        panes.sashpos(0, 335)
+        self.root.update()
+        q.bt_toggle.invoke()
+        q.usage_toggle.invoke()
+        self.root.update()
+        self.assertTrue(q.tree.winfo_ismapped())
+        self.assertTrue(self.app.aggregate_button.winfo_ismapped())
+        self.assertLessEqual(self.app.aggregate_button.winfo_rooty() + self.app.aggregate_button.winfo_reqheight(),
+                             manga.winfo_rooty() + manga.winfo_height())
+        q.usage_toggle.invoke()
+        q.bt_toggle.invoke()
+        self.root.update()
+        self.assertEqual(panes.sashpos(0), 335)
+        # A user's divider adjustment while expanded remains after collapsing.
+        self.root.geometry('980x900')
+        self.root.update()
+        panes.sashpos(0, 450)
+        self.root.update()
+        q.bt_toggle.invoke()
+        self.root.update()
+        panes.sashpos(0, panes.sashpos(0) + 15)
+        self.root.update()
+        adjusted_tree = q.tree.winfo_height()
+        q.bt_toggle.invoke()
+        self.root.update()
+        self.assertEqual(panes.sashpos(0), 465)
+        self.assertAlmostEqual(q.tree.winfo_height(), adjusted_tree, delta=1)
+
     def test_queue_sections_collapse_independently_and_keep_receiving_updates(self):
         from queue_worker import parse_bt_usage
         from test_bt_usage import usage_line
