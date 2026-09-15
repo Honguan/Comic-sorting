@@ -63,6 +63,72 @@ class WorkflowTests(unittest.TestCase):
         self.app.folder_tree.selection_set(parent)
         self.assertEqual(self.app.selected_chapters(), [first])
 
+    def test_parent_menu_selects_all_chapters_including_filtered_then_enqueues(self):
+        chapters = [self.chapter(f'Chapter {n}') for n in (1, 2, 10)]
+        base = self.folder / 'Comics'
+        other = base / 'Other' / 'Chapter 1'
+        other.mkdir(parents=True)
+        (other / '1.png').write_bytes(b'image')
+        self.app.apply_scan_data(base, self.app.scan_folder_data(base))
+        tree, q, menu = self.app.folder_tree, self.app.translation_queue, self.app.folder_context_menu
+        self.root.deiconify()
+        self.root.update()
+
+        def right_click(path):
+            item = next(key for key, (_, value) in self.app.tree_items.items() if value == path)
+            tree.see(item)
+            self.root.update()
+            x, y, _, height = tree.bbox(item)
+            with mock.patch.object(menu, 'tk_popup') as popup:
+                tree.event_generate('<Button-3>', x=x + 50, y=y + height // 2)
+                popup.assert_called_once()
+            return item
+
+        parent = right_click(chapters[0].parent)
+        self.assertFalse(tree.item(parent, 'open'))
+        menu.invoke(1)
+        self.assertTrue(tree.item(parent, 'open'))
+        self.assertEqual(tree.selection(), tree.get_children(parent))
+        self.assertEqual(self.app.selected_chapters(), chapters)
+        self.assertEqual(self.app.selection_text.get(), '已選取 3 個章節')
+        tree.selection_remove(tree.get_children(parent)[1])
+        self.assertEqual(self.app.selected_chapters(), [chapters[0], chapters[2]])
+
+        self.app.search_text.set('Chapter 2')
+        self.root.after_cancel(self.app.search_after)
+        self.app.apply_filter()
+        parent = right_click(chapters[0].parent)
+        self.assertEqual(len(tree.get_children(parent)), 1)
+        self.assertIn('清除搜尋', menu.entrycget(1, 'label'))
+        menu.invoke(1)
+        self.assertEqual(self.app.search_text.get(), '')
+        self.assertIsNone(self.app.search_after)
+        self.assertEqual(self.app.selected_chapters(), chapters)
+        self.assertEqual(len(tree.selection()), 3)
+        self.assertTrue(all(self.app.tree_items[item][0] == 'chapter' for item in tree.selection()))
+        self.assertEqual(self.app.start_entry.get(), '1')
+        self.assertEqual(self.app.end_entry.get(), '3')
+        with mock.patch.object(q, 'start') as start:
+            q.add_selected()
+            q.add_selected()
+            start.assert_not_called()
+        self.assertEqual([job.path for job in q.jobs], chapters)
+        self.assertTrue(all(job.status == 'pending' for job in q.jobs))
+        right_click(chapters[0])
+        self.assertEqual(menu.entrycget(1, 'state'), 'disabled')
+        for running, busy in ((True, False), (False, True)):
+            q.running, self.app.manga_busy = running, busy
+            parent = right_click(chapters[0].parent)
+            self.assertEqual(menu.entrycget(1, 'state'), 'disabled')
+            self.app.select_all_chapters(chapters[0].parent, base)
+            self.assertEqual(tree.selection(), (parent,))
+        q.running = self.app.manga_busy = False
+        self.app.apply_scan_data(chapters[0].parent, self.app.scan_folder_data(chapters[0].parent))
+        right_click(chapters[0].parent)
+        self.assertEqual(menu.entrycget(0, 'state'), 'disabled')  # Root cannot be deleted, but can select chapters.
+        menu.invoke(1)
+        self.assertEqual(self.app.selected_chapters(), chapters)
+
     def test_queue_persists_orders_retries_and_skips_completed(self):
         first, second = self.chapter("Chapter 1"), self.chapter("Chapter 2")
         q = self.app.translation_queue

@@ -133,6 +133,8 @@ TRANSLATIONS = {
     '完成後開啟資料夾': {'en': 'Open folder when finished', 'ja': '完了後にフォルダーを開く'},
     '刪除章節資料夾…': {'en': 'Delete chapter folder…', 'ja': '章フォルダーを削除…'},
     '刪除系列資料夾…': {'en': 'Delete series folder…', 'ja': 'シリーズフォルダーを削除…'},
+    '全選所有章節': {'en': 'Select all chapters', 'ja': 'すべての章を選択'},
+    '全選所有章節（清除搜尋）': {'en': 'Select all chapters (clear search)', 'ja': 'すべての章を選択（検索を解除）'},
     '確認移至資源回收筒': {'en': 'Confirm move to Recycle Bin', 'ja': 'ごみ箱への移動を確認'},
     '整個系列及其下所有章節（包含搜尋未顯示的章節）': {'en': 'The entire series and all its chapters (including chapters hidden by search)', 'ja': 'シリーズ全体とすべての章（検索で非表示の章も含む）'},
     '此章節及其所有檔案': {'en': 'This chapter and all its files', 'ja': 'この章とその中のすべてのファイル'},

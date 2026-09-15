@@ -144,6 +144,7 @@ class FileAggregatorApp:
         self.folder_tree.bind("<Double-1>", self.add_chapter_to_queue)
         self.folder_context_menu = tk.Menu(self.folder_tree, tearoff=False)
         self.folder_context_menu.add_command(label=tr("刪除章節資料夾…"))
+        self.folder_context_menu.add_command(label=tr("全選所有章節"))
         self.folder_tree.bind("<Button-3>", self.show_folder_context_menu)
 
         scan_row = ttk.Frame(manga_footer)
@@ -532,10 +533,33 @@ class FileAggregatorApp:
             0, label=tr("刪除系列資料夾…") if kind == "series" else tr("刪除章節資料夾…"),
             state="disabled" if disabled else "normal",
             command=lambda: self.confirm_delete_folder(kind, path, base))
+        self.folder_context_menu.entryconfigure(
+            1, label=tr("全選所有章節（清除搜尋）") if self.search_text.get().strip() else tr("全選所有章節"),
+            state="normal" if kind == "series" and not self.manga_busy and not self.translation_queue.running else "disabled",
+            command=lambda: self.select_all_chapters(path, base))
         try:
             self.folder_context_menu.tk_popup(event.x_root, event.y_root)
         finally:
             self.folder_context_menu.grab_release()
+
+    def select_all_chapters(self, series, base):
+        if (self.manga_busy or self.translation_queue.running or not self.scan_data
+                or self.scan_data[0] != base or series not in self.series_groups):
+            return
+        if self.search_text.get().strip():
+            self.search_text.set("")
+            self.root.after_cancel(self.search_after)
+            self.apply_filter()
+        parent = next((item for item in self.folder_tree.get_children()
+                       if self.tree_items[item] == ("series", series)), None)
+        if parent is None:
+            return
+        children = self.folder_tree.get_children(parent)
+        self.folder_tree.item(parent, open=True)
+        self.folder_tree.selection_set(children)
+        self.folder_tree.focus(parent)
+        self.folder_tree.see(parent)
+        self.on_tree_select()
 
     def confirm_delete_folder(self, kind, path, base):
         if (self.manga_busy or self.translation_queue.running or path == base
