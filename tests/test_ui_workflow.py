@@ -37,6 +37,23 @@ class WorkflowTests(unittest.TestCase):
         (path / "result/1.png").write_bytes(b"image")
         return path
 
+    def test_manga_columns_fit_and_selection_shows_complete_details(self):
+        from types import SimpleNamespace
+        chapter = self.chapter("Chapter 1-50")
+        base = self.folder / "Comics"
+        self.app.apply_scan_data(base, self.app.scan_folder_data(base))
+        tree = self.app.folder_tree
+        for width in (760, 1200, 1600):
+            self.app.fit_folder_columns(SimpleNamespace(width=width))
+            self.assertLessEqual(sum(tree.column(c, "width") for c in ("#0", *tree['columns'])), width)
+        parent = tree.get_children()[0]
+        leaf = tree.get_children(parent)[0]
+        tree.selection_set(leaf)
+        self.app.on_tree_select()
+        self.assertIn(str(chapter), self.app.folder_details.get())
+        self.assertIn(tree.set(leaf, 'updated'), self.app.folder_details.get())
+        self.assertIn(tree.set(leaf, 'status'), self.app.folder_details.get())
+
     def test_queue_columns_fit_window_and_selected_details_keep_full_path(self):
         from types import SimpleNamespace
         q = self.app.translation_queue

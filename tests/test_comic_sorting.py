@@ -511,6 +511,7 @@ class ComicSortingTests(unittest.TestCase):
         app = comic.FileAggregatorApp.__new__(comic.FileAggregatorApp)
         app.manga_busy = False
         app.selection_text = mock.Mock()
+        app.folder_details = mock.Mock()
         app.start_entry, app.end_entry = Entry(), Entry()
         app.series_groups = {series: chapters}
         app.tree_items = {"series": ("series", series), **{
@@ -518,10 +519,12 @@ class ComicSortingTests(unittest.TestCase):
 
         app.folder_tree = type("Tree", (), {"selection": lambda self: ("series",),
                                            "get_children": lambda self, item: ("1", "2", "3")})()
+        app.folder_tree.item = lambda *_: ()
         app.on_tree_select()
         self.assertEqual((app.start_entry.value, app.end_entry.value), ("1", "3"))
 
         app.folder_tree = type("Tree", (), {"selection": lambda self: ("2",)})()
+        app.folder_tree.item = lambda *_: ()
         app.on_tree_select()
         self.assertEqual((app.start_entry.value, app.end_entry.value), ("2", "2"))
 
@@ -561,6 +564,7 @@ class ComicSortingTests(unittest.TestCase):
             app.series_sort, app.series_sort_descending = "updated", True
             app.manga_busy = False
             app.selection_text = mock.Mock()
+            app.folder_details = mock.Mock()
             app.start_entry, app.end_entry = mock.Mock(), mock.Mock()
             app.tree_items = {}
             app.search_text = type("Value", (), {"get": lambda self: ""})()

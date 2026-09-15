@@ -7,7 +7,7 @@ from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, ttk, font as tkfont
 from translation_queue import TranslationQueue
 from app_logging import configure_logging, logger, log_path, redact
 from ui_language import LANGUAGES, set_language, tr
@@ -141,6 +141,10 @@ class FileAggregatorApp:
         horizontal.grid(row=1, column=0, sticky="ew")
         list_frame.rowconfigure(0, weight=1)
         list_frame.columnconfigure(0, weight=1)
+        self.folder_details = tk.StringVar()
+        self.folder_details_label = ttk.Label(list_frame, textvariable=self.folder_details, anchor="w", justify="left", wraplength=700)
+        self.folder_details_label.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+        self.folder_tree.bind("<Configure>", self.fit_folder_columns)
         self.folder_tree.bind("<<TreeviewSelect>>", self.on_tree_select)
         self.folder_tree.bind("<Double-1>", self.add_chapter_to_queue)
         self.folder_context_menu = tk.Menu(self.folder_tree, tearoff=False)
@@ -665,7 +669,32 @@ class FileAggregatorApp:
         selection = self.folder_tree.selection()
         return len(selection) > 1 and all(self.tree_items[item][0] in FOLDER_KINDS for item in selection)
 
+    def fit_folder_columns(self, event):
+        width = max(1, event.width - 4)
+        font = tkfont.Font(root=self.root, font=ttk.Style(self.folder_tree).lookup("Treeview", "font") or "TkDefaultFont")
+        sizes = {"kind": font.measure(tr("整合資料夾")) + 24,
+                 "status": font.measure(tr("{0} 張翻譯圖片｜可匯出").format(99999)) + 24,
+                 "size": max(font.measure(tr("資料夾大小")), font.measure("9999.9 GB")) + 24,
+                 "updated": font.measure("2026-09-15 23:59:59") + 24}
+        date_width = min(sizes.pop("updated"), int(width * .35))
+        self.folder_tree.column("updated", width=max(1, date_width), minwidth=1, stretch=False)
+        scale = min(1, max(1, width * .78 - date_width) / sum(sizes.values()))
+        for column, size in sizes.items():
+            self.folder_tree.column(column, width=max(1, int(size * scale)), minwidth=1, stretch=False)
+        remaining = width - date_width - sum(self.folder_tree.column(column, "width") for column in sizes)
+        self.folder_tree.column("#0", width=max(1, remaining), minwidth=1, stretch=False)
+        self.folder_tree.xview_moveto(0)
+        self.folder_details_label.configure(wraplength=max(100, width))
+
     def on_tree_select(self, _event=None):
+        selection = self.folder_tree.selection()
+        if selection and selection[0] in self.tree_items:
+            item = selection[0]
+            path = self.tree_items[item][1]
+            values = self.folder_tree.item(item, "values")
+            self.folder_details.set(str(path) + "\n" + " | ".join(str(value) for value in values if value))
+        else:
+            self.folder_details.set("")
         paths = self.selected_chapters()
         self.selection_text.set(tr("已選取 {0} 個資料夾").format(len(paths)))
         if self.manga_busy:
