@@ -8,7 +8,7 @@ import sqlite3
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-from queue_worker import BT_STAGES
+from queue_worker import BT_STAGES, parse_bt_usage
 from queue_errors import error_details, error_info
 from ui_language import tr
 
@@ -21,18 +21,21 @@ def elapsed_text(seconds):
     return f'{hours:02}:{minutes:02}:{seconds:02}'
 
 
-def usage_text(records):
+def usage_text(records, *, empty_text=None):
     if not records:
-        return tr("尚未回報")
+        return empty_text if empty_text is not None else tr("尚未回報")
     tokens = sum(value['total_tokens'] for value in records)
     token_text = str(tokens)
     for scale, unit in ((1_000_000_000, 'B'), (1_000_000, 'M'), (1_000, 'K')):
         if tokens >= scale:
             token_text = f'{tokens / scale:.2f}{unit}'
             break
-    cost = (tr("預估金額未完整提供") if any(value['cost'] is None or value['unpriced_requests'] for value in records)
-            else f"US${sum(Decimal(value['cost']) for value in records).quantize(Decimal('0.01'), rounding=ROUND_CEILING):,.2f}")
-    text = tr("{0} tokens｜預估 {1}｜{2} 次請求").format(token_text, cost, sum(value['requests'] for value in records))
+    costs = [Decimal(value['cost']) for value in records if value['cost'] is not None]
+    cost = (tr("預估 {0}").format(f"US${sum(costs).quantize(Decimal('0.01'), rounding=ROUND_CEILING):,.2f}")
+            if costs else tr("無法預估"))
+    text = tr("{0} tokens｜{1}｜{2} 次請求").format(token_text, cost, sum(value['requests'] for value in records))
+    if costs and any(value['cost'] is None or value['unpriced_requests'] for value in records):
+        text += tr("（僅含已知金額）")
     if any(value['missing_usage_requests'] for value in records):
         text += tr("（Token 回報不完整）")
     return text
@@ -73,7 +76,18 @@ def find_runs(path, keyword='', start='', end=''):
     with closing(sqlite3.connect(Path(path).resolve().as_uri() + '?mode=ro', uri=True, timeout=1)) as db:
         # ponytail: show 200 matches at once; add pagination if browsing longer ranges is needed.
         rows = db.execute("SELECT data FROM runs" + where + " ORDER BY started_at DESC, rowid DESC LIMIT 200", values)
-        return [json.loads(row[0]) for row in rows]
+        records = [json.loads(row[0]) for row in rows]
+    for record in records:
+        for job in record['jobs']:
+            # Older versions omitted priced subtotals; recover only matching saved summaries.
+            for line in job.get('error', '').splitlines():
+                parsed = parse_bt_usage(line)
+                saved = job.get('usage', {}).get(parsed['scope']) if parsed else None
+                if (saved and saved['cost'] is None and parsed['cost'] is not None
+                        and all(saved[key] == parsed[key] for key in
+                                ('requests', 'total_tokens', 'missing_usage_requests', 'unpriced_requests'))):
+                    saved['cost'] = str(parsed['cost'])
+    return records
 
 
 def scope_records(record, scope):
@@ -148,21 +162,22 @@ class HistoryWindow(tk.Toplevel):
                 (record.get('finished_at') or '—')[:19].replace('T', ' '),
                 tr("未結束") if record['status'] == 'running' else tr(self.statuses[record['status']]),
                 len(record['jobs']), elapsed_text(record.get('elapsed_seconds')),
-                usage_text(scope_records(record, 'total')), '', ''))
+                usage_text(scope_records(record, 'total'), empty_text=tr("無法預估")), '', ''))
             self.records[record['id']] = record, None
             for index, job in enumerate(record['jobs'], 1):
                 usage = job.get('usage', {})
                 item = self.tree.insert(record['id'], 'end', open=False, text=f"{index}. {job['path']}", values=(
                     (job.get('finished_at') or '—')[:19].replace('T', ' '),
                     tr(self.statuses[job['status']]), '', elapsed_text(job.get('elapsed_seconds')),
-                    usage_text([usage['total']] if 'total' in usage else []),
+                    usage_text([usage['total']] if 'total' in usage else [], empty_text=tr("無法預估")),
                     *error_info(job['status'], job.get('error', ''))))
                 self.records[item] = record, job
                 for scope, title, stage in (('OCR', 'OCR', 'OCR'), ('translation', tr("翻譯"), 'Translation'),
                                             ('total', tr("合計"), None)):
                     seconds = job.get('elapsed_seconds') if stage is None else job.get('stage_seconds', {}).get(stage)
                     child = self.tree.insert(item, 'end', text=title, values=(
-                        '', '', '', elapsed_text(seconds), usage_text([usage[scope]] if scope in usage else []), '', ''))
+                        '', '', '', elapsed_text(seconds),
+                        usage_text([usage[scope]] if scope in usage else [], empty_text=tr("無法預估")), '', ''))
                     self.records[child] = record, job
         self.note.set(tr("顯示 {0} 筆（最多 200 筆）；日期格式 YYYY-MM-DD，留白不限。展開佇列及資料夾查看用量，選取後查看詳細資料。").format(len(rows)))
         if rows:
@@ -180,7 +195,7 @@ class HistoryWindow(tk.Toplevel):
                          tr("最後儲存時間") + ': ' + record['saved_at'],
                          tr("總耗時：{0}").format(elapsed_text(record.get('elapsed_seconds')))]
                 for scope, label in (('OCR', 'OCR'), ('translation', tr("翻譯")), ('total', tr("合計"))):
-                    lines.append(label + ': ' + usage_text(scope_records(record, scope)))
+                    lines.append(label + ': ' + usage_text(scope_records(record, scope), empty_text=tr("無法預估")))
                 for stage in BT_STAGES:
                     values = [item['stage_seconds'][stage] for item in record['jobs'] if stage in item.get('stage_seconds', {})]
                     lines.append(tr(stage) + ': ' + elapsed_text(sum(values) if values else None))
@@ -194,7 +209,7 @@ class HistoryWindow(tk.Toplevel):
                     lines.append(tr("翻譯頁數") + ': ' + pages)
                 for scope, label in (('OCR', 'OCR'), ('translation', tr("翻譯")), ('total', tr("合計"))):
                     value = job.get('usage', {}).get(scope)
-                    lines.append(label + ': ' + usage_text([value] if value else []))
+                    lines.append(label + ': ' + usage_text([value] if value else [], empty_text=tr("無法預估")))
                     if value and value.get('price_basis'):
                         lines.append(tr("估價依據：{0}（費率日期：{1}）").format(value['price_basis'], value.get('rates_date') or '—'))
                 for stage in BT_STAGES:

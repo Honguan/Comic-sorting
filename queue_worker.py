@@ -34,6 +34,9 @@ def parse_bt_usage(line):
         counts = {name: int(fields[name]) for name in
                   ('requests', 'total_tokens', 'missing_usage_requests', 'unpriced_requests')}
         cost = Decimal(fields['estimated_cost_usd']) if fields['estimated_cost_usd'] != 'unavailable' else None
+        if cost is None and counts['unpriced_requests'] < counts['requests']:
+            subtotal = fields.get('priced_subtotal_usd', 'unavailable')
+            cost = Decimal(subtotal) if subtotal != 'unavailable' else None
         if any(value < 0 for value in counts.values()) or (cost is not None and (not cost.is_finite() or cost < 0)):
             return None
     except (KeyError, ValueError, InvalidOperation):

@@ -1105,7 +1105,8 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn('US$4.97', q.usage_labels['total'].get())
         q.events.put(('usage', 1, parse_bt_usage(usage_line(cost='unavailable'))))
         q.poll()
-        self.assertNotIn('US$', q.usage_labels['total'].get())
+        self.assertIn('US$2.49', q.usage_labels['total'].get())
+        self.assertIn('僅含已知金額', q.usage_labels['total'].get())
 
     def test_queue_totals_match_collapsed_history_and_folder_breakdown(self):
         from queue_history import find_runs
@@ -1195,7 +1196,8 @@ class WorkflowTests(unittest.TestCase):
             nonlocal count
             count += 1
             for scope in ('OCR ', 'translation ', ''):
-                record = parse_bt_usage(usage_line(scope, cost='2.483284' if count == 1 else 'unavailable'))
+                record = parse_bt_usage(usage_line(scope, cost='2.483284' if count == 1 else 'unavailable',
+                                                   subtotal='0.125', unpriced=0 if count == 1 else 1))
                 kwargs['usage'](record)
                 kwargs['usage'](record)  # Repeated log summaries must not create duplicate charges.
             kwargs['timing']('OCR', 20)
@@ -1226,7 +1228,8 @@ class WorkflowTests(unittest.TestCase):
             self.assertEqual(job['stage_seconds']['OCR'], 20)
             self.assertEqual(job['usage']['total']['total_tokens'], 1274185)
         self.assertEqual(stored[0]['jobs'][0]['usage']['total']['cost'], '2.483284')
-        self.assertIsNone(stored[0]['jobs'][1]['usage']['total']['cost'])
+        self.assertEqual(stored[0]['jobs'][1]['usage']['total']['cost'], '0.125')
+        self.assertIn('US$2.61', q.usage_labels['total'].get())
         q.clear_completed()
         self.assertEqual(len(find_runs(self.app.history_path)), 1)
         self.root.update_idletasks()
@@ -1241,10 +1244,12 @@ class WorkflowTests(unittest.TestCase):
         window = q.history_window
         self.assertEqual(len(window.tree.get_children()), 1)
         self.assertIn('2.55M', window.tree.set(window.tree.get_children()[0], 'usage'))
-        self.assertIn('未完整提供', window.details.get('1.0', 'end'))
+        self.assertIn('US$2.61', window.details.get('1.0', 'end'))
         batch = window.tree.get_children()[0]
         self.assertFalse(window.tree.item(batch, 'open'))
         folder = window.tree.get_children(batch)[1]
+        self.assertIn('US$2.61', window.tree.set(batch, 'usage'))
+        self.assertIn('US$0.13', window.tree.set(folder, 'usage'))
         self.assertFalse(window.tree.item(folder, 'open'))
         window.tree.item(batch, open=True)
         window.tree.selection_set(folder)

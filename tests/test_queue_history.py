@@ -38,8 +38,49 @@ class HistoryStorageTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     find_runs(path, start=start, end=end)
             usage['cost'] = None
-            self.assertIn('未完整提供', usage_text([usage]))
+            self.assertIn('無法預估', usage_text([usage]))
             self.assertEqual(usage_text([]), '尚未回報')
+
+    def test_known_costs_are_summed_even_with_missing_or_partial_estimates(self):
+        usage = dict(total_tokens=1000, requests=10, cost='1.001', missing_usage_requests=0, unpriced_requests=0)
+        partial = dict(usage, cost='0.008', missing_usage_requests=1, unpriced_requests=1)
+        unknown = dict(usage, cost=None, unpriced_requests=10)
+        for records, expected in (([usage, partial, unknown], 'US$1.01'),
+                                  ([partial], 'US$0.01'), ([usage, unknown], 'US$1.01'),
+                                  ([dict(usage, cost='0'), unknown], 'US$0.00'),
+                                  ([unknown], '無法預估')):
+            with self.subTest(expected=expected, records=records):
+                text = usage_text(records)
+                self.assertIn(expected, text)
+                if expected.startswith('US$'):
+                    self.assertNotIn('無法預估', text)
+                    self.assertIn('僅含已知金額', text)
+        self.assertIn('Token 回報不完整', usage_text([partial]))
+        self.assertEqual(usage_text([], empty_text='無法預估'), '無法預估')
+
+    def test_legacy_subtotals_are_recovered_from_matching_saved_errors_without_writes(self):
+        from queue_worker import parse_bt_usage
+        from test_bt_usage import usage_line
+        line = usage_line(cost='unavailable', subtotal='0.998713', unpriced=1)
+        usage = dict(parse_bt_usage(line), cost=None)
+        record = dict(id='legacy', started_at='2026-09-14T17:46:19+08:00', status='done_warning', jobs=[
+            dict(path='Chapter 1', status='failed', usage={'total': usage}, error=line),
+            dict(path='Chapter 2', status='done', usage={'total': dict(usage, cost='6.717269')}, error=line),
+            dict(path='Chapter 3', status='failed', usage={'total': dict(usage, total_tokens=1)}, error=line),
+            dict(path='Chapter 4', status='failed', usage={}, error=line),
+        ])
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'history.sqlite3'
+            save_run(path, record)
+            original = path.read_bytes()
+            for _ in range(2):
+                stored = find_runs(path)[0]
+                self.assertEqual(stored['jobs'][0]['usage']['total']['cost'], '0.998713')
+                self.assertEqual(stored['jobs'][1]['usage']['total']['cost'], '6.717269')
+                self.assertIsNone(stored['jobs'][2]['usage']['total']['cost'])
+                self.assertEqual(stored['jobs'][3]['usage'], {})
+                self.assertIn('US$7.72', usage_text(scope_records(stored, 'total')))
+            self.assertEqual(path.read_bytes(), original)
 
     def test_corrupt_history_is_not_overwritten(self):
         with tempfile.TemporaryDirectory() as temp:

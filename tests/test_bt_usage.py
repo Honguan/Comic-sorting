@@ -7,10 +7,10 @@ import unittest
 from queue_worker import parse_bt_usage, run_translation
 
 
-def usage_line(scope='', tokens=1274185, cost='2.483284'):
+def usage_line(scope='', tokens=1274185, cost='2.483284', subtotal=None, unpriced=0):
     return (f'[INFO ] module_manager:_finish_llm_usage_run:2163 - LLM {scope}run usage: '
             f'status=finished, requests=94, total_tokens={tokens}, missing_usage_requests=0, '
-            f'estimated_cost_usd={cost}, priced_subtotal_usd=2.483284, unpriced_requests=0, '
+            f'estimated_cost_usd={cost}, priced_subtotal_usd={cost if subtotal is None else subtotal}, unpriced_requests={unpriced}, '
             'price_basis=OpenAI Standard API equivalent (not a bill), rates_date=2026-09-11')
 
 
@@ -33,6 +33,11 @@ class UsageTests(unittest.TestCase):
             self.assertEqual(record['total_tokens'], tokens)
             self.assertEqual(record['cost'], Decimal(cost))
         self.assertIsNone(parse_bt_usage(usage_line(cost='unavailable'))['cost'])
+        for subtotal in ('0.998713', '0'):
+            self.assertEqual(parse_bt_usage(usage_line(cost='unavailable', subtotal=subtotal, unpriced=1))['cost'], Decimal(subtotal))
+        self.assertIsNone(parse_bt_usage(usage_line(cost='unavailable', subtotal='0', unpriced=94))['cost'])
+        for subtotal in ('NaN', 'Infinity', '-1', 'invalid'):
+            self.assertIsNone(parse_bt_usage(usage_line(cost='unavailable', subtotal=subtotal, unpriced=1)))
         for line in [usage_line(cost='NaN'), usage_line(tokens=-1), 'LLM run usage: invalid', usage_line(cost='invalid')]:
             self.assertIsNone(parse_bt_usage(line))
 
