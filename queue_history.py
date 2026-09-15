@@ -46,6 +46,7 @@ def save_run(path, record):
     paths = "\n".join(job['path'] for job in record['jobs'])
     with closing(sqlite3.connect(path, timeout=1)) as db, db:
         db.execute("CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, started_at TEXT NOT NULL, paths TEXT NOT NULL, data TEXT NOT NULL)")
+        db.execute("CREATE INDEX IF NOT EXISTS runs_started_at ON runs(started_at)")
         db.execute("INSERT INTO runs VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET started_at=excluded.started_at, data=excluded.data",
                    (record['id'], record['started_at'], paths, payload))
 

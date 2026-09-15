@@ -1,4 +1,5 @@
 import copy
+import json
 import sqlite3
 import tempfile
 import unittest
@@ -8,6 +9,33 @@ from queue_history import find_runs, save_run, scope_records, usage_text
 
 
 class HistoryStorageTests(unittest.TestCase):
+    def test_legacy_history_adds_sort_index_on_save_and_keeps_latest_200_order(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'history.sqlite3'
+            records = [dict(id=str(i), started_at=f'2026-09-14T12:00:{i % 60:02}+08:00', jobs=[])
+                       for i in range(205)]
+            db = sqlite3.connect(path)
+            try:
+                db.execute('CREATE TABLE runs(id TEXT PRIMARY KEY, started_at TEXT NOT NULL, paths TEXT NOT NULL, data TEXT NOT NULL)')
+                db.executemany('INSERT INTO runs VALUES(?,?,?,?)',
+                               [(r['id'], r['started_at'], '', json.dumps(r)) for r in records])
+                db.commit()
+            finally:
+                db.close()
+            original = path.read_bytes()
+            before = find_runs(path)
+            self.assertEqual(len(before), 200)
+            self.assertEqual(path.read_bytes(), original)
+            save_run(path, records[0])
+            self.assertEqual(find_runs(path), before)
+            db = sqlite3.connect(path)
+            try:
+                plan = db.execute('EXPLAIN QUERY PLAN SELECT data FROM runs ORDER BY started_at DESC, rowid DESC LIMIT 200').fetchall()
+                self.assertTrue(any('USING INDEX runs_started_at' in row[3] for row in plan), plan)
+                self.assertFalse(any('TEMP B-TREE' in row[3] for row in plan), plan)
+            finally:
+                db.close()
+
     def test_updates_search_and_exact_usage_without_double_counting(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / 'history 中文.sqlite3'

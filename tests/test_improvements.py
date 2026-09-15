@@ -41,6 +41,34 @@ class FileImprovementsTests(unittest.TestCase):
         self.assertTrue((chapter / "mask/keep.png").exists())
         self.assertFalse((self.root / "Komga/Series/Chapter 1.cbz").exists())
 
+    def test_same_stem_pages_require_distinct_results_before_followups(self):
+        chapter = self.chapter("Series/Chapter 1", ("1",))
+        (chapter / "1.jpg").write_bytes(b"another page")
+        (chapter / "mask").mkdir()
+        sentinel = chapter / "mask/keep.png"
+        sentinel.write_bytes(b"keep")
+        config = self.root / "config.json"
+        comic_core.save_json(config, {})
+        settings = dict(bt_path="unused", bt_config=str(config), bt_export=True, bt_cleanup=True)
+        self.assertEqual(comic_core.translation_status(chapter)[0], "部分翻譯")
+        jobs = (Job(chapter, "export"), Job(chapter, "translate"),
+                Job(chapter, "translate", start_page=1, end_page=1))
+        for job in jobs:
+            with self.subTest(action=job.action, start=job.start_page), \
+                    mock.patch("queue_worker.translator_command", return_value=([], self.root, {})), \
+                    mock.patch("queue_worker.run_translation", return_value=None):
+                events = []
+                run_jobs([job], settings, str(self.root / "Komga"), True,
+                         threading.Event(), events.append)
+                self.assertEqual([e[2] for e in events if e[0] == "status"], ["running", "failed"])
+                self.assertTrue(sentinel.exists())
+                self.assertFalse((self.root / "Komga/Series/Chapter 1.cbz").exists())
+        (chapter / "result/1.jpg").write_bytes(b"another translated page")
+        self.assertEqual(comic_core.translation_status(chapter)[0], "可匯出")
+        (chapter / "2.jpeg").write_bytes(b"source with converted extension")
+        (chapter / "result/2.webp").write_bytes(b"translated with converted extension")
+        self.assertEqual(comic_core.translation_status(chapter)[0], "可匯出")
+
     def test_same_named_sources_cannot_overwrite_each_other(self):
         first = self.chapter("A/Series/Chapter 1")
         second = self.chapter("B/Series/Chapter 1")
@@ -214,6 +242,33 @@ class UIImprovementsTests(unittest.TestCase):
                 self.app.confirm_cleanup()
                 worker.assert_not_called()
                 confirm.assert_not_called()
+
+    def test_unreadable_subfolder_reports_failure_and_preserves_scan(self):
+        base = self.folder / "Comics"
+        series = base / "Series"
+        chapter = series / "Chapter 1"
+        chapter.mkdir(parents=True)
+        (chapter / "1.png").write_bytes(b"page")
+        self.app.apply_scan_data(base, self.app.scan_folder_data(base))
+        previous = self.app.folder_tree.get_children()
+        self.assertTrue(previous)
+        scan = comic.os.scandir
+
+        def deny(path):
+            if Path(path) == series:
+                raise PermissionError(13, "permission denied", str(path))
+            return scan(path)
+
+        self.app.set_manga_busy(True)
+        with mock.patch.object(comic.os, "scandir", side_effect=deny):
+            self.app.scan_worker(base)
+        with mock.patch.object(comic.messagebox, "showerror") as error:
+            self.app.poll_scan_events()
+        error.assert_called_once()
+        self.assertIn(repr(str(series)), error.call_args.args[1])
+        self.assertEqual(self.app.folder_tree.get_children(), previous)
+        self.assertEqual(self.app.scan_status_text.get(), "掃描失敗")
+        self.assertFalse(self.app.manga_busy)
 
     def test_finished_queue_jobs_are_checkpointed_before_batch_ends(self):
         q = self.app.translation_queue

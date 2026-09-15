@@ -9,6 +9,7 @@ import stat
 import tempfile
 import time
 import zipfile
+from collections import Counter
 from decimal import Decimal
 from pathlib import Path
 
@@ -56,6 +57,16 @@ def image_files(folder):
                   key=lambda path: natural_sort_key(path.name))
 
 
+def translations_complete(sources, translated, selected=None):
+    """Allow extension changes only when the source basename is unambiguous."""
+    counts = Counter(path.stem.casefold() for path in sources)
+    names = {path.name.casefold() for path in translated}
+    stems = {path.stem.casefold() for path in translated}
+    return all(path.name.casefold() in names or
+               (counts[path.stem.casefold()] == 1 and path.stem.casefold() in stems)
+               for path in (sources if selected is None else selected))
+
+
 def translation_status(chapter_folder):
     result = Path(chapter_folder) / "result"
     if not result.is_dir():
@@ -64,10 +75,8 @@ def translation_status(chapter_folder):
     if not result.is_dir() or is_link_or_junction(result):
         return tr("未翻譯"), []
     images = image_files(result)
-    if images:
-        sources = {path.stem.casefold() for path in image_files(chapter_folder)}
-        if not sources.issubset({path.stem.casefold() for path in images}):
-            return tr("部分翻譯"), images
+    if images and not translations_complete(image_files(chapter_folder), images):
+        return tr("部分翻譯"), images
     return (tr("可匯出") if images else tr("結果為空")), images
 
 

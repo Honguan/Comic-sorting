@@ -16,7 +16,7 @@ import uuid
 from app_logging import logger, log_path, redact
 
 from comic_core import (clear_work_folders, export_chapter, image_files,
-                        load_json, save_json, translation_status)
+                        load_json, save_json, translation_status, translations_complete)
 from ui_language import tr
 from queue_errors import error_info
 
@@ -281,7 +281,7 @@ def run_jobs(jobs, settings, output, skip, stop, emit):
                         if isinstance(diagnostic, str):
                             completion_note = diagnostic
                     status, translated = translation_status(path)
-                    if not {p.stem.casefold() for p in selected}.issubset({p.stem.casefold() for p in translated}):
+                    if not translations_complete(sources, translated, selected):
                         raise RuntimeError(tr("翻譯結果不完整，未執行後續動作"))
                     whole_chapter = status == tr("可匯出")
                     if not whole_chapter:

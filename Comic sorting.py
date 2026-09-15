@@ -599,7 +599,11 @@ class FileAggregatorApp:
         base = Path(base_path)
         if is_link_or_junction(base):
             return folders
-        for current, directory_names, file_names in os.walk(base):
+
+        def fail(error):
+            raise error
+
+        for current, directory_names, file_names in os.walk(base, onerror=fail):
             folder = Path(current)
             has_result = any(name.casefold() == "result" for name in directory_names)
             directory_names[:] = [name for name in directory_names
