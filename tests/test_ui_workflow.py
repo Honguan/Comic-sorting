@@ -42,6 +42,16 @@ class WorkflowTests(unittest.TestCase):
         (path / "result/1.png").write_bytes(b"image")
         return path
 
+    def test_live_usage_is_shown_in_separate_columns(self):
+        q = self.app.translation_queue
+        self.assertEqual(q.usage_table.set('total', 'tokens'), '尚未回報')
+        q.usage_records = {(0, 'total'): dict(total_tokens=12345, cost='0.125', requests=4, unpriced_requests=1, missing_usage_requests=1)}
+        q.show_usage()
+        self.assertEqual(q.usage_table.item('total', 'values'), ('合計', '12,345', 'US$0.13', '4', '僅含已知金額', '回報不完整'))
+        q.show_usage()
+        self.assertEqual(len(q.usage_table.get_children()), 3)
+        self.assertEqual(q.elapsed_label.get(), '00:00:00')
+
     def test_manga_columns_fit_and_selection_shows_complete_details(self):
         from types import SimpleNamespace
         chapter = self.chapter("Chapter 1-50")

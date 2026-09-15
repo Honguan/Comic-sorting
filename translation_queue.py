@@ -16,7 +16,7 @@ from app_logging import logger, log_path
 from ui_language import tr
 from bt_settings import ConfigEditor
 from comic_core import FOLDER_KINDS, folder_kind, image_files
-from queue_history import HistoryWindow, elapsed_text, save_run, usage_text
+from queue_history import HistoryWindow, elapsed_text, save_run, usage_text, usage_columns
 from queue_errors import error_details, error_info
 from ntfy_notifications import NtfyNotifications
 
@@ -165,13 +165,20 @@ class TranslationQueue:
             footer, tr("本次佇列 LLM 消耗（非實際帳單）"))
         self.history_button = ttk.Button(self.usage_toggle.master, text=tr("歷史紀錄"), command=self.open_history, padding=0)
         self.history_button.pack(side='left', padx=(8, 0))
-        self.elapsed_label = tk.StringVar(value=tr("總耗時：{0}").format('00:00:00'))
-        ttk.Label(usage_grid, textvariable=self.elapsed_label).grid(row=0, column=2, rowspan=3, padx=(12, 0), sticky="ne")
-        for row, (scope, title) in enumerate((("OCR", "OCR"), ("translation", "翻譯"), ("total", "合計"))):
-            ttk.Label(usage_grid, text=tr(title), width=8).grid(row=row, column=0, sticky="w")
+        self.elapsed_label = tk.StringVar(value='00:00:00')
+        elapsed_row = ttk.Frame(self.usage_toggle.master)
+        elapsed_row.pack(side='right')
+        ttk.Label(elapsed_row, text=tr("累計耗時")).pack(side='left', padx=(4, 4))
+        ttk.Entry(elapsed_row, textvariable=self.elapsed_label, state='readonly', width=10).pack(side='left')
+        columns = ('scope', 'tokens', 'cost', 'requests', 'pricing', 'reporting')
+        self.usage_table = ttk.Treeview(usage_grid, columns=columns, show='headings', height=3)
+        for key, title, width in zip(columns, ('項目', 'Token 數', '預估金額（USD）', '請求數', '金額完整性', 'Token 完整性'), (70, 130, 130, 80, 145, 145)):
+            self.usage_table.heading(key, text=tr(title))
+            self.usage_table.column(key, width=width, minwidth=40, anchor='w' if key in ('scope', 'pricing', 'reporting') else 'e')
+        self.usage_table.grid(row=1, column=0, columnspan=2, sticky='ew')
+        usage_grid.columnconfigure(1, weight=1)
+        for scope in ('OCR', 'translation', 'total'):
             self.usage_labels[scope] = tk.StringVar()
-            ttk.Label(usage_grid, textvariable=self.usage_labels[scope]).grid(row=row, column=1, sticky="w")
-        ttk.Label(usage_grid, text=tr("累計本次所有資料夾已回報用量；金額依翻譯器估算。")).grid(row=3, column=0, columnspan=2, sticky="w")
         self.show_usage()
         records = settings.get("bt_jobs", [])
         for record in records if isinstance(records, list) else []:
@@ -211,8 +218,17 @@ class TranslationQueue:
                 content.pack(fill="x")
                 button.configure(text=f"▼ {title}")
             if not layout_ready:
-                # Do not force an intermediate layout while the window is being built.
                 borrowed_height = 0
+                if not collapsing:
+                    def fit_initial():
+                        if not panes.winfo_exists() or not content.winfo_manager():
+                            return
+                        panes.update_idletasks()
+                        manga = panes.nametowidget(panes.panes()[0])
+                        minimum_manga = manga.winfo_reqheight() - self.app.folder_tree.winfo_reqheight()
+                        required = self.app.queue_tab.winfo_reqheight() - self.tree.winfo_reqheight() + 32
+                        panes.sashpos(0, max(minimum_manga, min(panes.sashpos(0), panes.winfo_height() - required)))
+                    self.app.root.after(1, fit_initial)
                 return
             panes.update_idletasks()
             row_height = int(ttk.Style(self.tree).lookup('Treeview', 'rowheight') or 20)
@@ -242,6 +258,12 @@ class TranslationQueue:
         for scope, label in self.usage_labels.items():
             records = [value for (_, kind), value in self.usage_records.items() if kind == scope]
             label.set(usage_text(records))
+            title = {'OCR': 'OCR', 'translation': '翻譯', 'total': '合計'}[scope]
+            values = (tr(title), *usage_columns(records))
+            if self.usage_table.exists(scope):
+                self.usage_table.item(scope, values=values)
+            else:
+                self.usage_table.insert('', 'end', iid=scope, values=values)
 
     def open_history(self):
         if self.history_window and self.history_window.winfo_exists():
@@ -773,7 +795,7 @@ class TranslationQueue:
             return
         self.running = True
         self.started_at = time.monotonic()
-        self.elapsed_label.set(tr("總耗時：{0}").format('00:00:00'))
+        self.elapsed_label.set('00:00:00')
         for label in self.time_labels.values():
             label.set(tr("累計耗時：{0}").format('—'))
         self.show_usage()
@@ -794,7 +816,7 @@ class TranslationQueue:
     def poll(self):
         if self.running and self.started_at is not None:
             now = time.monotonic() if self.paused_at is None else self.paused_at
-            self.elapsed_label.set(tr("總耗時：{0}").format(elapsed_text(now - self.started_at)))
+            self.elapsed_label.set(elapsed_text(now - self.started_at))
         changed = False
         for _ in range(100):
             try:
@@ -824,7 +846,7 @@ class TranslationQueue:
             elif event[0] == "paused":
                 self.paused_at = event[1]
                 elapsed = self.paused_at - self.started_at
-                self.elapsed_label.set(tr("總耗時：{0}").format(elapsed_text(elapsed)))
+                self.elapsed_label.set(elapsed_text(elapsed))
                 self.label.set(tr("佇列已暫停，按「開始主佇列」繼續"))
                 if self.history_run is not None:
                     self.history_run['elapsed_seconds'] = elapsed
@@ -853,7 +875,7 @@ class TranslationQueue:
                 if self.history_run is not None:
                     self.history_run.update(started_at=event[1], finished_at=event[2], elapsed_seconds=event[3])
                 self.started_at = None
-                self.elapsed_label.set(tr("總耗時：{0}").format(elapsed_text(event[3])))
+                self.elapsed_label.set(elapsed_text(event[3]))
             elif event[0] == "bt_reset":
                 self.reset_bt_progress(event[1], event[2])
             elif event[0] == "bt_progress":
