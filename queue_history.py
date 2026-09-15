@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 import sqlite3
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import font as tkfont, messagebox, ttk
 
 from queue_worker import BT_STAGES, parse_bt_usage
 from queue_errors import error_details, error_info
@@ -182,11 +182,10 @@ class HistoryWindow(tk.Toplevel):
             self.tree.heading(key, text=title)
             self.tree.column(key, width=width, minwidth=40, stretch=False)
         scroll = ttk.Scrollbar(listing, command=self.tree.yview)
-        horizontal = ttk.Scrollbar(listing, orient='horizontal', command=self.tree.xview)
-        self.tree.configure(yscrollcommand=scroll.set, xscrollcommand=horizontal.set)
+        self.tree.configure(yscrollcommand=scroll.set)
+        self.tree.bind('<Configure>', self.fit_columns)
         self.tree.grid(row=0, column=0, sticky='nsew')
         scroll.grid(row=0, column=1, sticky='ns')
-        horizontal.grid(row=1, column=0, sticky='ew')
         listing.rowconfigure(0, weight=1)
         listing.columnconfigure(0, weight=1)
         self.details = ttk.Notebook(detail)
@@ -212,6 +211,31 @@ class HistoryWindow(tk.Toplevel):
             self.detail_tables[key] = table
         self.tree.bind('<<TreeviewSelect>>', lambda _event: self.show_details())
         self.refresh()
+
+    def fit_columns(self, event=None):
+        width = max(1, self.tree.winfo_width() - 4)
+        font = tkfont.Font(root=self, font=ttk.Style(self.tree).lookup("Treeview", "font") or "TkDefaultFont")
+        samples = {'#0': '2026-09-14 20:04:28', 'end': '2026-09-14 21:05:08',
+                   'status': tr("完成（有異常）"), 'jobs': '999', 'elapsed': '999:59:59',
+                   'tokens': '999,999,999', 'cost': 'US$9999.99', 'requests': '999,999'}
+        sizes = {key: max(font.measure(value), font.measure(self.tree.heading(key, 'text'))) + 20
+                 for key, value in samples.items()}
+        sizes['#0'] += 20  # Reserve the tree expander.
+        columns = ['end', 'status', 'jobs', 'elapsed', 'tokens', 'cost', 'requests']
+        if sum(sizes.values()) > width:
+            columns.remove('end')  # Full timestamps remain in the selected record's details.
+        visible = ['#0', *columns]
+        self.tree.configure(displaycolumns=columns)
+        total = sum(sizes[key] for key in visible)
+        scale = min(1, width / total)
+        remaining = width
+        for key in columns:
+            size = max(1, int(sizes[key] * scale))
+            self.tree.column(key, width=size, minwidth=1, stretch=False,
+                             anchor='e' if key in ('jobs', 'tokens', 'cost', 'requests') else 'w')
+            remaining -= size
+        self.tree.column('#0', width=max(1, remaining), minwidth=1, stretch=False)
+        self.tree.xview_moveto(0)
 
     def refresh(self):
         try:
@@ -253,6 +277,7 @@ class HistoryWindow(tk.Toplevel):
         if rows:
             self.tree.selection_set(rows[0]['id'])
         self.show_details()
+        self.fit_columns()
 
     def fill_usage(self, table, usage):
         table.delete(*table.get_children())

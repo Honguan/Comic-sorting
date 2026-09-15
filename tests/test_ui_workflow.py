@@ -1536,6 +1536,20 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn('US$2.49', q.usage_labels['total'].get())
         self.assertIn('僅含已知金額', q.usage_labels['total'].get())
 
+    def test_history_columns_fit_without_horizontal_scrolling(self):
+        self.app.translation_queue.open_history()
+        window = self.app.translation_queue.history_window
+        for width in (820, 1500, 1120, 820):
+            window.geometry(f"{width}x700")
+            self.root.update()
+            columns = window.tree['displaycolumns']
+            self.assertTrue({'status', 'tokens', 'cost', 'requests'}.issubset(columns))
+            total = sum(window.tree.column(key, 'width') for key in ('#0', *columns))
+            self.assertLessEqual(total, window.tree.winfo_width())
+            self.assertEqual(window.tree.xview(), (0.0, 1.0))
+            if width == 1500:
+                self.assertIn('end', columns)
+
     def test_history_grand_totals_stay_at_bottom_and_ignore_filters_and_selection(self):
         from queue_history import save_run
         usage = dict(total_tokens=1000, requests=1, cost='0.004', missing_usage_requests=0, unpriced_requests=0)
