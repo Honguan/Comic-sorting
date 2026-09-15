@@ -5,10 +5,20 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from queue_history import find_runs, history_totals, save_run, scope_records, usage_text
+from queue_history import find_runs, history_totals, save_run, scope_records, usage_text, usage_columns
 
 
 class HistoryStorageTests(unittest.TestCase):
+    def test_token_units_match_in_text_and_columns(self):
+        for tokens, expected in ((0, '0'), (999, '999'), (1000, '1.00K'),
+                                 (22721625, '22.72M'), (1000000000, '1.00B')):
+            record = dict(total_tokens=tokens, requests=1, cost='0',
+                          unpriced_requests=0, missing_usage_requests=0)
+            self.assertEqual(usage_columns([record])[0], expected)
+            self.assertTrue(usage_text([record]).startswith(expected + ' tokens'))
+            self.assertEqual(record['total_tokens'], tokens)
+        self.assertEqual(usage_columns([])[0], '尚未回報')
+
     def test_grand_totals_include_all_runs_and_known_costs_without_double_counting(self):
         from queue_worker import parse_bt_usage
         from test_bt_usage import usage_line

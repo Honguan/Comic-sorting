@@ -21,15 +21,18 @@ def elapsed_text(seconds):
     return f'{hours:02}:{minutes:02}:{seconds:02}'
 
 
+def format_tokens(tokens):
+    for scale, unit in ((1_000_000_000, 'B'), (1_000_000, 'M'), (1_000, 'K')):
+        if tokens >= scale:
+            return f'{tokens / scale:.2f}{unit}'
+    return str(tokens)
+
+
 def usage_text(records, *, empty_text=None):
     if not records:
         return empty_text if empty_text is not None else tr("尚未回報")
     tokens = sum(value['total_tokens'] for value in records)
-    token_text = str(tokens)
-    for scale, unit in ((1_000_000_000, 'B'), (1_000_000, 'M'), (1_000, 'K')):
-        if tokens >= scale:
-            token_text = f'{tokens / scale:.2f}{unit}'
-            break
+    token_text = format_tokens(tokens)
     costs = [Decimal(value['cost']) for value in records if value['cost'] is not None]
     cost = (tr("預估 {0}").format(f"US${sum(costs).quantize(Decimal('0.01'), rounding=ROUND_CEILING):,.2f}")
             if costs else tr("無法預估"))
@@ -115,7 +118,7 @@ def history_totals(path):
 def usage_columns(records):
     costs = [Decimal(value['cost']) for value in records if value['cost'] is not None]
     cost = f"US${sum(costs).quantize(Decimal('0.01'), rounding=ROUND_CEILING):,.2f}" if costs else tr("無法預估")
-    tokens = f"{sum(value['total_tokens'] for value in records):,}" if records else tr("尚未回報")
+    tokens = format_tokens(sum(value['total_tokens'] for value in records)) if records else tr("尚未回報")
     requests = f"{sum(value['requests'] for value in records):,}" if records else '—'
     partial = any(value['cost'] is None or value['unpriced_requests'] for value in records)
     pricing = tr("僅含已知金額") if costs and partial else tr("完整") if costs else tr("尚未回報")

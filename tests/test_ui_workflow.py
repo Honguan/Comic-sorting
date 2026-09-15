@@ -223,7 +223,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(q.usage_table.set('total', 'tokens'), '尚未回報')
         q.usage_records = {(0, 'total'): dict(total_tokens=12345, cost='0.125', requests=4, unpriced_requests=1, missing_usage_requests=1)}
         q.show_usage()
-        self.assertEqual(q.usage_table.item('total', 'values'), ('合計', '12,345', 'US$0.13', '4', '僅含已知金額', '回報不完整'))
+        self.assertEqual(q.usage_table.item('total', 'values'), ('合計', '12.35K', 'US$0.13', '4', '僅含已知金額', '回報不完整'))
         q.show_usage()
         self.assertEqual(len(q.usage_table.get_children()), 3)
         self.assertEqual(q.elapsed_label.get(), '00:00:00')
@@ -1583,7 +1583,7 @@ class WorkflowTests(unittest.TestCase):
         self.root.update()
         expected = [window.totals.item(row, 'values') for row in window.totals.get_children()]
         self.assertEqual({key: var.get() for key, var in window.total_counts.items()}, {'runs': '2', 'jobs': '2', 'elapsed': '02:00:00'})
-        self.assertEqual(window.totals.item('total', 'values'), ('合計', '2,000', 'US$0.01', '2', '完整', '完整'))
+        self.assertEqual(window.totals.item('total', 'values'), ('合計', '2.00K', 'US$0.01', '2', '完整', '完整'))
         window.tree.selection_set('run-0')
         window.show_details()
         self.assertEqual([window.totals.item(row, 'values') for row in window.totals.get_children()], expected)
@@ -1645,15 +1645,15 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(len(folders), 2)
         self.assertFalse(window.tree.item(batch, 'open'))
         self.assertFalse(window.tree.bbox(folders[0]))
-        self.assertEqual(window.tree.set(batch, 'tokens'), '8,000')
+        self.assertEqual(window.tree.set(batch, 'tokens'), '8.00K')
         self.assertNotIn('usage', window.tree['columns'])
         for scope in ('OCR', 'translation', 'total'):
             self.assertTrue(window.detail_tables['usage'].exists(scope))
-        self.assertEqual(window.detail_tables['usage'].set('total', 'tokens'), '8,000')
+        self.assertEqual(window.detail_tables['usage'].set('total', 'tokens'), '8.00K')
         self.assertNotIn(str(first), detail_values(window))
         window.tree.item(batch, open=True)
         self.root.update_idletasks()
-        for folder, tokens, cost in zip(folders, ('3,000', '5,000'), ('US$1.01', 'US$2.01')):
+        for folder, tokens, cost in zip(folders, ('3.00K', '5.00K'), ('US$1.01', 'US$2.01')):
             self.assertFalse(window.tree.item(folder, 'open'))
             self.assertTrue(window.tree.bbox(folder))
             self.assertEqual(tokens, window.tree.set(folder, 'tokens'))
@@ -1664,7 +1664,7 @@ class WorkflowTests(unittest.TestCase):
         window.tree.item(folders[0], open=True)
         self.root.update_idletasks()
         self.assertTrue(window.tree.bbox(scopes[0]))
-        self.assertEqual('1,000', window.tree.set(scopes[0], 'tokens'))
+        self.assertEqual('1.00K', window.tree.set(scopes[0], 'tokens'))
         self.assertEqual(window.tree.set(scopes[0], 'elapsed'), '00:00:05')
         window.tree.selection_set(scopes[0])
         window.show_details()
@@ -1680,7 +1680,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(q.usage_labels['total'].get(), '尚未回報')
         self.assertEqual(len(find_runs(self.app.history_path)), 2)
         window.refresh()
-        self.assertEqual('8,000', window.tree.set(batch, 'tokens'))
+        self.assertEqual('8.00K', window.tree.set(batch, 'tokens'))
 
     def test_history_records_checkpoints_usage_failures_and_survives_restart(self):
         from queue_history import find_runs
@@ -1747,7 +1747,7 @@ class WorkflowTests(unittest.TestCase):
         q.history_button.invoke()
         window = q.history_window
         self.assertEqual(len(window.tree.get_children()), 1)
-        self.assertEqual('2,548,370', window.tree.set(window.tree.get_children()[0], 'tokens'))
+        self.assertEqual('2.55M', window.tree.set(window.tree.get_children()[0], 'tokens'))
         self.assertIn('US$2.61', detail_values(window))
         batch = window.tree.get_children()[0]
         self.assertFalse(window.tree.item(batch, 'open'))
