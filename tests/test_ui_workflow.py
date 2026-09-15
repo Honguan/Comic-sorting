@@ -1420,25 +1420,26 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(len(folders), 2)
         self.assertFalse(window.tree.item(batch, 'open'))
         self.assertFalse(window.tree.bbox(folders[0]))
-        self.assertEqual(window.tree.set(batch, 'usage'), q.usage_labels['total'].get())
+        self.assertEqual(window.tree.set(batch, 'tokens'), '8,000')
+        self.assertNotIn('usage', window.tree['columns'])
         for scope in ('OCR', 'translation', 'total'):
             self.assertTrue(window.detail_tables['usage'].exists(scope))
         self.assertEqual(window.detail_tables['usage'].set('total', 'tokens'), '8,000')
         self.assertNotIn(str(first), detail_values(window))
         window.tree.item(batch, open=True)
         self.root.update_idletasks()
-        for folder, tokens, cost in zip(folders, ('3.00K', '5.00K'), ('US$1.01', 'US$2.01')):
+        for folder, tokens, cost in zip(folders, ('3,000', '5,000'), ('US$1.01', 'US$2.01')):
             self.assertFalse(window.tree.item(folder, 'open'))
             self.assertTrue(window.tree.bbox(folder))
-            self.assertIn(tokens, window.tree.set(folder, 'usage'))
-            self.assertIn(cost, window.tree.set(folder, 'usage'))
+            self.assertEqual(tokens, window.tree.set(folder, 'tokens'))
+            self.assertIn(cost, window.tree.set(folder, 'cost'))
         scopes = window.tree.get_children(folders[0])
         self.assertEqual([window.tree.item(item, 'text') for item in scopes], ['OCR', '翻譯', '合計'])
         self.assertFalse(window.tree.bbox(scopes[0]))
         window.tree.item(folders[0], open=True)
         self.root.update_idletasks()
         self.assertTrue(window.tree.bbox(scopes[0]))
-        self.assertIn('1.00K', window.tree.set(scopes[0], 'usage'))
+        self.assertEqual('1,000', window.tree.set(scopes[0], 'tokens'))
         self.assertEqual(window.tree.set(scopes[0], 'elapsed'), '00:00:05')
         window.tree.selection_set(scopes[0])
         window.show_details()
@@ -1454,7 +1455,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(q.usage_labels['total'].get(), '尚未回報')
         self.assertEqual(len(find_runs(self.app.history_path)), 2)
         window.refresh()
-        self.assertIn('8.00K', window.tree.set(batch, 'usage'))
+        self.assertEqual('8,000', window.tree.set(batch, 'tokens'))
 
     def test_history_records_checkpoints_usage_failures_and_survives_restart(self):
         from queue_history import find_runs
@@ -1521,13 +1522,13 @@ class WorkflowTests(unittest.TestCase):
         q.history_button.invoke()
         window = q.history_window
         self.assertEqual(len(window.tree.get_children()), 1)
-        self.assertIn('2.55M', window.tree.set(window.tree.get_children()[0], 'usage'))
+        self.assertEqual('2,548,370', window.tree.set(window.tree.get_children()[0], 'tokens'))
         self.assertIn('US$2.61', detail_values(window))
         batch = window.tree.get_children()[0]
         self.assertFalse(window.tree.item(batch, 'open'))
         folder = window.tree.get_children(batch)[1]
-        self.assertIn('US$2.61', window.tree.set(batch, 'usage'))
-        self.assertIn('US$0.13', window.tree.set(folder, 'usage'))
+        self.assertIn('US$2.61', window.tree.set(batch, 'cost'))
+        self.assertIn('US$0.13', window.tree.set(folder, 'cost'))
         self.assertFalse(window.tree.item(folder, 'open'))
         window.tree.item(batch, open=True)
         window.tree.selection_set(folder)

@@ -112,6 +112,17 @@ def history_totals(path):
     return dict(counts, usage={scope: usage_text(values) for scope, values in usage.items()}, usage_records=usage)
 
 
+def usage_columns(records):
+    costs = [Decimal(value['cost']) for value in records if value['cost'] is not None]
+    cost = f"US${sum(costs).quantize(Decimal('0.01'), rounding=ROUND_CEILING):,.2f}" if costs else tr("無法預估")
+    tokens = f"{sum(value['total_tokens'] for value in records):,}" if records else tr("尚未回報")
+    requests = f"{sum(value['requests'] for value in records):,}" if records else '—'
+    partial = any(value['cost'] is None or value['unpriced_requests'] for value in records)
+    pricing = tr("僅含已知金額") if costs and partial else tr("完整") if costs else tr("尚未回報")
+    reporting = tr("回報不完整") if any(value['missing_usage_requests'] for value in records) else tr("完整") if records else tr("尚未回報")
+    return tokens, cost, requests, pricing, reporting
+
+
 class HistoryWindow(tk.Toplevel):
     def __init__(self, parent, path, actions, statuses):
         super().__init__(parent)
@@ -162,14 +173,14 @@ class HistoryWindow(tk.Toplevel):
         listing, detail = ttk.Frame(panes), ttk.Frame(panes)
         panes.add(listing, weight=1)
         panes.add(detail, weight=1)
-        columns = ('end', 'status', 'jobs', 'elapsed', 'usage', 'error_reason')
+        columns = ('end', 'status', 'jobs', 'elapsed', 'tokens', 'cost', 'requests', 'pricing', 'reporting', 'error_reason')
         self.tree = ttk.Treeview(listing, columns=columns, show='tree headings', selectmode='browse', height=8)
         self.tree.heading('#0', text=tr("開始時間／資料夾"))
         self.tree.column('#0', width=320, minwidth=160)
         for key, title, width in zip(columns, (tr("完成時間"), tr("狀態"), tr("工作數"), tr("耗時"),
-                                               tr("合計用量／預估金額"), tr("錯誤原因")), (160, 100, 65, 90, 350, 300)):
+                                               tr("Token 數"), tr("預估金額（USD）"), tr("請求數"), tr("金額完整性"), tr("Token 完整性"), tr("錯誤原因")), (160, 100, 65, 90, 130, 130, 80, 130, 130, 220)):
             self.tree.heading(key, text=title)
-            self.tree.column(key, width=width, minwidth=300 if key == 'usage' else 20, stretch=key == 'usage')
+            self.tree.column(key, width=width, minwidth=40, stretch=False)
         scroll = ttk.Scrollbar(listing, command=self.tree.yview)
         horizontal = ttk.Scrollbar(listing, orient='horizontal', command=self.tree.xview)
         self.tree.configure(yscrollcommand=scroll.set, xscrollcommand=horizontal.set)
@@ -221,14 +232,14 @@ class HistoryWindow(tk.Toplevel):
                 (record.get('finished_at') or '—')[:19].replace('T', ' '),
                 tr("未結束") if record['status'] == 'running' else tr(self.statuses[record['status']]),
                 len(record['jobs']), elapsed_text(record.get('elapsed_seconds')),
-                usage_text(scope_records(record, 'total'), empty_text=tr("無法預估")), ''))
+                *usage_columns(scope_records(record, 'total')), ''))
             self.records[record['id']] = record, None
             for index, job in enumerate(record['jobs'], 1):
                 usage = job.get('usage', {})
                 item = self.tree.insert(record['id'], 'end', open=False, text=f"{index}. {job['path']}", values=(
                     (job.get('finished_at') or '—')[:19].replace('T', ' '),
                     tr(self.statuses[job['status']]), '', elapsed_text(job.get('elapsed_seconds')),
-                    usage_text([usage['total']] if 'total' in usage else [], empty_text=tr("無法預估")),
+                    *usage_columns([usage['total']] if 'total' in usage else []),
                     error_info(job['status'], job.get('error', ''))[1]))
                 self.records[item] = record, job
                 for scope, title, stage in (('OCR', 'OCR', 'OCR'), ('translation', tr("翻譯"), 'Translation'),
@@ -236,7 +247,7 @@ class HistoryWindow(tk.Toplevel):
                     seconds = job.get('elapsed_seconds') if stage is None else job.get('stage_seconds', {}).get(stage)
                     child = self.tree.insert(item, 'end', text=title, values=(
                         '', '', '', elapsed_text(seconds),
-                        usage_text([usage[scope]] if scope in usage else [], empty_text=tr("無法預估")), ''))
+                        *usage_columns([usage[scope]] if scope in usage else []), ''))
                     self.records[child] = record, job
         self.note.set(tr("顯示 {0} 筆（最多 200 筆）；日期格式 YYYY-MM-DD，留白不限。展開佇列及資料夾查看用量，選取後查看詳細資料。").format(len(rows)))
         if rows:
@@ -246,15 +257,7 @@ class HistoryWindow(tk.Toplevel):
     def fill_usage(self, table, usage):
         table.delete(*table.get_children())
         for scope, label in (('OCR', 'OCR'), ('translation', tr("翻譯")), ('total', tr("合計"))):
-            records = usage[scope]
-            costs = [Decimal(value['cost']) for value in records if value['cost'] is not None]
-            cost = f"US${sum(costs).quantize(Decimal('0.01'), rounding=ROUND_CEILING):,.2f}" if costs else tr("無法預估")
-            tokens = f"{sum(value['total_tokens'] for value in records):,}" if records else tr("尚未回報")
-            requests = f"{sum(value['requests'] for value in records):,}" if records else '—'
-            partial = any(value['cost'] is None or value['unpriced_requests'] for value in records)
-            pricing = tr("僅含已知金額") if costs and partial else tr("完整") if costs else tr("尚未回報")
-            reporting = tr("回報不完整") if any(value['missing_usage_requests'] for value in records) else tr("完整") if records else tr("尚未回報")
-            table.insert('', 'end', iid=scope, values=(label, tokens, cost, requests, pricing, reporting))
+            table.insert('', 'end', iid=scope, values=(label, *usage_columns(usage[scope])))
 
     def show_details(self):
         for table in self.detail_tables.values():
