@@ -158,6 +158,7 @@ TRANSLATIONS = {
     '各階段進度': {'en': 'Stage progress', 'ja': '各工程の進捗'},
     '無法讀取 JSON：{0}。請檢查權限與內容，或還原備份後再試；原檔未變更。': {'en': 'Cannot read JSON: {0}. Check permissions and contents, or restore a backup and retry; the original file is unchanged.', 'ja': 'JSON を読み込めません：{0}。権限と内容を確認するか、バックアップを復元して再試行してください。元のファイルは変更されていません。'},
     '累計耗時：{0}': {'en': 'Elapsed: {0}', 'ja': '累計時間：{0}'},
+    '平均：{0} 秒／頁': {'en': 'Average: {0} s/page', 'ja': '平均：{0} 秒／ページ'},
     '總耗時：{0}': {'en': 'Total time: {0}', 'ja': '総時間：{0}'},
     '本次佇列 LLM 消耗（非實際帳單）': {'en': 'LLM usage for this queue run (not a bill)', 'ja': '今回のキューの LLM 使用量（請求額ではありません）'},
     '合計': {'en': 'Total', 'ja': '合計'},

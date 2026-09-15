@@ -1365,7 +1365,8 @@ class WorkflowTests(unittest.TestCase):
             q.start_button.invoke()  # Cancel a pending pause without starting another worker.
             self.assertFalse(q.pause_requested.is_set())
             q.pause_button.invoke()
-            for event in [('usage', 0, usage), ('status', 0, 'done', ''),
+            for event in [('bt_progress', 'OCR', 100, 2, 2, '00:00'), ('stage_time', 0, 'OCR', 5),
+                          ('usage', 0, usage), ('status', 0, 'done', ''),
                           ('job_time', 0, 'start', 'end', 5), ('total', 1), ('paused', 105)]:
                 q.events.put(event)
             clock.return_value = 105
@@ -1381,6 +1382,7 @@ class WorkflowTests(unittest.TestCase):
             clock.return_value = 1000
             q.poll()
             self.assertIn('00:00:05', q.elapsed_label.get())
+            self.assertIn('平均：2.50 秒／頁', q.bt_labels['OCR'].get())
             stored = find_runs(self.app.history_path)
             self.assertEqual(len(stored), 1)
             self.assertEqual(stored[0]['status'], 'running')
@@ -1439,24 +1441,47 @@ class WorkflowTests(unittest.TestCase):
         q.render()
         for event in (("status", 0, "running", ""), ("bt_reset", 100, dict.fromkeys(BT_STAGES, True)),
                       ("bt_progress", "Text Detection", 90, 90, 100, "00:10"),
+                      ('stage_time', 0, 'Text Detection', 45),
                       ("bt_progress", "OCR", 60, 60, 100, "01:30"),
+                      ('stage_time', 0, 'OCR', 150),
                       ("bt_progress", "Inpaint", 55, 55, 100, "02:00"),
-                      ("bt_progress", "Translation", 40, 40, 100, "12:34")):
+                      ('stage_time', 0, 'Inpaint', 0),
+                      ("bt_progress", "Translation", 40, 40, 100, "12:34"),
+                      ('stage_time', 0, 'Translation', 7200)):
             q.events.put(event)
         q.poll()
         self.assertEqual([q.bt_bars[name]["value"] for name in BT_STAGES], [90, 60, 55, 40])
         self.assertIn("90/100", q.bt_labels["Text Detection"].get())
         self.assertIn("12:34", q.bt_labels["Translation"].get())
+        for name, average in zip(BT_STAGES, ('0.50', '2.50', '<1.00', '180.00')):
+            self.assertIn(f'平均：{average} 秒／頁', q.bt_labels[name].get())
         q.events.put(("status", 0, "cancelled", "stop"))
         q.poll()
         self.assertIn(tr("已停止"), q.bt_labels["Translation"].get())
         self.assertNotIn("12:34", q.bt_labels["Translation"].get())
+        self.assertIn('平均：180.00 秒／頁', q.bt_labels['Translation'].get())
         q.events.put(("status", 1, "running", ""))
         q.events.put(("bt_reset", 20, {name: name != "OCR" for name in BT_STAGES}))
         q.poll()
         self.assertEqual(q.bt_labels["OCR"].get(), tr("未啟用"))
         self.assertIn("0/20", q.bt_labels["Translation"].get())
         self.assertEqual(q.bt_bars["Text Detection"]["value"], 0)
+        self.assertIn('平均：— 秒／頁', q.bt_labels['Translation'].get())
+        for event in [('bt_progress', 'Translation', 50, 10, 20, '00:30'),
+                      ('stage_time', 1, 'Translation', 30)]:
+            q.events.put(event)
+        q.poll()
+        self.assertIn('平均：3.00 秒／頁', q.bt_labels['Translation'].get())
+        self.assertIn('02:00:30', q.time_labels['Translation'].get())  # Batch elapsed must not be the numerator.
+        # A new report without valid timing must not reuse the previous report's seconds.
+        q.events.put(('bt_progress', 'Translation', 75, 15, 20, None))
+        q.poll()
+        self.assertIn('平均：— 秒／頁', q.bt_labels['Translation'].get())
+        for current, seconds, average in ((None, 30, '—'), (0, 30, '—'), (1000, 1, '<0.01')):
+            q.events.put(('bt_progress', 'Translation', 0, current, 1000, None))
+            q.events.put(('stage_time', 1, 'Translation', seconds))
+            q.poll()
+            self.assertIn(f'平均：{average} 秒／頁', q.bt_labels['Translation'].get())
 
     def test_export_progress_does_not_overwrite_translation_bars(self):
         q = self.app.translation_queue

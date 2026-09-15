@@ -144,6 +144,7 @@ class TranslationQueue:
         self.bt_bars = {}
         self.bt_labels = {}
         self.bt_progress = {}
+        self.bt_elapsed = {}
         self.time_labels = {}
         for row, name in enumerate(BT_STAGES):
             ttk.Label(progress_grid, text=tr(name)).grid(row=row, column=0, sticky="w", padx=(0, 8))
@@ -327,6 +328,7 @@ class TranslationQueue:
         for name in BT_STAGES:
             active = enabled is None or enabled.get(name, True)
             self.bt_progress[name] = (0, 0 if total is not None else None, total, None, active)
+            self.bt_elapsed[name] = None
             self.show_bt_progress(name)
 
     def show_bt_progress(self, name, terminal=None):
@@ -340,6 +342,12 @@ class TranslationQueue:
                 remaining = tr(terminal)
             text = tr("{0}%｜{1}/{2} 頁｜剩餘 {3}").format(
                 percent, current if current is not None else "—", total if total is not None else "—", remaining)
+            seconds = self.bt_elapsed[name]
+            average = '—'
+            if current and seconds is not None:
+                # tqdm reports whole seconds; zero elapsed is an upper bound, not zero processing time.
+                average = '<1.00' if seconds == 0 else '<0.01' if seconds / current < .01 else f'{seconds / current:.2f}'
+            text += '｜' + tr("平均：{0} 秒／頁").format(average)
         self.bt_labels[name].set(text)
 
     def update_controls(self):
@@ -768,6 +776,8 @@ class TranslationQueue:
                 self.stage_times[index, name] = max(seconds, self.stage_times.get((index, name), 0))
                 total = sum(value for (_, stage), value in self.stage_times.items() if stage == name)
                 self.time_labels[name].set(tr("累計耗時：{0}").format(elapsed_text(total)))
+                self.bt_elapsed[name] = seconds
+                self.show_bt_progress(name)
             elif event[0] == "usage":
                 self.usage_records[event[1], event[2]['scope']] = event[2]
                 self.show_usage()
@@ -784,6 +794,7 @@ class TranslationQueue:
             elif event[0] == "bt_progress":
                 name, percent, current, total, eta = event[1:]
                 self.bt_progress[name] = (percent, current, total, eta, True)
+                self.bt_elapsed[name] = None  # Only pair page counts with timing from the same progress report.
                 self.show_bt_progress(name)
             elif event[0] == "stage":
                 self.label.set(f"{tr(event[1])}: {event[2]}%")

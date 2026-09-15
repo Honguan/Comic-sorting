@@ -424,6 +424,7 @@ class UIImprovementsTests(unittest.TestCase):
                     for name in app.translation_queue.bt_bars:
                         app.translation_queue.time_labels[name].set(tr('累計耗時：{0}').format('25:01:01'))
                         app.translation_queue.bt_progress[name] = (60, 582, 960, "4:00:04", True)
+                        app.translation_queue.bt_elapsed[name] = 90061
                         app.translation_queue.show_bt_progress(name)
                     app.translation_queue.stage.pack(fill="x", before=app.translation_queue.bt_frame)
                     details = [widget for widget in next(iter(app.translation_queue.bt_bars.values())).master.winfo_children()

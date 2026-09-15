@@ -132,11 +132,14 @@ class QueueWorkerTests(unittest.TestCase):
                   "Inpaint: 100%|##########| 2/2 [00:03<00:00, 1it/s]\n"
                   "finished translating all dirs\n")
         progress = []
+        timing = []
         with self.assertRaises(RuntimeError):  # Output ends with unfinished stages.
             run_translation([sys.executable, "-u", "-c", f"import sys; sys.stdout.write({output!r}); sys.stdout.flush(); input()"],
-                            self.root, None, threading.Event(), lambda *values: progress.append(values))
+                            self.root, None, threading.Event(), lambda *values: progress.append(values),
+                            timing=lambda *values: timing.append(values))
         self.assertEqual([p[0] for p in progress], ["Text Detection", "OCR", "Translation", "Inpaint"])
         self.assertEqual(progress[2][2:], (1, 2, "00:08"))
+        self.assertEqual(timing, [('Text Detection', 1), ('OCR', 0), ('Translation', 8), ('Inpaint', 3)])
 
     def test_each_translation_job_resets_real_total_and_enabled_stages(self):
         import json
