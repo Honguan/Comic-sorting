@@ -178,11 +178,27 @@ class HistoryWindow(tk.Toplevel):
         horizontal.grid(row=1, column=0, sticky='ew')
         listing.rowconfigure(0, weight=1)
         listing.columnconfigure(0, weight=1)
-        self.details = tk.Text(detail, wrap='word', state='disabled', height=14)
-        detail_scroll = ttk.Scrollbar(detail, command=self.details.yview)
-        self.details.configure(yscrollcommand=detail_scroll.set)
-        detail_scroll.pack(side='right', fill='y')
+        self.details = ttk.Notebook(detail)
         self.details.pack(fill='both', expand=True)
+        self.detail_tables = {}
+        for key, title in (('basic', '基本資料'), ('usage', '用量與金額'), ('stages', '各階段耗時')):
+            frame = ttk.Frame(self.details)
+            self.details.add(frame, text=tr(title))
+            columns = self.totals['columns'] if key == 'usage' else ('field', 'value')
+            table = ttk.Treeview(frame, columns=columns, show='headings', height=5)
+            for column in columns:
+                title = self.totals.heading(column, 'text') if key == 'usage' else tr('欄位') if column == 'field' else tr('資料')
+                table.heading(column, text=title)
+                table.column(column, width=130 if key == 'usage' or column == 'field' else 550, minwidth=40, stretch=True)
+            vertical = ttk.Scrollbar(frame, command=table.yview)
+            horizontal = ttk.Scrollbar(frame, orient='horizontal', command=table.xview)
+            table.configure(yscrollcommand=vertical.set, xscrollcommand=horizontal.set)
+            table.grid(row=0, column=0, sticky='nsew')
+            vertical.grid(row=0, column=1, sticky='ns')
+            horizontal.grid(row=1, column=0, sticky='ew')
+            frame.rowconfigure(0, weight=1)
+            frame.columnconfigure(0, weight=1)
+            self.detail_tables[key] = table
         self.tree.bind('<<TreeviewSelect>>', lambda _event: self.show_details())
         self.refresh()
 
@@ -196,17 +212,7 @@ class HistoryWindow(tk.Toplevel):
         for key in ('runs', 'jobs'):
             self.total_counts[key].set(f"{totals[key]:,}")
         self.total_counts['elapsed'].set(elapsed_text(totals['elapsed_seconds']))
-        self.totals.delete(*self.totals.get_children())
-        for scope, label in (('OCR', 'OCR'), ('translation', tr("翻譯")), ('total', tr("合計"))):
-            records = totals['usage_records'][scope]
-            costs = [Decimal(value['cost']) for value in records if value['cost'] is not None]
-            cost = f"US${sum(costs).quantize(Decimal('0.01'), rounding=ROUND_CEILING):,.2f}" if costs else tr("無法預估")
-            tokens = f"{sum(value['total_tokens'] for value in records):,}" if records else tr("尚未回報")
-            requests = f"{sum(value['requests'] for value in records):,}" if records else '—'
-            partial = any(value['cost'] is None or value['unpriced_requests'] for value in records)
-            pricing = tr("僅含已知金額") if costs and partial else tr("完整") if costs else tr("尚未回報")
-            reporting = tr("回報不完整") if any(value['missing_usage_requests'] for value in records) else tr("完整") if records else tr("尚未回報")
-            self.totals.insert('', 'end', iid=scope, values=(label, tokens, cost, requests, pricing, reporting))
+        self.fill_usage(self.totals, totals['usage_records'])
         self.tree.delete(*self.tree.get_children())
         self.records = {}
         for record in rows:
@@ -237,41 +243,54 @@ class HistoryWindow(tk.Toplevel):
             self.tree.selection_set(rows[0]['id'])
         self.show_details()
 
+    def fill_usage(self, table, usage):
+        table.delete(*table.get_children())
+        for scope, label in (('OCR', 'OCR'), ('translation', tr("翻譯")), ('total', tr("合計"))):
+            records = usage[scope]
+            costs = [Decimal(value['cost']) for value in records if value['cost'] is not None]
+            cost = f"US${sum(costs).quantize(Decimal('0.01'), rounding=ROUND_CEILING):,.2f}" if costs else tr("無法預估")
+            tokens = f"{sum(value['total_tokens'] for value in records):,}" if records else tr("尚未回報")
+            requests = f"{sum(value['requests'] for value in records):,}" if records else '—'
+            partial = any(value['cost'] is None or value['unpriced_requests'] for value in records)
+            pricing = tr("僅含已知金額") if costs and partial else tr("完整") if costs else tr("尚未回報")
+            reporting = tr("回報不完整") if any(value['missing_usage_requests'] for value in records) else tr("完整") if records else tr("尚未回報")
+            table.insert('', 'end', iid=scope, values=(label, tokens, cost, requests, pricing, reporting))
+
     def show_details(self):
+        for table in self.detail_tables.values():
+            table.delete(*table.get_children())
         selected = self.tree.selection()
-        lines = []
-        if selected:
-            record, job = self.records[selected[0]]
-            if job is None:
-                lines = [tr("本次佇列累計"), tr("開始時間") + ': ' + record['started_at'],
-                         tr("完成時間") + ': ' + (record.get('finished_at') or '—'),
-                         tr("最後儲存時間") + ': ' + record['saved_at'],
-                         tr("總耗時：{0}").format(elapsed_text(record.get('elapsed_seconds')))]
-                for scope, label in (('OCR', 'OCR'), ('translation', tr("翻譯")), ('total', tr("合計"))):
-                    lines.append(label + ': ' + usage_text(scope_records(record, scope), empty_text=tr("無法預估")))
-                for stage in BT_STAGES:
-                    values = [item['stage_seconds'][stage] for item in record['jobs'] if stage in item.get('stage_seconds', {})]
-                    lines.append(tr(stage) + ': ' + elapsed_text(sum(values) if values else None))
-            else:
-                lines = [job['path'], tr(self.actions[job['action']]) + ' / ' + tr(self.statuses[job['status']]),
-                         tr("開始時間") + ': ' + (job.get('started_at') or '—'),
-                         tr("完成時間") + ': ' + (job.get('finished_at') or '—'),
-                         tr("總耗時：{0}").format(elapsed_text(job.get('elapsed_seconds')))]
-                if job['action'] == 'translate':
-                    pages = tr("全部頁面") if job['start_page'] == 1 and job['end_page'] is None else f"{job['start_page']}—{job['end_page'] or '…'}"
-                    lines.append(tr("翻譯頁數") + ': ' + pages)
-                for scope, label in (('OCR', 'OCR'), ('translation', tr("翻譯")), ('total', tr("合計"))):
-                    value = job.get('usage', {}).get(scope)
-                    lines.append(label + ': ' + usage_text([value] if value else [], empty_text=tr("無法預估")))
-                    if value and value.get('price_basis'):
-                        lines.append(tr("估價依據：{0}（費率日期：{1}）").format(value['price_basis'], value.get('rates_date') or '—'))
-                for stage in BT_STAGES:
-                    lines.append(tr(stage) + ': ' + elapsed_text(job.get('stage_seconds', {}).get(stage)))
-                diagnostic = error_details(job['status'], job.get('error', ''))
-                if diagnostic:
-                    lines.append(diagnostic)
-            lines.append(tr("階段耗時可能重疊；金額為估算，僅包含已回報用量。"))
-        self.details.configure(state='normal')
-        self.details.delete('1.0', 'end')
-        self.details.insert('1.0', '\n'.join(lines))
-        self.details.configure(state='disabled')
+        if not selected:
+            return
+        record, job = self.records[selected[0]]
+        source = job if job is not None else record
+        fields = [(tr("項目"), tr("本次佇列累計") if job is None else job['path']),
+                  (tr("狀態"), tr(self.statuses[source['status']])),
+                  (tr("開始時間"), source.get('started_at') or '—'),
+                  (tr("完成時間"), source.get('finished_at') or '—'),
+                  (tr("最後儲存時間"), record.get('saved_at') or '—'),
+                  (tr("累計耗時"), elapsed_text(source.get('elapsed_seconds')))]
+        jobs = record['jobs'] if job is None else [job]
+        if job is None:
+            fields.append((tr("工作數"), len(jobs)))
+        else:
+            fields.append((tr("動作"), tr(self.actions[job['action']])))
+            if job['action'] == 'translate':
+                pages = tr("全部頁面") if job.get('start_page', 1) == 1 and job.get('end_page') is None else f"{job.get('start_page', 1)}—{job.get('end_page') or '…'}"
+                fields.append((tr("翻譯頁數"), pages))
+            diagnostic = error_details(job['status'], job.get('error', ''))
+            if diagnostic:
+                fields.append((tr("錯誤原因"), diagnostic))
+            for scope, label in (('OCR', 'OCR'), ('translation', tr("翻譯")), ('total', tr("合計"))):
+                value = job.get('usage', {}).get(scope, {})
+                if value.get('price_basis'):
+                    fields.append((label + ' / ' + tr("估價依據"), value['price_basis']))
+                    fields.append((label + ' / ' + tr("費率日期"), value.get('rates_date') or '—'))
+        for label, value in fields:
+            self.detail_tables['basic'].insert('', 'end', values=(label, value))
+        self.fill_usage(self.detail_tables['usage'], {
+            scope: [item['usage'][scope] for item in jobs if scope in item.get('usage', {})]
+            for scope in ('OCR', 'translation', 'total')})
+        for stage in BT_STAGES:
+            values = [item['stage_seconds'][stage] for item in jobs if stage in item.get('stage_seconds', {})]
+            self.detail_tables['stages'].insert('', 'end', values=(tr(stage), elapsed_text(sum(values) if values else None)))

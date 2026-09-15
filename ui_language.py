@@ -588,3 +588,13 @@ TRANSLATIONS.update({
     '完整': {'en': 'Complete', 'ja': '完全'},
     '回報不完整': {'en': 'Incomplete reporting', 'ja': '報告が不完全'},
 })
+
+TRANSLATIONS.update({
+    '基本資料': {'en': 'Details', 'ja': '基本情報'},
+    '用量與金額': {'en': 'Usage and cost', 'ja': '使用量と金額'},
+    '各階段耗時': {'en': 'Stage durations', 'ja': '段階別所要時間'},
+    '欄位': {'en': 'Field', 'ja': '項目'},
+    '資料': {'en': 'Value', 'ja': '値'},
+    '估價依據': {'en': 'Pricing basis', 'ja': '見積根拠'},
+    '費率日期': {'en': 'Rates date', 'ja': '料金基準日'},
+})

@@ -11,6 +11,11 @@ from queue_worker import Job
 from ui_language import set_language
 
 
+def detail_values(window):
+    return "\n".join(str(value) for table in window.detail_tables.values()
+                     for item in table.get_children() for value in table.item(item, 'values'))
+
+
 class WorkflowTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -329,8 +334,8 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn('滿載', history.tree.set(folder, 'error_reason'))
         history.tree.selection_set(folder)
         history.show_details()
-        self.assertNotIn(original, history.details.get('1.0', 'end'))
-        self.assertNotIn('LLM_CAPACITY', history.details.get('1.0', 'end'))
+        self.assertNotIn(original, detail_values(history))
+        self.assertNotIn('LLM_CAPACITY', detail_values(history))
         # Existing persisted raw errors remain sufficient after restart.
         saved = comic.load_json(self.settings, {})
         self.assertEqual(saved['bt_jobs'][0]['error'], original)
@@ -1417,8 +1422,9 @@ class WorkflowTests(unittest.TestCase):
         self.assertFalse(window.tree.bbox(folders[0]))
         self.assertEqual(window.tree.set(batch, 'usage'), q.usage_labels['total'].get())
         for scope in ('OCR', 'translation', 'total'):
-            self.assertIn(q.usage_labels[scope].get(), window.details.get('1.0', 'end'))
-        self.assertNotIn(str(first), window.details.get('1.0', 'end'))
+            self.assertTrue(window.detail_tables['usage'].exists(scope))
+        self.assertEqual(window.detail_tables['usage'].set('total', 'tokens'), '8,000')
+        self.assertNotIn(str(first), detail_values(window))
         window.tree.item(batch, open=True)
         self.root.update_idletasks()
         for folder, tokens, cost in zip(folders, ('3.00K', '5.00K'), ('US$1.01', 'US$2.01')):
@@ -1436,9 +1442,9 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(window.tree.set(scopes[0], 'elapsed'), '00:00:05')
         window.tree.selection_set(scopes[0])
         window.show_details()
-        self.assertIn(str(first), window.details.get('1.0', 'end'))
-        self.assertNotIn(str(second), window.details.get('1.0', 'end'))
-        self.assertIn('00:00:15', window.details.get('1.0', 'end'))
+        self.assertIn(str(first), detail_values(window))
+        self.assertNotIn(str(second), detail_values(window))
+        self.assertIn('00:00:15', detail_values(window))
         window.refresh()
         self.assertFalse(window.tree.item(batch, 'open'))
         self.assertTrue(all(not window.tree.item(item, 'open') for item in window.tree.get_children(batch)))
@@ -1516,7 +1522,7 @@ class WorkflowTests(unittest.TestCase):
         window = q.history_window
         self.assertEqual(len(window.tree.get_children()), 1)
         self.assertIn('2.55M', window.tree.set(window.tree.get_children()[0], 'usage'))
-        self.assertIn('US$2.61', window.details.get('1.0', 'end'))
+        self.assertIn('US$2.61', detail_values(window))
         batch = window.tree.get_children()[0]
         self.assertFalse(window.tree.item(batch, 'open'))
         folder = window.tree.get_children(batch)[1]
@@ -1526,11 +1532,11 @@ class WorkflowTests(unittest.TestCase):
         window.tree.item(batch, open=True)
         window.tree.selection_set(folder)
         window.show_details()
-        self.assertIn(str(second), window.details.get('1.0', 'end'))
-        self.assertNotIn(str(first), window.details.get('1.0', 'end'))
-        self.assertNotIn('translation failed after usage report', window.details.get('1.0', 'end'))
-        self.assertIn('未能分類', window.details.get('1.0', 'end'))
-        self.assertIn('OpenAI Standard API equivalent (not a bill)', window.details.get('1.0', 'end'))
+        self.assertIn(str(second), detail_values(window))
+        self.assertNotIn(str(first), detail_values(window))
+        self.assertNotIn('translation failed after usage report', detail_values(window))
+        self.assertIn('未能分類', detail_values(window))
+        self.assertIn('OpenAI Standard API equivalent (not a bill)', detail_values(window))
         window.keyword.set('not in history')
         window.refresh()
         self.assertEqual(window.tree.get_children(), ())
