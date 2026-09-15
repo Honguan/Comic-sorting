@@ -136,6 +136,8 @@ TRANSLATIONS = {
     '刪除整合資料夾…': {'en': 'Delete merged folder…', 'ja': '結合フォルダーを削除…'},
     '此整合資料夾及其所有檔案': {'en': 'This merged folder and all its files', 'ja': 'この結合フォルダーとその中のすべてのファイル'},
     '資料夾類型': {'en': 'Folder type', 'ja': 'フォルダー種別'},
+    '選取範圍內都是整合資料夾，已全部略過，沒有可整合的單一章節。': {'en': 'All selected folders are merged folders and were skipped. No single chapters remain to merge.', 'ja': '選択範囲はすべて結合フォルダーのためスキップしました。結合できる単一の章がありません。'},
+    '\n\n已略過 {0} 個整合資料夾（不作為來源）：\n{1}': {'en': '\n\nSkipped {0} merged folders (not used as sources):\n{1}', 'ja': '\n\n結合フォルダー {0} 個をスキップ（入力として使用しません）：\n{1}'},
     '單一章節': {'en': 'Single chapter', 'ja': '単一の章'},
     '整合資料夾': {'en': 'Merged folder', 'ja': '結合フォルダー'},
     '全選所有資料夾': {'en': 'Select all folders', 'ja': 'すべてのフォルダーを選択'},

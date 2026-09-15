@@ -718,6 +718,13 @@ class FileAggregatorApp:
         if start_idx < 0 or end_idx >= len(chapters) or start_idx > end_idx:
             messagebox.showwarning(tr("警告"), tr("請確保編號範圍有效"))
             return
+        selected_chapters = chapters[start_idx:end_idx + 1]
+        skipped = [name for _, name, _ in selected_chapters if folder_kind(name) == "merged"]
+        chapters = [item for item in selected_chapters if folder_kind(item[1]) != "merged"]
+        if not chapters:
+            messagebox.showinfo(tr("確認整合"), tr("選取範圍內都是整合資料夾，已全部略過，沒有可整合的單一章節。"))
+            return
+        start_idx, end_idx = 0, len(chapters) - 1
         try:
             output = aggregate_output(chapters[start_idx:end_idx + 1])
         except ValueError as error:
@@ -727,6 +734,8 @@ class FileAggregatorApp:
         remove_sources = self.remove_sources_after_aggregate.get()
         keep_last = self.keep_last_source.get()
         confirmation = tr("您確定要整合以下資料夾嗎？\n\n{0}").format(summarize_names(names))
+        if skipped:
+            confirmation += tr("\n\n已略過 {0} 個整合資料夾（不作為來源）：\n{1}").format(len(skipped), summarize_names(skipped))
         if output.exists() and output not in {Path(item[0]).resolve() for item in chapters[start_idx:end_idx + 1]}:
             confirmation += tr("\n\n既有輸出將被取代（包含其中的翻譯結果）：{0}").format(output.name)
         if remove_sources:

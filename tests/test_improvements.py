@@ -416,11 +416,12 @@ class UIImprovementsTests(unittest.TestCase):
         warning.assert_not_called()
         chapters, start, end, cleanup, keep_last = thread.call_args.kwargs["args"]
         self.assertTrue(keep_last)
-        self.assertEqual([item[1] for item in chapters], ["Chapter 1-45", "Chapter 46"])
-        self.assertEqual((start, end), (0, 1))
+        self.assertEqual([item[1] for item in chapters], ["Chapter 46"])
+        self.assertEqual((start, end), (0, 0))
         self.app.aggregate_worker(chapters, start, end, True)
         self.assertTrue((self.folder / "Series/Chapter 45/1.png").exists())
-        self.assertEqual(len(comic_core.image_files(self.folder / "Series/Chapter 1-46")), 2)
+        self.assertTrue((self.folder / "Series/Chapter 1-45/1.png").exists())
+        self.assertEqual(len(comic_core.image_files(self.folder / "Series/Chapter 46-46")), 1)
 
     def test_minimum_window_keeps_actions_visible_in_all_languages(self):
         from queue_worker import parse_bt_usage

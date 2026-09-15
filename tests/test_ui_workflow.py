@@ -186,14 +186,17 @@ class WorkflowTests(unittest.TestCase):
         q.add_selected()
         self.assertEqual([q.tree.set(str(id(job)), 'kind') for job in q.jobs],
                          ['單一章節', '單一章節', '整合資料夾'])
-        # Both leaf types are explicit inputs; overlap is rejected before any worker starts.
+        # Confirmation skips merged inputs but still warns about a same-named output.
         self.app.select_all_chapters(first.parent, base)
         self.assertTrue(self.app.has_explicit_chapter_selection())
         with mock.patch.object(comic.messagebox, 'showwarning') as warning, \
+                mock.patch.object(comic.messagebox, 'askyesno', return_value=False) as confirm, \
                 mock.patch.object(comic.threading, 'Thread') as worker:
             self.app.confirm_aggregate()
             worker.assert_not_called()
-            self.assertIn('重疊', warning.call_args.args[1])
+            warning.assert_not_called()
+            self.assertIn('已略過 1 個整合資料夾', confirm.call_args.args[1])
+            self.assertIn('既有輸出將被取代', confirm.call_args.args[1])
         # Rescan and double-click retain the merged leaf's existing queue behavior.
         self.app.select_all_chapters(first.parent, base, 'merged')
         self.app.apply_scan_data(base, self.app.scan_folder_data(base))
@@ -427,6 +430,47 @@ class WorkflowTests(unittest.TestCase):
             self.assertIn(f"Chapter {number}", message)
         for number in (1, 4):
             self.assertNotIn(f"Chapter {number}", message)
+
+    def test_merge_confirmation_skips_merged_within_original_range_and_cleanup(self):
+        folders = [self.chapter(name) for name in ('Chapter 1', 'Chapter 1-4', 'Chapter 2', 'Chapter 3', 'Chapter 9')]
+        for folder in folders:
+            (folder / '1.png').write_bytes(folder.name.encode())
+        base = self.folder / 'Comics'
+        self.app.apply_scan_data(base, self.app.scan_folder_data(base))
+        self.app.folder_tree.selection_set(self.app.folder_tree.get_children()[0])
+        self.app.on_tree_select()
+        for entry, value in ((self.app.start_entry, '2'), (self.app.end_entry, '4')):
+            entry.delete(0, 'end')
+            entry.insert(0, value)
+        self.app.remove_sources_after_aggregate.set(True)
+        self.app.keep_last_source.set(False)
+        for enqueue in (False, True):
+            with mock.patch.object(comic.messagebox, 'askyesno', return_value=True) as confirm, \
+                    mock.patch.object(comic.threading, 'Thread') as worker:
+                self.app.confirm_aggregate(translate_after=enqueue)
+                args = worker.call_args.kwargs['args']
+                self.assertEqual([item[1] for item in args[0]], ['Chapter 2', 'Chapter 3'])
+                self.assertEqual(args[1:], (0, 1, True, False))
+                self.assertIn('已略過 1 個整合資料夾', confirm.call_args.args[1])
+                self.assertEqual(self.app.translate_after, enqueue)
+            self.app.set_manga_busy(False)
+        self.app.aggregate_worker(*args)
+        output = folders[0].parent / 'Chapter 2-3'
+        self.assertEqual([(output / f'{i}.png').read_bytes() for i in (1, 2)], [b'Chapter 2', b'Chapter 3'])
+        self.assertTrue((folders[1] / 'result/1.png').exists())
+        self.assertTrue(folders[0].exists())
+        self.assertTrue(folders[4].exists())
+        self.assertFalse(folders[2].exists())
+        self.assertFalse(folders[3].exists())
+        self.app.select_all_chapters(folders[0].parent, base, 'merged')
+        with mock.patch.object(comic.messagebox, 'showinfo') as info, \
+                mock.patch.object(comic.messagebox, 'askyesno') as confirm, \
+                mock.patch.object(comic.threading, 'Thread') as worker:
+            self.app.confirm_aggregate(translate_after=True)
+            self.assertIn('沒有可整合的單一章節', info.call_args.args[1])
+            confirm.assert_not_called()
+            worker.assert_not_called()
+            self.assertFalse(self.app.manga_busy)
 
     def test_keep_last_source_is_independent_persisted_and_used_in_confirmation(self):
         self.assertFalse(self.app.remove_sources_after_aggregate.get())
