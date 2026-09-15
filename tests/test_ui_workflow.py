@@ -37,6 +37,26 @@ class WorkflowTests(unittest.TestCase):
         (path / "result/1.png").write_bytes(b"image")
         return path
 
+    def test_queue_columns_fit_window_and_selected_details_keep_full_path(self):
+        from types import SimpleNamespace
+        q = self.app.translation_queue
+        path = self.folder / ("Long 漫畫 name " * 12) / "Chapter 1-100"
+        q.jobs = [Job(path, "translate", status="failed", error="Selected model is at capacity")]
+        q.render()
+        item = str(id(q.jobs[0]))
+        q.tree.selection_set(item)
+        q.update_controls()
+        for width in (760, 1200, 1600):
+            q.fit_columns(SimpleNamespace(width=width))
+            self.assertLessEqual(sum(q.tree.column(c, "width") for c in ("#0", *q.tree['columns'])), width)
+            self.assertTrue(all(q.tree.column(c, "width") > 0 for c in q.tree['columns']))
+        self.assertIn(str(path), q.selection_details.get())
+        self.assertIn('滿載', q.selection_details.get())
+        self.assertNotIn('LLM_CAPACITY', q.selection_details.get())
+        q.tree.selection_set(q.tree.parent(item))
+        q.update_controls()
+        self.assertEqual(q.selection_details.get(), str(path.parent))
+
     def test_queue_groups_paths_series_and_chapters_without_reordering_jobs(self):
         q = self.app.translation_queue
         base = self.folder / "Comics"

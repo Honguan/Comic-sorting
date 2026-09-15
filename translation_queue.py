@@ -102,12 +102,12 @@ class TranslationQueue:
         for column, text in (("#0", "漫畫路徑"), ("kind", "資料夾類型"), ("action", "動作"), ("pages", "翻譯頁數"),
                              ("status", "狀態"), ("error_reason", "錯誤原因")):
             self.tree.heading(column, text=tr(text))
-        self.tree.column("#0", width=340, minwidth=340, stretch=False)
+        self.tree.column("#0", width=340, minwidth=40, stretch=False)
         self.tree.column("kind", width=110, stretch=False)
         self.tree.column("action", width=85, stretch=False)
         self.tree.column("pages", width=120, stretch=False)
         self.tree.column("status", width=110, stretch=False)
-        self.tree.column("error_reason", width=320, minwidth=180)
+        self.tree.column("error_reason", width=220, minwidth=40, stretch=False)
         vertical = ttk.Scrollbar(tree_frame, command=self.tree.yview)
         horizontal = ttk.Scrollbar(tree_frame, orient="horizontal", command=self.tree.xview)
         self.tree.configure(yscrollcommand=vertical.set, xscrollcommand=horizontal.set)
@@ -116,6 +116,10 @@ class TranslationQueue:
         horizontal.grid(row=1, column=0, sticky="ew")
         tree_frame.rowconfigure(0, weight=1)
         tree_frame.columnconfigure(0, weight=1)
+        self.selection_details = tk.StringVar()
+        self.selection_label = ttk.Label(tree_frame, textvariable=self.selection_details, anchor="w", justify="left", wraplength=700)
+        self.selection_label.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+        self.tree.bind("<Configure>", self.fit_columns)
         self.tree.bind("<Double-1>", self.show_details)
         self.tree.bind("<<TreeviewSelect>>", lambda _event: self.update_controls())
         self.context_menu = tk.Menu(self.tree, tearoff=False)
@@ -350,7 +354,39 @@ class TranslationQueue:
             text += '｜' + tr("平均：{0} 秒／頁").format(average)
         self.bt_labels[name].set(text)
 
+    def fit_columns(self, event):
+        width = max(1, event.width - 4)
+        font = tkfont.Font(root=self.app.root, font=ttk.Style(self.tree).lookup("Treeview", "font") or "TkDefaultFont")
+        fixed = {column: font.measure(tr(text)) + 24 for column, text in
+                 (("kind", "整合資料夾"), ("action", "翻譯"), ("pages", "第 100–1000 頁"), ("status", "完成（有異常）"))}
+        scale = min(1, width * .60 / sum(fixed.values()))
+        for column, size in fixed.items():
+            size = max(1, int(size * scale))
+            self.tree.column(column, width=size, minwidth=1, stretch=False)
+        remaining = width - sum(self.tree.column(column, "width") for column in fixed)
+        path_width = max(1, int(remaining * .62))
+        self.tree.column("#0", width=path_width, minwidth=1, stretch=False)
+        self.tree.column("error_reason", width=max(1, remaining - path_width), minwidth=1, stretch=False)
+        self.tree.xview_moveto(0)
+        self.selection_label.configure(wraplength=max(100, width))
+
+    def update_selection_details(self):
+        selection = self.tree.selection()
+        if not selection:
+            self.selection_details.set("")
+            return
+        item = selection[0]
+        job = next((job for job in self.jobs if str(id(job)) == item), None)
+        if job:
+            reason = error_info(job.status, job.error)[1]
+            self.selection_details.set(str(job.path) + "\n" + " | ".join(filter(None, (
+                tr(FOLDER_KINDS[folder_kind(job.path.name)]), tr(ACTIONS[job.action]),
+                self.page_range_text(job), tr(STATUSES[job.status]), reason))))
+        else:
+            self.selection_details.set(item.split(":", 1)[1])
+
     def update_controls(self):
+        self.update_selection_details()
         busy = self.running or self.app.manga_busy
         for control in self.controls:
             control.configure(state="disabled" if busy else "normal")
@@ -384,12 +420,6 @@ class TranslationQueue:
                 open_groups[item] = self.tree.item(item, "open")
         self.tree.delete(*self.tree.get_children())
         self.pending_file_counts = {}
-        font = tkfont.Font(root=self.app.root, font=ttk.Style(self.tree).lookup("Treeview", "font") or "TkDefaultFont")
-        labels = [str(job.path.parent.parent) for job in self.jobs]
-        labels += [job.path.parent.name for job in self.jobs]
-        labels += [f"{index}. {job.path.name}" for index, job in enumerate(self.jobs, 1)]
-        width = max([340] + [font.measure(label) + 80 for label in labels])
-        self.tree.column("#0", width=width, minwidth=width, stretch=False)
         for index, job in enumerate(self.jobs, 1):
             item = str(id(job))
             if job.action == "translate" and job.status == "pending":
