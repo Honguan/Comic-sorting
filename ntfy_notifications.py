@@ -12,6 +12,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 import tkinter as tk
 from tkinter import ttk
 
+from windows_notifications import WindowsNotifications
 from app_logging import logger, redact
 from ui_language import tr
 
@@ -139,7 +140,8 @@ class NtfyNotifications:
         self.pending = 0
         self.after_id = None
         self.tab = ttk.Frame(app.work_tabs)
-        app.work_tabs.add(self.tab, text=tr('ntfy 通知'))
+        app.work_tabs.add(self.tab, text=tr('通知'))
+        self.windows = WindowsNotifications(app, self.tab, settings)
         box = ttk.LabelFrame(self.tab, text=tr('ntfy 通知'), padding=8)
         box.pack(fill='x', padx=8, pady=8)
         row = ttk.Frame(box)
@@ -164,7 +166,7 @@ class NtfyNotifications:
         app.root.bind('<Destroy>', self.close, add='+')
 
     def settings(self):
-        return {'ntfy_' + key: value for key, value in self.saved.items()}
+        return dict({'ntfy_' + key: value for key, value in self.saved.items()}, **self.windows.settings())
 
     def read_fields(self):
         return validate_settings(dict(server=self.server.get(), topic=self.topic.get(), token=self.token.get()))
@@ -211,6 +213,7 @@ class NtfyNotifications:
         self.enqueue(config, 'Comic sorting - ' + tr('測試通知'), tr('ntfy 連線測試成功，這是 Comic sorting 的測試通知。'), 3)
 
     def send(self, event, title, message, priority=3):
+        self.windows.send(event, title, message, priority)
         if not self.saved['enabled'] or not self.saved[event]:
             return
         if self.token_error:

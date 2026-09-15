@@ -558,3 +558,12 @@ TRANSLATIONS.update({'BallonsTranslator 運行設定': {'en': 'BallonsTranslator
  'OCR模組': {'en': 'OCR module', 'ja': 'OCR モジュール'},
  '圖像修復模組': {'en': 'Inpainter', 'ja': '画像修復モジュール'},
  '翻譯模組': {'en': 'Translator', 'ja': '翻訳モジュール'}})
+
+TRANSLATIONS.update({
+    '通知': {'en': 'Notifications', 'ja': '通知'},
+    'Windows 桌面通知': {'en': 'Windows desktop notifications', 'ja': 'Windows デスクトップ通知'},
+    '測試 Windows 通知': {'en': 'Test Windows notification', 'ja': 'Windows 通知をテスト'},
+    '這是 Comic sorting 的 Windows 測試通知。': {'en': 'This is a Comic sorting Windows test notification.', 'ja': 'Comic sorting の Windows テスト通知です。'},
+    '已交給 Windows 顯示；勿擾模式或系統通知設定可能隱藏通知。': {'en': 'Submitted to Windows; Do Not Disturb or system settings may hide it.', 'ja': 'Windows に通知を送信しました。応答不可モードやシステム設定で非表示になる場合があります。'},
+    'Windows 通知失敗；佇列繼續執行。': {'en': 'Windows notification failed; the queue continues.', 'ja': 'Windows 通知に失敗しました。キューは続行します。'},
+})
