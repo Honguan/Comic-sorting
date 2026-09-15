@@ -214,7 +214,7 @@ class WorkflowTests(unittest.TestCase):
         def delayed_publish(*_args):
             entered.set()
             release.wait(3)
-            return 'NTFY_HTTP_401'
+            return 'NTFY_CLOUDFLARE_1010'
 
         with mock.patch('ntfy_notifications.publish', side_effect=delayed_publish):
             n.test()  # Explicit test works even while automatic notifications are off.
@@ -228,7 +228,8 @@ class WorkflowTests(unittest.TestCase):
                 self.root.update()
                 time.sleep(.01)
             self.assertEqual(n.pending, 0)
-            self.assertIn('NTFY_HTTP_401', n.status.get())
+            self.assertIn('NTFY_CLOUDFLARE_1010', n.status.get())
+            self.assertIn('Cloudflare 阻擋用戶端', n.status.get())
             self.assertFalse(self.app.translation_queue.stop.is_set())
             self.assertEqual(str(n.test_button['state']), 'normal')
 

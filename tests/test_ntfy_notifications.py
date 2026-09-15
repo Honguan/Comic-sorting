@@ -18,7 +18,12 @@ class NtfyTests(unittest.TestCase):
 
             def do_POST(self):
                 received.append((self.path, self.headers, json.loads(self.rfile.read(int(self.headers['Content-Length'])))))
-                if self.redirect:
+                if self.headers.get('User-Agent') != 'Comic-sorting':
+                    self.send_response(403)
+                    self.send_header('Server', 'cloudflare')
+                    self.end_headers()
+                    self.wfile.write(b'error code: 1010')
+                elif self.redirect:
                     self.send_response(307)
                     self.send_header('Location', '/redirected')
                     self.end_headers()
@@ -39,6 +44,7 @@ class NtfyTests(unittest.TestCase):
             path, headers, body = received[0]
             self.assertEqual(path, '/')
             self.assertEqual(headers['Content-Type'], 'application/json; charset=utf-8')
+            self.assertEqual(headers['User-Agent'], 'Comic-sorting')
             self.assertEqual((body['topic'], body['title'], body['priority']), ('test-topic', '佇列結束', 4))
             self.assertTrue(body['message'].startswith('漫畫完成\n'))
             self.assertLessEqual(len(body['message'].encode('utf-8')), 4096)
@@ -71,6 +77,20 @@ class NtfyTests(unittest.TestCase):
         with mock.patch('ntfy_notifications.build_opener') as factory:
             factory.return_value.open.return_value.__enter__.return_value.read.return_value = b'{"event":"keepalive"}'
             self.assertEqual(publish(config, 'title', 'body', 3, stop), 'NTFY_RESPONSE')
+
+    def test_cloudflare_block_is_distinguished_from_topic_permissions(self):
+        config = validate_settings(dict(server='https://ntfy.example', topic='test-topic', token='tk_secret'))
+        for server, body, expected in (
+                ('cloudflare', b'error code: 1010', 'NTFY_CLOUDFLARE_1010'),
+                ('cloudflare', b'{"code":40301,"http":403,"error":"forbidden"}', 'NTFY_HTTP_403'),
+                ('nginx', b'403 Forbidden', 'NTFY_HTTP_403')):
+            with self.subTest(server=server, body=body), mock.patch('ntfy_notifications.build_opener') as factory:
+                response = io.BytesIO(body)
+                factory.return_value.open.side_effect = HTTPError(
+                    config['server'], 403, 'Forbidden', {'Server': server}, response)
+                self.assertEqual(publish(config, 'title', 'body', 3, threading.Event()), expected)
+                self.assertEqual(factory.return_value.open.call_count, 1)
+                self.assertTrue(response.closed)
 
     def test_settings_and_windows_token_storage(self):
         valid = dict(server='https://ntfy.sh', topic='comic-test', token='')

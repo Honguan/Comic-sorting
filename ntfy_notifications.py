@@ -59,7 +59,8 @@ class NoRedirect(HTTPRedirectHandler):
 
 
 def publish(settings, title, message, priority, stop):
-    headers = {'Content-Type': 'application/json; charset=utf-8'}
+    # Identify this client: some reverse proxies reject Python's default User-Agent.
+    headers = {'Content-Type': 'application/json; charset=utf-8', 'User-Agent': 'Comic-sorting'}
     if settings['token']:
         headers['Authorization'] = 'Bearer ' + settings['token']
     # ntfy limits messages to 4096 bytes; leave room for UTF-8 and an ellipsis.
@@ -83,6 +84,12 @@ def publish(settings, title, message, priority, stop):
             code = f'NTFY_HTTP_{error.code}'
             retry = error.code == 429 or 500 <= error.code < 600
             retry_after = error.headers.get('Retry-After', '') if error.headers else ''
+            if error.code == 403 and error.headers and 'cloudflare' in error.headers.get('Server', '').lower():
+                try:
+                    if re.search(rb'\berror code:\s*1010\b', error.read(16384), re.IGNORECASE):
+                        code = 'NTFY_CLOUDFLARE_1010'
+                except (OSError, ValueError):
+                    pass  # Keep the HTTP status if the optional diagnostic body cannot be read.
             error.close()
             if retry_after:
                 # Do not retry before a longer/date-formatted Retry-After expires.
@@ -264,7 +271,8 @@ class NtfyNotifications:
             reason = (tr('通知已送達 ntfy 伺服器；設備需開啟通知權限') if code == 'NTFY_OK'
                       else tr('通知未確認送達；請檢查網址、訂閱、權限或網路，翻譯佇列不受影響'))
             reason = {'NTFY_HTTP_401': tr('ntfy 權杖無效或未提供'),
-                      'NTFY_HTTP_403': tr('沒有發布此主題的權限'),
+                      'NTFY_HTTP_403': tr('伺服器拒絕請求（HTTP 403）；請檢查 ntfy 權限或代理／防火牆規則'),
+                      'NTFY_CLOUDFLARE_1010': tr('Cloudflare 阻擋用戶端（1010）；請檢查伺服器的 Cloudflare 規則，並非 ntfy 權杖權限判定'),
                       'NTFY_HTTP_404': tr('ntfy 伺服器網址不存在'),
                       'NTFY_HTTP_429': tr('ntfy 通知頻率或額度已達上限'),
                       'NTFY_NETWORK': tr('ntfy 連線失敗或逾時；為避免重複通知，未自動重送'),
