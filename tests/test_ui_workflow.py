@@ -100,9 +100,12 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(q.tree.item(root, "text"), str(base))
         self.assertEqual([q.tree.item(item, "text") for item in series], ["漫畫 A", "漫畫 B"])
         self.assertEqual([q.tree.item(item, "text") for item in q.tree.get_children(series[0])], ["1. Chapter 1-10", "3. Chapter 11-20"])
-        self.assertFalse(q.tree.item(root, "open"))
+        self.assertTrue(q.tree.item(root, "open"))
         self.assertFalse(q.tree.item(series[0], "open"))
         self.assertEqual([job.path for job in q.jobs], paths)
+        q.tree.item(root, open=False)
+        q.render()
+        self.assertFalse(q.tree.item(root, "open"))
         q.tree.item(root, open=True)
         q.tree.item(series[0], open=True)
         q.tree.selection_set(series[0])
@@ -111,6 +114,12 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(q.selected_job_ids(), {str(id(q.jobs[0])), str(id(q.jobs[2]))})
         q.remove()
         self.assertEqual([job.path for job in q.jobs], [paths[1]])
+        q.tree.delete(*q.tree.get_children())
+        q.jobs.append(Job(self.folder / "Other" / "漫畫 C" / "Chapter 1", "translate"))
+        q.render()
+        roots = q.tree.get_children()
+        self.assertEqual(len(roots), 2)
+        self.assertTrue(all(not q.tree.item(item, "open") for item in roots))
 
     def test_export_all_manga_names_ignores_filter_and_handles_cancel_and_errors(self):
         base = self.folder / "Comics"

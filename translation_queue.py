@@ -442,6 +442,7 @@ class TranslationQueue:
                 open_groups[item] = self.tree.item(item, "open")
         self.tree.delete(*self.tree.get_children())
         self.pending_file_counts = {}
+        single_root = len({job.path.parent.parent for job in self.jobs}) == 1
         for index, job in enumerate(self.jobs, 1):
             item = str(id(job))
             if job.action == "translate" and job.status == "pending":
@@ -452,7 +453,7 @@ class TranslationQueue:
             root = "path:" + str(job.path.parent.parent)
             series = "series:" + str(job.path.parent)
             if not self.tree.exists(root):
-                self.tree.insert("", "end", iid=root, text=str(job.path.parent.parent), open=open_groups.get(root, False))
+                self.tree.insert("", "end", iid=root, text=str(job.path.parent.parent), open=open_groups.get(root, single_root))
             if not self.tree.exists(series):
                 self.tree.insert(root, "end", iid=series, text=job.path.parent.name, open=open_groups.get(series, False))
             self.tree.insert(series, "end", iid=item, text=f"{index}. {job.path.name}",
