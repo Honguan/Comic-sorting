@@ -149,12 +149,12 @@ class HistoryWindow(tk.Toplevel):
         listing, detail = ttk.Frame(panes), ttk.Frame(panes)
         panes.add(listing, weight=1)
         panes.add(detail, weight=1)
-        columns = ('end', 'status', 'jobs', 'elapsed', 'usage', 'error_code', 'error_reason')
+        columns = ('end', 'status', 'jobs', 'elapsed', 'usage', 'error_reason')
         self.tree = ttk.Treeview(listing, columns=columns, show='tree headings', selectmode='browse', height=8)
         self.tree.heading('#0', text=tr("開始時間／資料夾"))
         self.tree.column('#0', width=320, minwidth=160)
         for key, title, width in zip(columns, (tr("完成時間"), tr("狀態"), tr("工作數"), tr("耗時"),
-                                               tr("合計用量／預估金額"), tr("錯誤碼"), tr("錯誤原因")), (160, 100, 65, 90, 350, 170, 300)):
+                                               tr("合計用量／預估金額"), tr("錯誤原因")), (160, 100, 65, 90, 350, 300)):
             self.tree.heading(key, text=title)
             self.tree.column(key, width=width, minwidth=300 if key == 'usage' else 20, stretch=key == 'usage')
         scroll = ttk.Scrollbar(listing, command=self.tree.yview)
@@ -197,7 +197,7 @@ class HistoryWindow(tk.Toplevel):
                 (record.get('finished_at') or '—')[:19].replace('T', ' '),
                 tr("未結束") if record['status'] == 'running' else tr(self.statuses[record['status']]),
                 len(record['jobs']), elapsed_text(record.get('elapsed_seconds')),
-                usage_text(scope_records(record, 'total'), empty_text=tr("無法預估")), '', ''))
+                usage_text(scope_records(record, 'total'), empty_text=tr("無法預估")), ''))
             self.records[record['id']] = record, None
             for index, job in enumerate(record['jobs'], 1):
                 usage = job.get('usage', {})
@@ -205,14 +205,14 @@ class HistoryWindow(tk.Toplevel):
                     (job.get('finished_at') or '—')[:19].replace('T', ' '),
                     tr(self.statuses[job['status']]), '', elapsed_text(job.get('elapsed_seconds')),
                     usage_text([usage['total']] if 'total' in usage else [], empty_text=tr("無法預估")),
-                    *error_info(job['status'], job.get('error', ''))))
+                    error_info(job['status'], job.get('error', ''))[1]))
                 self.records[item] = record, job
                 for scope, title, stage in (('OCR', 'OCR', 'OCR'), ('translation', tr("翻譯"), 'Translation'),
                                             ('total', tr("合計"), None)):
                     seconds = job.get('elapsed_seconds') if stage is None else job.get('stage_seconds', {}).get(stage)
                     child = self.tree.insert(item, 'end', text=title, values=(
                         '', '', '', elapsed_text(seconds),
-                        usage_text([usage[scope]] if scope in usage else [], empty_text=tr("無法預估")), '', ''))
+                        usage_text([usage[scope]] if scope in usage else [], empty_text=tr("無法預估")), ''))
                     self.records[child] = record, job
         self.note.set(tr("顯示 {0} 筆（最多 200 筆）；日期格式 YYYY-MM-DD，留白不限。展開佇列及資料夾查看用量，選取後查看詳細資料。").format(len(rows)))
         if rows:

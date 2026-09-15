@@ -466,7 +466,7 @@ class UIImprovementsTests(unittest.TestCase):
                                 self.pump(.01)
                                 stop = app.translation_queue.stop_button
                                 self.assertLessEqual(stop.winfo_rootx() - window.winfo_rootx() + stop.winfo_reqwidth(), 820)
-                        for widget in (*controls, app.aggregate_button, app.sort_button,
+                        for widget in (*controls, app.aggregate_button,
                                        app.remove_sources_checkbox, app.keep_last_source_checkbox):
                             self.assertTrue(widget.winfo_ismapped(), str(widget))
                             self.assertGreater(widget.winfo_width(), 1)

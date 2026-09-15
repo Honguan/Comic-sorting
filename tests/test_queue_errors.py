@@ -87,7 +87,7 @@ class QueueErrorTests(unittest.TestCase):
         self.assertEqual(error_info('done_warning', '')[0], 'RUN_WARNING')
         raw = 'Something unexpected: ' + 'sk-or-v1-' + 'a' * 40
         details = error_details('failed', raw)
-        self.assertIn('UNKNOWN_ERROR', details)
-        self.assertIn('Something unexpected:', details)
+        self.assertNotIn('UNKNOWN_ERROR', details)
+        self.assertNotIn('Something unexpected:', details)
         self.assertNotIn('a' * 40, details)
         self.assertEqual(error_details('done', 'partial page range'), 'partial page range')

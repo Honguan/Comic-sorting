@@ -124,7 +124,4 @@ def error_info(status: str, error: str) -> tuple[str, str]:
 
 def error_details(status: str, error: str) -> str:
     code, reason = error_info(status, error)
-    original = redact(str(error))
-    if not code:
-        return original
-    return f'{tr("錯誤碼")}: {code}\n{tr("錯誤原因")}: {reason}\n\n{tr("原始訊息")}:\n{original}'
+    return reason if code else redact(str(error))

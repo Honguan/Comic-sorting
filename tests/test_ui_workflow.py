@@ -37,6 +37,17 @@ class WorkflowTests(unittest.TestCase):
         (path / "result/1.png").write_bytes(b"image")
         return path
 
+    def test_queue_path_column_fits_complete_path(self):
+        from tkinter import font as tkfont
+        q = self.app.translation_queue
+        path = self.folder / ("Long 漫畫 title " * 12) / "Chapter 1-100"
+        q.jobs = [Job(path, "translate")]
+        q.render()
+        font = tkfont.Font(root=self.root, font=tk.ttk.Style(q.tree).lookup("Treeview", "font") or "TkDefaultFont")
+        self.assertGreaterEqual(q.tree.column("#0", "minwidth"), font.measure(str(path)) + 40)
+        self.assertFalse(q.tree.column("#0", "stretch"))
+        self.assertEqual(q.tree.item(str(id(q.jobs[0])), "text"), str(path))
+
     def test_export_all_manga_names_ignores_filter_and_handles_cancel_and_errors(self):
         base = self.folder / "Comics"
         for name in ("日本語 漫畫", "Series 10", "Series 2"):
@@ -255,22 +266,22 @@ class WorkflowTests(unittest.TestCase):
         q.poll()
         item = str(id(q.jobs[0]))
         self.assertEqual(q.tree.set(item, 'status'), '失敗')
-        self.assertEqual(q.tree.set(item, 'error_code'), 'LLM_CAPACITY')
+        self.assertNotIn('error_code', q.tree['columns'])
         self.assertIn('滿載', q.tree.set(item, 'error_reason'))
         q.tree.selection_set(item)
         with mock.patch('translation_queue.messagebox.showinfo') as detail:
             q.show_details()
-        self.assertIn('LLM_CAPACITY', detail.call_args.args[1])
-        self.assertIn(original, detail.call_args.args[1])
+        self.assertNotIn('LLM_CAPACITY', detail.call_args.args[1])
+        self.assertNotIn(original, detail.call_args.args[1])
         q.open_history()
         history = q.history_window
         batch = history.tree.get_children()[0]
         folder = history.tree.get_children(batch)[0]
-        self.assertEqual(history.tree.set(folder, 'error_code'), 'LLM_CAPACITY')
+        self.assertIn('滿載', history.tree.set(folder, 'error_reason'))
         history.tree.selection_set(folder)
         history.show_details()
-        self.assertIn(original, history.details.get('1.0', 'end'))
-        self.assertIn('LLM_CAPACITY', history.details.get('1.0', 'end'))
+        self.assertNotIn(original, history.details.get('1.0', 'end'))
+        self.assertNotIn('LLM_CAPACITY', history.details.get('1.0', 'end'))
         # Existing persisted raw errors remain sufficient after restart.
         saved = comic.load_json(self.settings, {})
         self.assertEqual(saved['bt_jobs'][0]['error'], original)
@@ -278,16 +289,16 @@ class WorkflowTests(unittest.TestCase):
         try:
             restored = comic.FileAggregatorApp(restored_root).translation_queue
             item = str(id(restored.jobs[0]))
-            self.assertEqual(restored.tree.set(item, 'error_code'), 'LLM_CAPACITY')
+            self.assertIn('滿載', restored.tree.set(item, 'error_reason'))
             restored.tree.selection_set(item)
             restored.retry()
-            self.assertEqual(restored.tree.set(item, 'error_code'), '')
+            self.assertNotIn('error_code', restored.tree['columns'])
             self.assertEqual(restored.tree.set(item, 'error_reason'), '')
         finally:
             restored_root.destroy()
         history.refresh()
         folder = history.tree.get_children(history.tree.get_children()[0])[0]
-        self.assertEqual(history.tree.set(folder, 'error_code'), 'LLM_CAPACITY')
+        self.assertIn('滿載', history.tree.set(folder, 'error_reason'))
 
     def test_ntfy_queue_events_include_final_usage_and_deduplicate(self):
         q = self.app.translation_queue
@@ -308,7 +319,7 @@ class WorkflowTests(unittest.TestCase):
             self.assertEqual(send.call_count, 3)
             failure, success, total = [call.args for call in send.call_args_list]
             self.assertEqual((failure[0], success[0], total[0]), ('failed', 'success', 'done'))
-            self.assertIn('LLM_CAPACITY', failure[2])
+            self.assertNotIn('LLM_CAPACITY', failure[2])
             self.assertIn('Series / Chapter 1', failure[2])
             self.assertNotIn(str(self.folder), failure[2])
             self.assertIn('1.50K', failure[2])
@@ -1469,7 +1480,8 @@ class WorkflowTests(unittest.TestCase):
         window.show_details()
         self.assertIn(str(second), window.details.get('1.0', 'end'))
         self.assertNotIn(str(first), window.details.get('1.0', 'end'))
-        self.assertIn('translation failed after usage report', window.details.get('1.0', 'end'))
+        self.assertNotIn('translation failed after usage report', window.details.get('1.0', 'end'))
+        self.assertIn('未能分類', window.details.get('1.0', 'end'))
         self.assertIn('OpenAI Standard API equivalent (not a bill)', window.details.get('1.0', 'end'))
         window.keyword.set('not in history')
         window.refresh()

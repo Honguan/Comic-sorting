@@ -9,7 +9,7 @@ import time
 import subprocess
 import os
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, ttk, font as tkfont
 
 from queue_worker import BT_STAGES, Job, run_jobs, translator_command
 from app_logging import logger, log_path
@@ -98,16 +98,15 @@ class TranslationQueue:
         footer.pack(side="bottom", fill="x")
         tree_frame = ttk.Frame(box)
         tree_frame.pack(fill="both", expand=True, pady=4)
-        self.tree = ttk.Treeview(tree_frame, columns=("kind", "action", "pages", "status", "error_code", "error_reason"), show="tree headings", height=3)
+        self.tree = ttk.Treeview(tree_frame, columns=("kind", "action", "pages", "status", "error_reason"), show="tree headings", height=3)
         for column, text in (("#0", "漫畫路徑"), ("kind", "資料夾類型"), ("action", "動作"), ("pages", "翻譯頁數"),
-                             ("status", "狀態"), ("error_code", "錯誤碼"), ("error_reason", "錯誤原因")):
+                             ("status", "狀態"), ("error_reason", "錯誤原因")):
             self.tree.heading(column, text=tr(text))
-        self.tree.column("#0", width=340, minwidth=180)
+        self.tree.column("#0", width=340, minwidth=340, stretch=False)
         self.tree.column("kind", width=110, stretch=False)
         self.tree.column("action", width=85, stretch=False)
         self.tree.column("pages", width=120, stretch=False)
         self.tree.column("status", width=110, stretch=False)
-        self.tree.column("error_code", width=170, stretch=False)
         self.tree.column("error_reason", width=320, minwidth=180)
         vertical = ttk.Scrollbar(tree_frame, command=self.tree.yview)
         horizontal = ttk.Scrollbar(tree_frame, orient="horizontal", command=self.tree.xview)
@@ -297,7 +296,7 @@ class TranslationQueue:
                  tr('總耗時：{0}').format(elapsed_text(record.get('elapsed_seconds')))]
         code, reason = error_info(job.status, job.error)
         if code:
-            lines.append(f'{code}: {reason}')
+            lines.append(reason)
         for scope, title in (('OCR', 'OCR'), ('translation', '翻譯'), ('total', '合計')):
             usage = self.usage_records.get((index, scope))
             lines.append(f'{tr(title)}: {usage_text([usage] if usage else [])}')
@@ -381,6 +380,9 @@ class TranslationQueue:
         selected = set(self.tree.selection())
         self.tree.delete(*self.tree.get_children())
         self.pending_file_counts = {}
+        font = tkfont.Font(root=self.app.root, font=ttk.Style(self.tree).lookup("Treeview", "font") or "TkDefaultFont")
+        width = max([340] + [font.measure(str(job.path)) + 40 for job in self.jobs])
+        self.tree.column("#0", width=width, minwidth=width, stretch=False)
         for job in self.jobs:
             item = str(id(job))
             if job.action == "translate" and job.status == "pending":
@@ -390,7 +392,7 @@ class TranslationQueue:
                     self.pending_file_counts[item] = None
             self.tree.insert("", "end", iid=item, text=str(job.path),
                              values=(tr(FOLDER_KINDS[folder_kind(job.path.name)]), tr(ACTIONS[job.action]), self.page_range_text(job), tr(STATUSES[job.status]),
-                                     *error_info(job.status, job.error)))
+                                     error_info(job.status, job.error)[1]))
             if item in selected:
                 self.tree.selection_add(item)
             if item == focus:
@@ -744,7 +746,8 @@ class TranslationQueue:
                 changed = True
                 self.tree.set(str(id(job)), "status", tr(STATUSES[job.status]))
                 code, reason = error_info(job.status, job.error)
-                self.tree.set(str(id(job)), "error_code", code)
+                if code:
+                    logger.warning("queue_status path=%s error_code=%s reason=%s", job.path, code, reason)
                 self.tree.set(str(id(job)), "error_reason", reason)
                 self.update_summary()
                 self.update_controls()
