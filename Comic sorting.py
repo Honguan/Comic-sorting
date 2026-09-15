@@ -12,6 +12,7 @@ from translation_queue import TranslationQueue
 from app_logging import configure_logging, logger, log_path, redact
 from ui_language import LANGUAGES, set_language, tr
 from ui_theme import apply_theme
+from ui_interactions import bind_table_shortcuts
 from comic_core import (
     IMAGE_EXTENSIONS, FOLDER_KINDS, chapter_number, folder_kind, image_files, translation_status,
     natural_sort_key, updated_at, folder_size, format_size, summarize_names,
@@ -149,10 +150,13 @@ class FileAggregatorApp:
         self.folder_tree.bind("<Configure>", self.fit_folder_columns)
         self.folder_tree.bind("<<TreeviewSelect>>", self.on_tree_select)
         self.folder_tree.bind("<Double-1>", self.add_chapter_to_queue)
+        copy_paths = bind_table_shortcuts(self.folder_tree, self.selected_chapters)
         self.folder_context_menu = tk.Menu(self.folder_tree, tearoff=False)
         self.folder_context_menu.add_command(label=tr("刪除章節資料夾…"))
         for label in ("全選所有資料夾", "全選單一章節", "全選整合資料夾"):
             self.folder_context_menu.add_command(label=tr(label))
+        self.folder_context_menu.add_separator()
+        self.folder_context_menu.add_command(label=tr("複製完整路徑"), accelerator="Ctrl+C", command=copy_paths)
         self.folder_tree.bind("<Button-3>", self.show_folder_context_menu)
 
         scan_row = ttk.Frame(manga_footer)

@@ -10,6 +10,7 @@ import subprocess
 import os
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk, font as tkfont
+from ui_interactions import bind_table_shortcuts
 
 from queue_worker import BT_STAGES, Job, run_jobs, translator_command
 from app_logging import logger, log_path
@@ -122,15 +123,22 @@ class TranslationQueue:
         self.tree.bind("<Configure>", self.fit_columns)
         self.tree.bind("<Double-1>", self.show_details)
         self.tree.bind("<<TreeviewSelect>>", lambda _event: self.update_controls())
+        copy_paths = bind_table_shortcuts(self.tree, self.selected_paths)
         self.context_menu = tk.Menu(self.tree, tearoff=False)
         self.context_menu.add_command(label=tr("移除佇列項目"), command=lambda: self.remove(confirm=True))
         self.tree.bind("<Button-3>", self.show_context_menu)
         row = ttk.Frame(footer)
         row.pack(fill="x")
+        self.selection_buttons = {}
         for text, command in (("移除選取", self.remove), ("上移", lambda: self.move(-1)),
                               ("下移", lambda: self.move(1)), ("重試選取", self.retry),
                               ("清除已完成", self.clear_completed)):
-            self.button(row, tr(text), command)
+            self.selection_buttons[text] = self.button(row, tr(text), command)
+        for text in ("重試選取", "上移", "下移"):
+            self.context_menu.add_command(label=tr(text), command=self.selection_buttons[text].invoke)
+        self.context_menu.add_command(label=tr("翻譯頁數"), command=self.edit_page_range)
+        self.context_menu.add_separator()
+        self.context_menu.add_command(label=tr("複製完整路徑"), accelerator="Ctrl+C", command=copy_paths)
         self.start_button = self.button(row, tr("開始主佇列"), self.start)
         self.start_button.configure(style="Accent.TButton")
         self.pause_button = ttk.Button(row, text=tr("佇列暫停"), command=self.request_pause)
@@ -398,6 +406,10 @@ class TranslationQueue:
         if not selection:
             self.selection_details.set("")
             return
+        count = len(self.selected_job_ids())
+        if count > 1:
+            self.selection_details.set(tr("已選取 {0} 個佇列項目").format(count))
+            return
         item = selection[0]
         job = next((job for job in self.jobs if str(id(job)) == item), None)
         if job:
@@ -415,7 +427,8 @@ class TranslationQueue:
             control.configure(state="disabled" if busy else "normal")
         self.action_choice.configure(state="disabled" if busy else "readonly")
         resumable = self.running and self.pause_requested.is_set() and not self.stop.is_set()
-        self.start_button.configure(state="normal" if resumable or (not busy and any(j.status == "pending" for j in self.jobs)) else "disabled")
+        self.start_button.configure(text=tr("繼續佇列") if resumable else tr("開始主佇列"),
+                                    state="normal" if resumable or (not busy and any(j.status == "pending" for j in self.jobs)) else "disabled")
         self.pause_button.configure(
             state="normal" if self.running and not self.stop.is_set() and not self.pause_requested.is_set()
             and any(j.status == "pending" for j in self.active_jobs) else "disabled",
@@ -425,6 +438,18 @@ class TranslationQueue:
         selection = self.tree.selection()
         single_translation = len(selection) == 1 and any(str(id(j)) == selection[0] and j.action == "translate" for j in self.jobs)
         self.range_button.configure(state="normal" if not busy and single_translation else "disabled")
+        selected = self.selected_job_ids()
+        enabled = {
+            "移除選取": bool(selected),
+            "重試選取": any(str(id(j)) in selected and j.status in ("failed", "cancelled", "blocked", "done_warning") for j in self.jobs),
+            "清除已完成": any(j.status in ("done", "done_warning") for j in self.jobs),
+        }
+        for label, direction in (("上移", -1), ("下移", 1)):
+            enabled[label] = any(str(id(job)) in selected and 0 <= index + direction < len(self.jobs)
+                                 and str(id(self.jobs[index + direction])) not in selected
+                                 for index, job in enumerate(self.jobs))
+        for label, button in self.selection_buttons.items():
+            button.configure(state="normal" if not busy and enabled[label] else "disabled")
 
     def page_range_text(self, job):
         if job.action != "translate":
@@ -535,7 +560,7 @@ class TranslationQueue:
             messagebox.showerror(tr("開啟紀錄資料夾"), str(error))
 
     def add_paths(self, paths, action=None):
-        if self.app.manga_busy:
+        if self.running or self.app.manga_busy:
             return
         action = action or next(code for code, label in ACTIONS.items() if tr(label) == self.action.get())
         if action not in ACTIONS:
@@ -573,7 +598,11 @@ class TranslationQueue:
         if item not in self.tree.selection():
             self.tree.selection_set(item)
         self.tree.focus(item)
+        self.update_controls()
         self.context_menu.entryconfigure(0, state="disabled" if self.running or self.app.manga_busy else "normal")
+        for index, label in enumerate(("重試選取", "上移", "下移"), 1):
+            self.context_menu.entryconfigure(index, state=self.selection_buttons[label].cget("state"))
+        self.context_menu.entryconfigure(4, state=self.range_button.cget("state"))
         try:
             self.context_menu.tk_popup(event.x_root, event.y_root)
         finally:
@@ -593,6 +622,10 @@ class TranslationQueue:
             collect(item)
         return selected
 
+    def selected_paths(self):
+        selected = self.selected_job_ids()
+        return [job.path for job in self.jobs if str(id(job)) in selected]
+
     def remove(self, confirm=False):
         if self.running or self.app.manga_busy:
             return
@@ -608,12 +641,12 @@ class TranslationQueue:
         self.changed()
 
     def clear_completed(self):
-        if not self.app.manga_busy:
+        if not self.running and not self.app.manga_busy:
             self.jobs[:] = [job for job in self.jobs if job.status not in ("done", "done_warning")]
             self.changed()
 
     def retry(self):
-        if not self.app.manga_busy:
+        if not self.running and not self.app.manga_busy:
             selected = self.selected_job_ids()
             for job in self.jobs:
                 if str(id(job)) in selected and job.status in ("failed", "cancelled", "blocked", "done_warning"):
@@ -621,7 +654,7 @@ class TranslationQueue:
             self.changed()
 
     def move(self, direction):
-        if self.app.manga_busy:
+        if self.running or self.app.manga_busy:
             return
         selected = self.selected_job_ids()
         indices = range(len(self.jobs)) if direction < 0 else range(len(self.jobs) - 1, -1, -1)
@@ -849,7 +882,7 @@ class TranslationQueue:
                 self.paused_at = event[1]
                 elapsed = self.paused_at - self.started_at
                 self.elapsed_label.set(elapsed_text(elapsed))
-                self.label.set(tr("佇列已暫停，按「開始主佇列」繼續"))
+                self.label.set(tr("佇列已暫停，按「繼續佇列」繼續"))
                 if self.history_run is not None:
                     self.history_run['elapsed_seconds'] = elapsed
                     self.save_history()

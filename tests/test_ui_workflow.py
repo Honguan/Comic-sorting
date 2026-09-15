@@ -42,6 +42,54 @@ class WorkflowTests(unittest.TestCase):
         (path / "result/1.png").write_bytes(b"image")
         return path
 
+    def test_queue_actions_follow_selection_and_running_state(self):
+        q = self.app.translation_queue
+        q.jobs = [Job(self.chapter('Chapter 1'), 'translate', 'failed', 'error'),
+                  Job(self.chapter('Chapter 2'), 'translate', 'done')]
+        q.render()
+        q.update_controls()
+        self.assertEqual(str(q.selection_buttons['移除選取']['state']), 'disabled')
+        self.assertEqual(str(q.selection_buttons['重試選取']['state']), 'disabled')
+        q.tree.selection_set(str(id(q.jobs[0])))
+        q.update_controls()
+        self.assertEqual(str(q.selection_buttons['上移']['state']), 'disabled')
+        self.assertEqual(str(q.selection_buttons['下移']['state']), 'normal')
+        self.assertEqual(str(q.selection_buttons['重試選取']['state']), 'normal')
+        before = [(id(job), job.status, job.error) for job in q.jobs]
+        q.running = True
+        try:
+            q.update_controls()
+            self.assertTrue(all(str(button['state']) == 'disabled' for button in q.selection_buttons.values()))
+            q.add_paths([q.jobs[0].path])
+            q.add_paths([self.folder / 'extra'])
+            q.retry()
+            q.move(1)
+            q.clear_completed()
+            self.assertEqual([(id(job), job.status, job.error) for job in q.jobs], before)
+            q.pause_requested.set()
+            q.update_controls()
+            self.assertEqual(q.start_button['text'], '繼續佇列')
+        finally:
+            q.running = False
+            q.pause_requested.clear()
+
+    def test_table_shortcuts_select_copy_and_clear_without_editing_queue(self):
+        from ui_interactions import bind_table_shortcuts
+        q = self.app.translation_queue
+        q.jobs = [Job(self.chapter('Chapter 1'), 'translate'), Job(self.chapter('Chapter 2'), 'translate')]
+        q.render()
+        # Invoke the registered Tcl callbacks so this also works with a withdrawn test window.
+        bind_table_shortcuts(q.tree, q.selected_paths)
+        for event in ('<Control-a>', '<Control-c>'):
+            command = q.tree.bind(event).split('[', 1)[1].split()[0]
+            self.root.tk.call(command)
+        self.assertEqual(self.root.clipboard_get().splitlines(), [str(j.path) for j in q.jobs])
+        self.assertEqual(len(q.selected_job_ids()), 2)
+        command = q.tree.bind('<Escape>').split('[', 1)[1].split()[0]
+        self.root.tk.call(command)
+        self.assertEqual(q.tree.selection(), ())
+        self.assertEqual(len(q.jobs), 2)
+
     def test_live_usage_is_shown_in_separate_columns(self):
         q = self.app.translation_queue
         self.assertEqual(q.usage_table.set('total', 'tokens'), '尚未回報')
