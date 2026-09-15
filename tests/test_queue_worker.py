@@ -42,6 +42,89 @@ class QueueWorkerTests(unittest.TestCase):
         for line in ("[DEBUG] reply='Translation: 80%'", "Translation: 150%", "OCR: 0%| | 2/1 [00:00<00:00]"):
             self.assertIsNone(parse_bt_progress(line))
 
+    def test_pause_finishes_current_followups_then_resumes_or_stops_between_jobs(self):
+        for resume in (True, False):
+            with self.subTest(resume=resume):
+                first, second = self.chapter(f'First {resume}'), self.chapter(f'Second {resume}')
+                config = self.root / 'config.json'
+                config.write_text('{}')
+                settings = dict(bt_path='installed', bt_config=str(config), bt_export=True, bt_cleanup=True)
+                pause, stop, paused = threading.Event(), threading.Event(), threading.Event()
+                events, clock = [], [0]
+
+                def translate(*args, **kwargs):
+                    clock[0] += 5
+                    if not events or sum(e[0] == 'status' and e[2] == 'running' for e in events) == 1:
+                        pause.set()
+
+                def emit(event):
+                    events.append(event)
+                    if event[0] == 'paused':
+                        paused.set()
+
+                with mock.patch('queue_worker.translator_command', return_value=([], self.root, None)), \
+                        mock.patch('queue_worker.run_translation', side_effect=translate), \
+                        mock.patch('queue_worker.time.monotonic', side_effect=lambda: clock[0]):
+                    worker = threading.Thread(target=run_jobs, args=(
+                        [Job(first, 'translate'), Job(second, 'translate')], settings,
+                        str(self.root / 'output'), True, stop, emit), kwargs={'pause': pause})
+                    worker.start()
+                    try:
+                        self.assertTrue(paused.wait(3))
+                        self.assertIn(('status', 0, 'done', ''), events)
+                        self.assertFalse((first / 'mask/keep.png').exists())
+                        self.assertTrue(output_path_for(self.root / 'output', first.parent, first).exists())
+                        self.assertTrue((second / 'mask/keep.png').exists())
+                        self.assertFalse(any(e[0] == 'status' and e[1] == 1 for e in events))
+                        self.assertNotIn(('done',), events)
+                        clock[0] += 100
+                        if resume:
+                            pause.clear()
+                        else:
+                            stop.set()
+                        worker.join(3)
+                        self.assertFalse(worker.is_alive())
+                    finally:
+                        stop.set()
+                        pause.clear()
+                        worker.join(3)
+                self.assertEqual(sum(e == ('done',) for e in events), 1)
+                self.assertEqual([e[3] for e in events if e[0] == 'run_time'], [10 if resume else 5])
+                self.assertEqual((second / 'mask/keep.png').exists(), not resume)
+
+    def test_pause_on_last_item_does_not_prevent_queue_completion(self):
+        pause = threading.Event()
+        events = []
+        def cleanup(_path):
+            pause.set()
+            return 0, 0, []
+        with mock.patch('queue_worker.clear_work_folders', side_effect=cleanup):
+            run_jobs([Job(self.chapter(), 'cleanup')], {}, '', True, threading.Event(),
+                     events.append, pause=pause)
+        self.assertIn(('status', 0, 'done', ''), events)
+        self.assertEqual(events[-1], ('done',))
+        self.assertFalse(any(e[0] == 'paused' for e in events))
+
+    def test_resuming_preserves_failed_path_followup_blocking(self):
+        first, second = self.chapter(), self.chapter('Chapter 2')
+        pause, stop = threading.Event(), threading.Event()
+        events = []
+        def cleanup(path):
+            if path == first:
+                pause.set()
+                raise RuntimeError('synthetic failure')
+            return 0, 0, []
+        def emit(event):
+            events.append(event)
+            if event[0] == 'paused':
+                pause.clear()
+        with mock.patch('queue_worker.clear_work_folders', side_effect=cleanup) as clear:
+            run_jobs([Job(first, 'cleanup'), Job(first, 'cleanup'), Job(second, 'cleanup')],
+                     {}, '', True, stop, emit, pause=pause)
+        self.assertEqual([e[2] for e in events if e[0] == 'status'],
+                         ['running', 'failed', 'blocked', 'running', 'done'])
+        self.assertEqual(clear.call_count, 2)
+
     def test_progress_survives_carriage_returns_ansi_and_attached_logs(self):
         output = ("\x1b[32mText Detection: 50%|#####| 1/2 [00:01<00:01, 1it/s]\x1b[0m\r"
                   "OCR: 0%| | 0/2 [00:00<?, ?it/s]\x1b[A\r"

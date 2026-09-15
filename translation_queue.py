@@ -34,6 +34,8 @@ class TranslationQueue:
         self.active_jobs = ()
         self.events = queue.Queue()
         self.stop = threading.Event()
+        self.pause_requested = threading.Event()
+        self.paused_at = None
         self.running = False
         self.started_at = None
         self.history_run = None
@@ -126,7 +128,9 @@ class TranslationQueue:
                               ("清除已完成", self.clear_completed)):
             self.button(row, tr(text), command)
         self.start_button = self.button(row, tr("開始主佇列"), self.start)
-        self.stop_button = ttk.Button(row, text=tr("停止"), command=self.stop.set)
+        self.pause_button = ttk.Button(row, text=tr("佇列暫停"), command=self.request_pause)
+        self.pause_button.pack(side="left", padx=2)
+        self.stop_button = ttk.Button(row, text=tr("停止"), command=self.request_stop, width=0)
         self.stop_button.pack(side="left", padx=2)
         self.summary = tk.StringVar()
         ttk.Label(footer, textvariable=self.summary).pack(anchor="w")
@@ -343,7 +347,13 @@ class TranslationQueue:
         for control in self.controls:
             control.configure(state="disabled" if busy else "normal")
         self.action_choice.configure(state="disabled" if busy else "readonly")
-        self.start_button.configure(state="normal" if not busy and any(j.status == "pending" for j in self.jobs) else "disabled")
+        resumable = self.running and self.pause_requested.is_set() and not self.stop.is_set()
+        self.start_button.configure(state="normal" if resumable or (not busy and any(j.status == "pending" for j in self.jobs)) else "disabled")
+        self.pause_button.configure(
+            state="normal" if self.running and not self.stop.is_set() and not self.pause_requested.is_set()
+            and any(j.status == "pending" for j in self.active_jobs) else "disabled",
+            text=tr("已暫停") if self.paused_at is not None else
+            tr("等待暫停") if self.pause_requested.is_set() else tr("佇列暫停"))
         self.stop_button.configure(state="normal" if self.running else "disabled")
         selection = self.tree.selection()
         single_translation = len(selection) == 1 and any(str(id(j)) == selection[0] and j.action == "translate" for j in self.jobs)
@@ -649,7 +659,22 @@ class TranslationQueue:
             self.app.work_tabs.select(error_tab)
             return False
 
+    def request_pause(self):
+        if self.running and not self.stop.is_set():
+            self.pause_requested.set()
+            self.label.set(tr("目前項目完成後暫停後續佇列"))
+            self.update_controls()
+
+    def request_stop(self):
+        self.stop.set()
+        self.update_controls()
+
     def start(self, cleanup_confirmed=False):
+        if self.running and self.pause_requested.is_set() and not self.stop.is_set():
+            self.pause_requested.clear()
+            self.label.set(tr("佇列繼續處理"))
+            self.update_controls()
+            return
         if self.running or self.app.manga_busy:
             return
         if self.history_save_failed and not self.save_history(refresh=False):
@@ -681,6 +706,8 @@ class TranslationQueue:
             label.set(tr("累計耗時：{0}").format('—'))
         self.show_usage()
         self.stop.clear()
+        self.pause_requested.clear()
+        self.paused_at = None
         self.app.set_manga_busy(True)
         self.app.work_tabs.select(self.app.queue_tab)
         self.total.configure(maximum=len(self.active_jobs), value=0)
@@ -688,12 +715,14 @@ class TranslationQueue:
         self.stage.pack_forget()
         self.reset_bt_progress()
         options = (self.settings(), self.app.komga_path.get(), self.app.skip_unchanged.get())
-        threading.Thread(target=run_jobs, args=(self.active_jobs, *options, self.stop, self.events.put), daemon=True).start()
+        threading.Thread(target=run_jobs, args=(self.active_jobs, *options, self.stop, self.events.put),
+                         kwargs={'pause': self.pause_requested}, daemon=True).start()
         self.app.root.after(50, self.poll)
 
     def poll(self):
         if self.running and self.started_at is not None:
-            self.elapsed_label.set(tr("總耗時：{0}").format(elapsed_text(time.monotonic() - self.started_at)))
+            now = time.monotonic() if self.paused_at is None else self.paused_at
+            self.elapsed_label.set(tr("總耗時：{0}").format(elapsed_text(now - self.started_at)))
         changed = False
         for _ in range(100):
             try:
@@ -709,6 +738,7 @@ class TranslationQueue:
                 self.tree.set(str(id(job)), "error_code", code)
                 self.tree.set(str(id(job)), "error_reason", reason)
                 self.update_summary()
+                self.update_controls()
                 if job.status == "running":
                     self.tree.see(str(id(job)))
                     self.stage.configure(value=0)
@@ -718,6 +748,21 @@ class TranslationQueue:
                 elif job.status in ("failed", "cancelled"):
                     for name in BT_STAGES:
                         self.show_bt_progress(name, STATUSES[job.status])
+            elif event[0] == "paused":
+                self.paused_at = event[1]
+                elapsed = self.paused_at - self.started_at
+                self.elapsed_label.set(tr("總耗時：{0}").format(elapsed_text(elapsed)))
+                self.label.set(tr("佇列已暫停，按「開始主佇列」繼續"))
+                if self.history_run is not None:
+                    self.history_run['elapsed_seconds'] = elapsed
+                    self.save_history()
+                self.update_controls()
+            elif event[0] == "resumed":
+                self.started_at += event[1]
+                self.paused_at = None
+                if not self.stop.is_set():
+                    self.label.set(tr("佇列繼續處理"))
+                self.update_controls()
             elif event[0] == "stage_time":
                 _, index, name, seconds = event
                 self.stage_times[index, name] = max(seconds, self.stage_times.get((index, name), 0))
@@ -771,6 +816,8 @@ class TranslationQueue:
                     self.save_history()
                     self.notify_run()
                 self.running = False
+                self.pause_requested.clear()
+                self.paused_at = None
                 self.app.set_manga_busy(False)
                 self.label.set(tr("佇列已停止") if self.stop.is_set() else tr("佇列結束，請查看各項狀態"))
                 self.app.save_settings()

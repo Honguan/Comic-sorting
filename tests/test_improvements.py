@@ -429,7 +429,8 @@ class UIImprovementsTests(unittest.TestCase):
                     details = [widget for widget in next(iter(app.translation_queue.bt_bars.values())).master.winfo_children()
                                if isinstance(widget, tk.ttk.Label)]
                     for tab, controls in (
-                            (app.queue_tab, (app.translation_queue.start_button, app.translation_queue.stop_button, app.translation_queue.range_button,
+                            (app.queue_tab, (app.translation_queue.start_button, app.translation_queue.pause_button,
+                                             app.translation_queue.stop_button, app.translation_queue.range_button,
                                              app.translation_queue.total, app.translation_queue.stage,
                                              app.translation_queue.history_button,
                                              *(w for w in app.translation_queue.controls if isinstance(w, tk.ttk.Checkbutton)),
@@ -439,6 +440,12 @@ class UIImprovementsTests(unittest.TestCase):
                             (app.settings_tab, (app.translation_queue.controls[0],))):
                         app.work_tabs.select(tab)
                         self.pump(.04)
+                        if tab == app.queue_tab:
+                            for text in ("等待暫停", "已暫停", "佇列暫停"):
+                                app.translation_queue.pause_button.configure(text=tr(text))
+                                self.pump(.01)
+                                stop = app.translation_queue.stop_button
+                                self.assertLessEqual(stop.winfo_rootx() - window.winfo_rootx() + stop.winfo_reqwidth(), 820)
                         for widget in (*controls, app.aggregate_button, app.sort_button,
                                        app.remove_sources_checkbox, app.keep_last_source_checkbox):
                             self.assertTrue(widget.winfo_ismapped(), str(widget))

@@ -219,9 +219,10 @@ def run_translation(command, root, env, stop, progress, log_context="", usage=No
             watcher.join()
 
 
-def run_jobs(jobs, settings, output, skip, stop, emit):
+def run_jobs(jobs, settings, output, skip, stop, emit, *, pause=None):
     """Run a pending-job snapshot; only the event consumer mutates Job state."""
     run_started = time.monotonic()
+    paused_seconds = 0
     run_timestamp = datetime.now().astimezone().isoformat(timespec='seconds')
     def export_progress(count, total):
         if stop.is_set():
@@ -234,6 +235,16 @@ def run_jobs(jobs, settings, output, skip, stop, emit):
                 settings.get("bt_export", False), settings.get("bt_cleanup", False))
     try:
         for index, job in enumerate(jobs):
+            if pause is not None and pause.is_set() and not stop.is_set():
+                paused_at = time.monotonic()
+                logger.info("[%s] queue_paused next_job=%s", run_id, index + 1)
+                emit(("paused", paused_at))
+                while pause.is_set() and not stop.wait(.1):
+                    pass
+                duration = time.monotonic() - paused_at
+                paused_seconds += duration
+                emit(("resumed", duration))
+                logger.info("[%s] queue_resume pause_seconds=%.3f stopped=%s", run_id, duration, stop.is_set())
             if stop.is_set():
                 break
             path, action = Path(job.path).resolve(), job.action
@@ -332,5 +343,5 @@ def run_jobs(jobs, settings, output, skip, stop, emit):
     finally:
         logger.info("[%s] queue_end stopped=%s failed_paths=%s", run_id, stop.is_set(), len(failed_paths))
         emit(("run_time", run_timestamp, datetime.now().astimezone().isoformat(timespec='seconds'),
-              time.monotonic() - run_started))
+              time.monotonic() - run_started - paused_seconds))
         emit(("done",))

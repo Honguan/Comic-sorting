@@ -1345,6 +1345,74 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(stored[0]['jobs'][0]['status'], 'done')
         self.assertEqual(stored[0]['elapsed_seconds'], 5)
 
+    def test_pause_resume_keeps_one_batch_usage_and_excludes_waiting_time(self):
+        from queue_history import find_runs
+        q = self.app.translation_queue
+        q.add_paths([self.chapter('Chapter 1'), self.chapter('Chapter 2')], 'cleanup')
+        usage = dict(scope='total', total_tokens=1000, requests=1, cost='0.004',
+                     missing_usage_requests=0, unpriced_requests=0)
+        with mock.patch('translation_queue.threading.Thread') as worker, \
+                mock.patch.object(q, 'notify_run') as notify, \
+                mock.patch('translation_queue.time.monotonic', return_value=100) as clock:
+            q.start(cleanup_confirmed=True)
+            batch_id = q.history_run['id']
+            q.events.put(('status', 0, 'running', ''))
+            q.poll()
+            q.pause_button.invoke()
+            self.assertTrue(q.pause_requested.is_set())
+            self.assertFalse(q.stop.is_set())
+            self.assertFalse(q.start_button.instate(['disabled']))
+            q.start_button.invoke()  # Cancel a pending pause without starting another worker.
+            self.assertFalse(q.pause_requested.is_set())
+            q.pause_button.invoke()
+            for event in [('usage', 0, usage), ('status', 0, 'done', ''),
+                          ('job_time', 0, 'start', 'end', 5), ('total', 1), ('paused', 105)]:
+                q.events.put(event)
+            clock.return_value = 105
+            q.poll()
+            self.assertTrue(q.running)
+            self.assertTrue(self.app.manga_busy)
+            self.assertEqual([job.status for job in q.active_jobs], ['done', 'pending'])
+            self.assertIn('佇列已暫停', q.label.get())
+            self.assertFalse(q.stop_button.instate(['disabled']))
+            self.assertTrue(q.range_button.instate(['disabled']))
+            notify.assert_not_called()
+            before = q.usage_labels['total'].get()
+            clock.return_value = 1000
+            q.poll()
+            self.assertIn('00:00:05', q.elapsed_label.get())
+            stored = find_runs(self.app.history_path)
+            self.assertEqual(len(stored), 1)
+            self.assertEqual(stored[0]['status'], 'running')
+            self.assertEqual(stored[0]['elapsed_seconds'], 5)
+            q.start_button.invoke()
+            self.assertFalse(q.pause_requested.is_set())
+            self.assertEqual(q.history_run['id'], batch_id)
+            self.assertEqual(q.usage_labels['total'].get(), before)
+            self.assertEqual(worker.call_count, 1)
+            q.events.put(('resumed', 895))
+            q.poll()
+            q.poll()
+            self.assertIn('00:00:05', q.elapsed_label.get())
+            for event in [('status', 1, 'running', ''), ('usage', 1, usage), ('status', 1, 'done', ''),
+                          ('job_time', 1, 'resume', 'end', 5), ('total', 2),
+                          ('run_time', '2026-09-15T00:00:00+08:00', '2026-09-15T00:15:05+08:00', 10), ('done',)]:
+                q.events.put(event)
+            clock.return_value = 1005
+            q.poll()
+            self.assertFalse(q.running)
+            self.assertFalse(q.pause_requested.is_set())
+            self.assertIsNone(q.paused_at)
+            self.assertFalse(self.app.manga_busy)
+            self.assertIn('2.00K', q.usage_labels['total'].get())
+            self.assertIn('US$0.01', q.usage_labels['total'].get())
+            self.assertIn('00:00:10', q.elapsed_label.get())
+            self.assertEqual(q.total['value'], 2)
+            notify.assert_called_once()
+            stored = find_runs(self.app.history_path)
+            self.assertEqual(len(stored), 1)
+            self.assertEqual((stored[0]['id'], stored[0]['status'], stored[0]['elapsed_seconds']), (batch_id, 'done', 10))
+
     def test_elapsed_time_accumulates_per_job_and_freezes_on_completion(self):
         from translation_queue import elapsed_text
         self.assertEqual(elapsed_text(90061), '25:01:01')
