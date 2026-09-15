@@ -36,6 +36,48 @@ class WorkflowTests(unittest.TestCase):
         self.temp.cleanup()
         set_language("zh-TW")
 
+    def test_direct_operations_notify_once_before_dialog_and_keep_results(self):
+        app = self.app
+        output = self.folder / 'Chapter 1-2'
+        cases = [
+            ('aggregate', ('done', output, ([], [])), False, 'done'),
+            ('aggregate', ('done', output, ([], ['cleanup denied'])), False, 'failed'),
+            ('aggregate', ('error', RuntimeError('merge denied')), False, 'failed'),
+            ('aggregate', ('done', output, ([], [])), True, 'done'),
+            ('aggregate', ('done', output, ([], ['cleanup denied'])), True, 'failed'),
+            ('export', ('done', dict(created=1, updated=0, skipped=0, failed=0), [], str(output), None), False, 'done'),
+            ('export', ('done', dict(created=0, updated=0, skipped=0, failed=1), ['export denied'], str(output), None), False, 'failed'),
+            ('cleanup', ('cleanup_done', (2, 3, [])), False, 'done'),
+            ('cleanup', ('cleanup_done', (2, 3, ['cleanup denied'])), False, 'failed'),
+            ('cleanup', ('cleanup_error', RuntimeError('cleanup denied')), False, 'failed'),
+        ]
+        for operation, event, enqueue, expected in cases:
+            with self.subTest(operation=operation, event=event, enqueue=enqueue):
+                app.translate_after = enqueue
+                app.open_after_export.set(False)
+                events = app.aggregate_events if operation == 'aggregate' else app.events
+                poll = app.poll_aggregate_events if operation == 'aggregate' else app.poll_events
+                with mock.patch.object(app.translation_queue.notifications, 'send') as send, \
+                     mock.patch.object(app, 'load_folders'), \
+                     mock.patch.object(app.translation_queue, 'add_paths') as add, \
+                     mock.patch.object(comic.messagebox, 'showinfo', side_effect=lambda *a, **k: self.assertTrue(send.called)), \
+                     mock.patch.object(comic.messagebox, 'showwarning', side_effect=lambda *a, **k: self.assertTrue(send.called)), \
+                     mock.patch.object(comic.messagebox, 'showerror', side_effect=lambda *a, **k: self.assertTrue(send.called)):
+                    events.put(event)
+                    poll()
+                    send.assert_called_once()
+                    self.assertEqual(send.call_args.args[0], expected)
+                    self.assertEqual(send.call_args.args[3], 4 if expected == 'failed' else 3)
+                    self.assertEqual(add.called, enqueue)
+                    self.assertTrue(events.empty())
+        with mock.patch.object(app.translation_queue.notifications, 'send', side_effect=RuntimeError('notification failed')), \
+             mock.patch.object(app, 'load_folders'), mock.patch.object(comic.messagebox, 'showinfo') as info:
+            app.translate_after = False
+            app.aggregate_events.put(('done', output, ([], [])))
+            app.poll_aggregate_events()
+            info.assert_called_once()
+            self.assertFalse(app.manga_busy)
+
     def wait_counts(self, q):
         deadline = time.monotonic() + 3
         while q.counting and time.monotonic() < deadline:

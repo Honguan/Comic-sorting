@@ -9,6 +9,7 @@ def tr(text):
     return TRANSLATIONS.get(text, {}).get(_language, text)
 
 TRANSLATIONS = {
+    "整合完成": {"en": "Merge complete", "ja": "統合完了"},
     '（{0} 項計算中）': {'en': ' ({0} counting)', 'ja': '（{0} 件を計算中）'},
     '路徑已變更，請先成功重新掃描後再操作。': {'en': 'The path has changed. Rescan successfully before continuing.', 'ja': 'パスが変更されています。再スキャンが成功してから操作してください。'},
     'ntfy 通知': {'en': 'ntfy notifications', 'ja': 'ntfy 通知'},

@@ -859,6 +859,13 @@ class FileAggregatorApp:
             logger.exception("aggregate_failed")
             self.aggregate_events.put(("error", error))
 
+    def notify_operation(self, title, message, failed=False):
+        try:
+            self.translation_queue.notifications.send(
+                "failed" if failed else "done", title, message, 4 if failed else 3)
+        except Exception:
+            logger.warning("operation_notification_failed", exc_info=True)
+
     def poll_aggregate_events(self):
         done = None
         while True:
@@ -880,9 +887,13 @@ class FileAggregatorApp:
         if done[0] == "error":
             self.translate_after = False
             self.scan_status_text.set(tr("整合失敗"))
+            self.notify_operation(tr("整合失敗"), f"{self.base_path.get()}\n{done[1]}", True)
             messagebox.showerror(tr("整合失敗"), str(done[1]))
             return
         output = done[1]
+        cleanup_errors = done[2][1]
+        self.notify_operation(tr("整合完成（清理含錯誤）") if cleanup_errors else tr("整合完成"),
+                              str(output) + "\n" + "\n".join(cleanup_errors), bool(cleanup_errors))
         if getattr(self, "translate_after", False):
             self.translate_after = False
             if done[2][1]:
@@ -1067,6 +1078,8 @@ class FileAggregatorApp:
                 summary = tr("已清理 {0} 個資料夾、移除 {1} 個項目").format(folders, removed)
                 self.hide_export_progress()
                 self.status_text.set(summary)
+                self.notify_operation(tr("清理完成（含錯誤）") if errors else tr("清理完成"),
+                                      self.base_path.get() + "\n" + summary + "\n" + "\n".join(errors), bool(errors))
                 if errors:
                     messagebox.showerror(tr("清理完成（含錯誤）"), summary + "\n\n" + "\n".join(errors))
                 else:
@@ -1076,6 +1089,7 @@ class FileAggregatorApp:
             elif event[0] == "cleanup_error":
                 self.hide_export_progress()
                 self.status_text.set(tr("清理失敗"))
+                self.notify_operation(tr("清理失敗"), f"{self.base_path.get()}\n{event[1]}", True)
                 messagebox.showerror(tr("清理失敗"), str(event[1]))
                 done = True
             else:
@@ -1085,6 +1099,9 @@ class FileAggregatorApp:
                 if cleanup:
                     summary += tr("  清理：{0} 個資料夾／{1} 個項目").format(cleanup[0], cleanup[1])
                 self.status_text.set(summary)
+                self.notify_operation(tr("Komga 匯出完成（含錯誤）") if errors else tr("Komga 匯出完成"),
+                                      str(output_folder) + "\n" + summary + "\n" + "\n".join(errors),
+                                      bool(errors or counts['failed']))
                 if errors:
                     messagebox.showerror(tr("Komga 匯出完成（含錯誤）"), summary + "\n\n" + "\n".join(errors))
                 else:
