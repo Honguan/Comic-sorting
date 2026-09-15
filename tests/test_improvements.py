@@ -117,6 +117,24 @@ class FileImprovementsTests(unittest.TestCase):
         self.assertEqual(len(comic_core.image_files(merged)), 3)
         self.assertEqual((merged / "result/3.png").read_bytes(), b"translated 3")
 
+    def test_folder_kinds_and_merge_validation_share_numeric_ranges(self):
+        for name in ('Chapter 49.2', 'Chapter 1 - Bonus', 'Chapter 1 (2026-09-15)'):
+            self.assertEqual(comic_core.folder_kind(name), 'chapter')
+            self.assertIsNone(comic_core.chapter_range(name))
+        for name, start, end in (('Chapter 1-45', '1', '45'), ('Chapter 1-1', '1', '1'),
+                                 ('chapter 25.1 – 53.2', '25.1', '53.2')):
+            with self.subTest(name=name):
+                self.assertEqual(comic_core.folder_kind(name), 'merged')
+                self.assertEqual(comic_core.chapter_range(name), (comic.Decimal(start), comic.Decimal(end)))
+                merged = self.chapter(f'Series/{name}')
+                last = self.chapter(f'Series/Chapter {end}')
+                selected = [(str(p), p.name, comic.chapter_number(p.name)) for p in (merged, last)]
+                with self.assertRaisesRegex(ValueError, '重疊'):
+                    comic_core.aggregate_output(selected)
+        invalid = self.chapter('Series/Chapter 5-2')
+        with self.assertRaisesRegex(ValueError, '順序'):
+            comic_core.aggregate_output([(str(invalid), invalid.name, comic.Decimal(5))])
+
     def test_aggregate_continues_full_ranges_without_dropping_sources(self):
         first = self.chapter("Series/Chapter 1-3", ("1", "2", "3"))
         second = self.chapter("Series/Chapter 4-6", ("4", "5", "6"))

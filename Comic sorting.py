@@ -12,7 +12,7 @@ from translation_queue import TranslationQueue
 from app_logging import configure_logging, logger, log_path, redact
 from ui_language import LANGUAGES, set_language, tr
 from comic_core import (
-    IMAGE_EXTENSIONS, chapter_number, image_files, translation_status,
+    IMAGE_EXTENSIONS, FOLDER_KINDS, chapter_number, folder_kind, image_files, translation_status,
     natural_sort_key, updated_at, folder_size, format_size, summarize_names,
     clear_work_folders, remove_aggregated_folders, delete_manga_folder, source_fingerprint,
     output_path_for, validate_cbz, create_cbz, load_json, save_json, export_chapter,
@@ -116,7 +116,7 @@ class FileAggregatorApp:
         ttk.Button(search_row, text=tr("清除搜尋"), command=lambda: self.search_text.set("")).pack(side="left", padx=(0, 6))
         self.sort_button = ttk.Button(search_row, text=tr("排序設定"), command=self.edit_sort_settings)
         self.sort_button.pack(side="left", padx=(0, 6))
-        self.selection_text = tk.StringVar(value=tr("已選取 {0} 個章節").format(0))
+        self.selection_text = tk.StringVar(value=tr("已選取 {0} 個資料夾").format(0))
         ttk.Label(search_row, textvariable=self.selection_text).pack(side="left")
         self.search_text.trace_add("write", self.filter_folders)
 
@@ -125,10 +125,12 @@ class FileAggregatorApp:
         list_frame = ttk.Frame(manga)
         list_frame.pack(fill="both", expand=True, pady=8)
         self.folder_tree = ttk.Treeview(
-            list_frame, columns=("status", "size", "updated"), show="tree headings",
+            list_frame, columns=("kind", "status", "size", "updated"), show="tree headings",
             selectmode="extended", height=6)
         self.update_sort_headings()
         self.folder_tree.column("#0", width=450, stretch=True)
+        self.folder_tree.heading("kind", text=tr("資料夾類型"))
+        self.folder_tree.column("kind", width=110, stretch=False)
         self.folder_tree.column("status", width=150, stretch=False)
         self.folder_tree.column("size", width=110, anchor="e", stretch=False)
         self.folder_tree.column("updated", width=150, anchor="center", stretch=False)
@@ -144,7 +146,8 @@ class FileAggregatorApp:
         self.folder_tree.bind("<Double-1>", self.add_chapter_to_queue)
         self.folder_context_menu = tk.Menu(self.folder_tree, tearoff=False)
         self.folder_context_menu.add_command(label=tr("刪除章節資料夾…"))
-        self.folder_context_menu.add_command(label=tr("全選所有章節"))
+        for label in ("全選所有資料夾", "全選單一章節", "全選整合資料夾"):
+            self.folder_context_menu.add_command(label=tr(label))
         self.folder_tree.bind("<Button-3>", self.show_folder_context_menu)
 
         scan_row = ttk.Frame(manga_footer)
@@ -491,7 +494,9 @@ class FileAggregatorApp:
             series_name = series.name if relative_series == Path(".") else str(relative_series)
             parent = self.folder_tree.insert(
                 "", "end", text=f"{series_index}. {series_name}", open=bool(query) or series in expanded_paths,
-                values=(tr("{0} 個章節").format(len(self.series_groups[series])),
+                values=("", tr("{0} 單一｜{1} 整合").format(
+                            sum(folder_kind(name) == "chapter" for _, name, _ in self.series_groups[series]),
+                            sum(folder_kind(name) == "merged" for _, name, _ in self.series_groups[series])),
                         format_size(sum(self.chapter_sizes[Path(item[0])]
                                         for item in self.series_groups[series])),
                         datetime.fromtimestamp(modified).strftime("%Y-%m-%d %H:%M:%S")))
@@ -503,16 +508,19 @@ class FileAggregatorApp:
                 if folder_path not in visible:
                     continue
                 chapter = Path(folder_path)
+                kind = folder_kind(folder_name)
                 item = self.folder_tree.insert(
                     parent, "end", text=f"{chapter_index}. {folder_name}",
-                    values=(details[chapter], format_size(self.chapter_sizes[chapter]),
+                    values=(tr(FOLDER_KINDS[kind]), details[chapter], format_size(self.chapter_sizes[chapter]),
                             datetime.fromtimestamp(
                         self.chapter_updates[chapter]).strftime("%Y-%m-%d %H:%M:%S")))
-                self.tree_items[item] = ("chapter", chapter)
+                self.tree_items[item] = (kind, chapter)
                 if chapter in selected_paths:
                     self.folder_tree.selection_add(item)
         self.scan_status_text.set(
-            tr("{0} 個系列，{1} 個章節").format(len(self.series_groups), len(self.folders)))
+            tr("{0} 個系列｜單一章節 {1} 個｜整合資料夾 {2} 個").format(
+                len(self.series_groups), sum(folder_kind(name) == "chapter" for _, name, _ in self.folders),
+                sum(folder_kind(name) == "merged" for _, name, _ in self.folders)))
 
         if view:
             self.folder_tree.yview_moveto(view[0])
@@ -530,19 +538,25 @@ class FileAggregatorApp:
         base = self.scan_data[0]
         disabled = self.manga_busy or self.translation_queue.running or path == base
         self.folder_context_menu.entryconfigure(
-            0, label=tr("刪除系列資料夾…") if kind == "series" else tr("刪除章節資料夾…"),
+            0, label=tr("刪除系列資料夾…") if kind == "series" else
+            tr("刪除整合資料夾…") if kind == "merged" else tr("刪除章節資料夾…"),
             state="disabled" if disabled else "normal",
             command=lambda: self.confirm_delete_folder(kind, path, base))
-        self.folder_context_menu.entryconfigure(
-            1, label=tr("全選所有章節（清除搜尋）") if self.search_text.get().strip() else tr("全選所有章節"),
-            state="normal" if kind == "series" and not self.manga_busy and not self.translation_queue.running else "disabled",
-            command=lambda: self.select_all_chapters(path, base))
+        for index, (target, label) in enumerate(((None, "全選所有資料夾"), ("chapter", "全選單一章節"),
+                                                ("merged", "全選整合資料夾")), 1):
+            available = (kind == "series" and not self.manga_busy and not self.translation_queue.running
+                         and any(target is None or folder_kind(name) == target
+                                 for _, name, _ in self.series_groups[path]))
+            self.folder_context_menu.entryconfigure(
+                index, label=tr(label) + (tr("（清除搜尋）") if self.search_text.get().strip() else ""),
+                state="normal" if available else "disabled",
+                command=lambda target=target: self.select_all_chapters(path, base, target))
         try:
             self.folder_context_menu.tk_popup(event.x_root, event.y_root)
         finally:
             self.folder_context_menu.grab_release()
 
-    def select_all_chapters(self, series, base):
+    def select_all_chapters(self, series, base, kind=None):
         if (self.manga_busy or self.translation_queue.running or not self.scan_data
                 or self.scan_data[0] != base or series not in self.series_groups):
             return
@@ -554,7 +568,8 @@ class FileAggregatorApp:
                        if self.tree_items[item] == ("series", series)), None)
         if parent is None:
             return
-        children = self.folder_tree.get_children(parent)
+        children = [item for item in self.folder_tree.get_children(parent)
+                    if kind is None or self.tree_items[item][0] == kind]
         self.folder_tree.item(parent, open=True)
         self.folder_tree.selection_set(children)
         self.folder_tree.focus(parent)
@@ -566,7 +581,8 @@ class FileAggregatorApp:
                 or not self.scan_data or self.scan_data[0] != base):
             return
         scope = (tr("整個系列及其下所有章節（包含搜尋未顯示的章節）")
-                 if kind == "series" else tr("此章節及其所有檔案"))
+                 if kind == "series" else tr("此整合資料夾及其所有檔案")
+                 if kind == "merged" else tr("此章節及其所有檔案"))
         if not messagebox.askyesno(
                 tr("確認移至資源回收筒"),
                 tr("將移至資源回收筒：\n{0}\n\n範圍：{1}\n成功後才會移除相關佇列項目。\n可至資源回收筒還原。確定繼續嗎？").format(path, scope),
@@ -613,7 +629,7 @@ class FileAggregatorApp:
         if self.folder_tree.identify_region(event.x, event.y) not in ("tree", "cell"):
             return
         item = self.tree_items.get(self.folder_tree.identify_row(event.y))
-        if item and item[0] == "chapter":
+        if item and item[0] in FOLDER_KINDS:
             self.translation_queue.add_paths([item[1]])
             return "break"
 
@@ -654,11 +670,11 @@ class FileAggregatorApp:
 
     def has_explicit_chapter_selection(self):
         selection = self.folder_tree.selection()
-        return len(selection) > 1 and all(self.tree_items[item][0] == "chapter" for item in selection)
+        return len(selection) > 1 and all(self.tree_items[item][0] in FOLDER_KINDS for item in selection)
 
     def on_tree_select(self, _event=None):
         paths = self.selected_chapters()
-        self.selection_text.set(tr("已選取 {0} 個章節").format(len(paths)))
+        self.selection_text.set(tr("已選取 {0} 個資料夾").format(len(paths)))
         if self.manga_busy:
             return
         for entry in (self.start_entry, self.end_entry):

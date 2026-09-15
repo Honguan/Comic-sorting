@@ -18,6 +18,7 @@ from ui_language import tr
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 WORK_FOLDER_NAMES = {"mask", "inpainted"}
+FOLDER_KINDS = {"chapter": "單一章節", "merged": "整合資料夾"}
 
 
 def natural_sort_key(value):
@@ -30,13 +31,23 @@ def chapter_number(name):
     return Decimal(match.group()) if match else None
 
 
+def chapter_range(name):
+    """Recognize the app's range naming, including legacy spacing/dash variants."""
+    match = re.fullmatch(r"Chapter\s+(\d+(?:\.\d+)?)\s*[-–—~～]\s*(\d+(?:\.\d+)?)", name.strip(), re.I)
+    return (Decimal(match[1]), Decimal(match[2])) if match else None
+
+
+def folder_kind(name):
+    return "merged" if chapter_range(name) is not None else "chapter"
+
+
 def aggregate_output(selected):
     """Validate non-overlapping inputs before deriving the merged folder name."""
     parent = Path(selected[0][0]).parent.resolve()
     end = None
     for path, name, start in selected:
-        match = re.fullmatch(r"Chapter\s+(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)", name, re.I)
-        last = Decimal(match[2]) if match else start
+        span = chapter_range(name)
+        last = span[1] if span else start
         if Path(path).parent.resolve() != parent:
             raise ValueError(tr("整合時請只選擇同一系列的章節"))
         if last < start or (end is not None and start <= end):

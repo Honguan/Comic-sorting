@@ -15,7 +15,7 @@ from queue_worker import BT_STAGES, Job, run_jobs, translator_command
 from app_logging import logger, log_path
 from ui_language import tr
 from bt_settings import ConfigEditor
-from comic_core import image_files
+from comic_core import FOLDER_KINDS, folder_kind, image_files
 from queue_history import HistoryWindow, elapsed_text, save_run, usage_text
 from queue_errors import error_details, error_info
 from ntfy_notifications import NtfyNotifications
@@ -98,11 +98,12 @@ class TranslationQueue:
         footer.pack(side="bottom", fill="x")
         tree_frame = ttk.Frame(box)
         tree_frame.pack(fill="both", expand=True, pady=4)
-        self.tree = ttk.Treeview(tree_frame, columns=("action", "pages", "status", "error_code", "error_reason"), show="tree headings", height=3)
-        for column, text in (("#0", "漫畫路徑"), ("action", "動作"), ("pages", "翻譯頁數"),
+        self.tree = ttk.Treeview(tree_frame, columns=("kind", "action", "pages", "status", "error_code", "error_reason"), show="tree headings", height=3)
+        for column, text in (("#0", "漫畫路徑"), ("kind", "資料夾類型"), ("action", "動作"), ("pages", "翻譯頁數"),
                              ("status", "狀態"), ("error_code", "錯誤碼"), ("error_reason", "錯誤原因")):
             self.tree.heading(column, text=tr(text))
         self.tree.column("#0", width=340, minwidth=180)
+        self.tree.column("kind", width=110, stretch=False)
         self.tree.column("action", width=85, stretch=False)
         self.tree.column("pages", width=120, stretch=False)
         self.tree.column("status", width=110, stretch=False)
@@ -388,7 +389,7 @@ class TranslationQueue:
                 except (OSError, ValueError):
                     self.pending_file_counts[item] = None
             self.tree.insert("", "end", iid=item, text=str(job.path),
-                             values=(tr(ACTIONS[job.action]), self.page_range_text(job), tr(STATUSES[job.status]),
+                             values=(tr(FOLDER_KINDS[folder_kind(job.path.name)]), tr(ACTIONS[job.action]), self.page_range_text(job), tr(STATUSES[job.status]),
                                      *error_info(job.status, job.error)))
             if item in selected:
                 self.tree.selection_add(item)

@@ -90,7 +90,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertTrue(tree.item(parent, 'open'))
         self.assertEqual(tree.selection(), tree.get_children(parent))
         self.assertEqual(self.app.selected_chapters(), chapters)
-        self.assertEqual(self.app.selection_text.get(), '已選取 3 個章節')
+        self.assertEqual(self.app.selection_text.get(), '已選取 3 個資料夾')
         tree.selection_remove(tree.get_children(parent)[1])
         self.assertEqual(self.app.selected_chapters(), [chapters[0], chapters[2]])
 
@@ -162,6 +162,60 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual([(j.path, j.status) for j in restored.jobs], [(second, "done"), (first, "done")])
         restored.clear_completed()
         self.assertEqual(restored.jobs, [])
+
+    def test_folder_types_stay_distinct_in_scan_selection_queue_and_merge(self):
+        first, last, merged = [self.chapter(name) for name in ('Chapter 1', 'Chapter 45', 'Chapter 1-45')]
+        base = self.folder / 'Comics'
+        self.app.apply_scan_data(base, self.app.scan_folder_data(base))
+        tree, q = self.app.folder_tree, self.app.translation_queue
+        items = {path: item for item, (_, path) in self.app.tree_items.items()}
+        self.assertEqual(tree.set(items[first], 'kind'), '單一章節')
+        self.assertEqual(tree.set(items[merged], 'kind'), '整合資料夾')
+        self.assertEqual(self.app.tree_items[items[merged]][0], 'merged')
+        self.assertIn('2 單一', tree.set(items[first.parent], 'status'))
+        self.assertIn('1 整合', tree.set(items[first.parent], 'status'))
+        self.app.select_all_chapters(first.parent, base, 'chapter')
+        self.assertEqual(self.app.selected_chapters(), [first, last])
+        q.add_selected()
+        self.app.search_text.set('Chapter 45')
+        self.root.after_cancel(self.app.search_after)
+        self.app.apply_filter()
+        self.app.select_all_chapters(first.parent, base, 'merged')
+        self.assertEqual(self.app.selected_chapters(), [merged])
+        self.assertEqual(self.app.search_text.get(), '')
+        q.add_selected()
+        self.assertEqual([q.tree.set(str(id(job)), 'kind') for job in q.jobs],
+                         ['單一章節', '單一章節', '整合資料夾'])
+        # Both leaf types are explicit inputs; overlap is rejected before any worker starts.
+        self.app.select_all_chapters(first.parent, base)
+        self.assertTrue(self.app.has_explicit_chapter_selection())
+        with mock.patch.object(comic.messagebox, 'showwarning') as warning, \
+                mock.patch.object(comic.threading, 'Thread') as worker:
+            self.app.confirm_aggregate()
+            worker.assert_not_called()
+            self.assertIn('重疊', warning.call_args.args[1])
+        # Rescan and double-click retain the merged leaf's existing queue behavior.
+        self.app.select_all_chapters(first.parent, base, 'merged')
+        self.app.apply_scan_data(base, self.app.scan_folder_data(base))
+        self.assertEqual(self.app.selected_chapters(), [merged])
+        self.root.deiconify()
+        item = next(key for key, (_, path) in self.app.tree_items.items() if path == merged)
+        tree.see(item)
+        self.root.update()
+        x, y, _, height = tree.bbox(item)
+        self.double_click(x + 80, y + height // 2, 50000)
+        self.assertEqual(len(q.jobs), 3)
+        self.assertTrue(all(job.status == 'pending' for job in q.jobs))
+        parent = tree.parent(item)
+        tree.see(parent)
+        self.root.update()
+        x, y, _, height = tree.bbox(parent)
+        with mock.patch.object(self.app.folder_context_menu, 'tk_popup'):
+            tree.event_generate('<Button-3>', x=x + 50, y=y + height // 2)
+        self.app.folder_context_menu.invoke(2)
+        self.assertEqual(self.app.selected_chapters(), [first, last])
+        self.app.folder_context_menu.invoke(3)
+        self.assertEqual(self.app.selected_chapters(), [merged])
 
     def test_queue_error_columns_update_persist_show_details_and_clear_on_retry(self):
         first = self.chapter('Chapter 1')
