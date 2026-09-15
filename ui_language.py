@@ -567,3 +567,10 @@ TRANSLATIONS.update({
     '已交給 Windows 顯示；勿擾模式或系統通知設定可能隱藏通知。': {'en': 'Submitted to Windows; Do Not Disturb or system settings may hide it.', 'ja': 'Windows に通知を送信しました。応答不可モードやシステム設定で非表示になる場合があります。'},
     'Windows 通知失敗；佇列繼續執行。': {'en': 'Windows notification failed; the queue continues.', 'ja': 'Windows 通知に失敗しました。キューは続行します。'},
 })
+
+TRANSLATIONS.update({
+    '匯出漫畫名稱': {'en': 'Export manga names', 'ja': '漫画名をエクスポート'},
+    '目前沒有可匯出的漫畫，請先掃描漫畫路徑。': {'en': 'No manga to export. Scan the manga folder first.', 'ja': '出力する漫画がありません。先に漫画フォルダーをスキャンしてください。'},
+    '匯出失敗：{0}': {'en': 'Export failed: {0}', 'ja': 'エクスポート失敗：{0}'},
+    '已匯出 {0} 個漫畫名稱：\n{1}': {'en': 'Exported {0} manga names:\n{1}', 'ja': '{0} 件の漫画名をエクスポートしました：\n{1}'},
+})

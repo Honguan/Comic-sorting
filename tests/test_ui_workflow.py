@@ -37,6 +37,29 @@ class WorkflowTests(unittest.TestCase):
         (path / "result/1.png").write_bytes(b"image")
         return path
 
+    def test_export_all_manga_names_ignores_filter_and_handles_cancel_and_errors(self):
+        base = self.folder / "Comics"
+        for name in ("日本語 漫畫", "Series 10", "Series 2"):
+            for chapter in ("Chapter 1", "Chapter 2"):
+                folder = base / name / chapter / "result"
+                folder.mkdir(parents=True)
+                (folder / "1.png").write_bytes(b"image")
+        self.app.apply_scan_data(base, self.app.scan_folder_data(base))
+        self.app.sort_by_column("name")
+        self.app.search_text.set("Series 2")
+        self.root.after_cancel(self.app.search_after)
+        self.app.apply_filter()
+        output = self.folder / "names.txt"
+        with mock.patch.object(comic.filedialog, "asksaveasfilename", return_value=str(output)), mock.patch.object(comic.messagebox, "showinfo"):
+            self.app.export_manga_names()
+        self.assertEqual(output.read_text(encoding="utf-8-sig").splitlines(), ["Series 2", "Series 10", "日本語 漫畫"])
+        with mock.patch.object(comic.filedialog, "asksaveasfilename", return_value=""), mock.patch.object(Path, "write_text") as write:
+            self.app.export_manga_names()
+            write.assert_not_called()
+        with mock.patch.object(comic.filedialog, "asksaveasfilename", return_value=str(output)), mock.patch.object(Path, "write_text", side_effect=PermissionError("locked")), mock.patch.object(comic.messagebox, "showerror") as error:
+            self.app.export_manga_names()
+            error.assert_called_once()
+
     def test_multi_selection_filter_and_rescan_preserve_scope(self):
         first, second = self.chapter("Chapter 1"), self.chapter("Chapter 2")
         base = self.folder / "Comics"

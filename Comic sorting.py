@@ -114,6 +114,7 @@ class FileAggregatorApp:
         self.root.bind("<Control-f>", lambda _event: self.search_entry.focus_set())
         self.search_entry.bind("<Escape>", lambda _event: self.search_text.set(""))
         ttk.Button(search_row, text=tr("清除搜尋"), command=lambda: self.search_text.set("")).pack(side="left", padx=(0, 6))
+        ttk.Button(search_row, text=tr("匯出漫畫名稱"), command=self.export_manga_names).pack(side="left", padx=(0, 6))
         self.selection_text = tk.StringVar(value=tr("已選取 {0} 個資料夾").format(0))
         ttk.Label(search_row, textvariable=self.selection_text).pack(side="left")
         self.search_text.trace_add("write", self.filter_folders)
@@ -266,6 +267,25 @@ class FileAggregatorApp:
     def report_callback_exception(self, exception_type, error, traceback):
         logger.error("ui_callback_failed", exc_info=(exception_type, error, traceback))
         messagebox.showerror(tr("Comic sorting 錯誤"), redact(str(error)) + tr("；紀錄：{0}").format(log_path()))
+
+    def export_manga_names(self):
+        if not self.scan_data or not self.series_groups:
+            messagebox.showinfo(tr("匯出漫畫名稱"), tr("目前沒有可匯出的漫畫，請先掃描漫畫路徑。"), parent=self.root)
+            return
+        base = self.scan_data[0]
+        names = [series.name if series == base else str(series.relative_to(base))
+                 for series in self.sorted_series(base)]
+        target = filedialog.asksaveasfilename(
+            parent=self.root, title=tr("匯出漫畫名稱"), defaultextension=".txt",
+            initialfile="manga-names.txt", filetypes=[("TXT", "*.txt")])
+        if not target:
+            return
+        try:
+            Path(target).write_text("\n".join(names) + "\n", encoding="utf-8-sig")
+        except OSError as error:
+            messagebox.showerror(tr("匯出漫畫名稱"), tr("匯出失敗：{0}").format(error), parent=self.root)
+            return
+        messagebox.showinfo(tr("匯出漫畫名稱"), tr("已匯出 {0} 個漫畫名稱：\n{1}").format(len(names), target), parent=self.root)
 
     def update_sort_headings(self):
         for column, field, title in (("#0", "name", tr("序號｜系列 / 章節")),
