@@ -378,25 +378,43 @@ class TranslationQueue:
         view = self.tree.yview()
         focus = self.tree.focus()
         selected = set(self.tree.selection())
+        open_groups = {}
+        for root in self.tree.get_children():
+            for item in (root, *self.tree.get_children(root)):
+                open_groups[item] = self.tree.item(item, "open")
         self.tree.delete(*self.tree.get_children())
         self.pending_file_counts = {}
         font = tkfont.Font(root=self.app.root, font=ttk.Style(self.tree).lookup("Treeview", "font") or "TkDefaultFont")
-        width = max([340] + [font.measure(str(job.path)) + 40 for job in self.jobs])
+        labels = [str(job.path.parent.parent) for job in self.jobs]
+        labels += [job.path.parent.name for job in self.jobs]
+        labels += [f"{index}. {job.path.name}" for index, job in enumerate(self.jobs, 1)]
+        width = max([340] + [font.measure(label) + 80 for label in labels])
         self.tree.column("#0", width=width, minwidth=width, stretch=False)
-        for job in self.jobs:
+        for index, job in enumerate(self.jobs, 1):
             item = str(id(job))
             if job.action == "translate" and job.status == "pending":
                 try:
                     self.pending_file_counts[item] = len(job.select_pages(image_files(job.path)))
                 except (OSError, ValueError):
                     self.pending_file_counts[item] = None
-            self.tree.insert("", "end", iid=item, text=str(job.path),
+            root = "path:" + str(job.path.parent.parent)
+            series = "series:" + str(job.path.parent)
+            if not self.tree.exists(root):
+                self.tree.insert("", "end", iid=root, text=str(job.path.parent.parent), open=open_groups.get(root, False))
+            if not self.tree.exists(series):
+                self.tree.insert(root, "end", iid=series, text=job.path.parent.name, open=open_groups.get(series, False))
+            self.tree.insert(series, "end", iid=item, text=f"{index}. {job.path.name}",
                              values=(tr(FOLDER_KINDS[folder_kind(job.path.name)]), tr(ACTIONS[job.action]), self.page_range_text(job), tr(STATUSES[job.status]),
                                      error_info(job.status, job.error)[1]))
             if item in selected:
                 self.tree.selection_add(item)
             if item == focus:
                 self.tree.focus(item)
+        for item in selected:
+            if self.tree.exists(item):
+                self.tree.selection_add(item)
+        if focus and self.tree.exists(focus):
+            self.tree.focus(focus)
         if view:
             self.tree.yview_moveto(view[0])
         self.update_summary()
@@ -508,10 +526,23 @@ class TranslationQueue:
             self.context_menu.grab_release()
         return "break"
 
+    def selected_job_ids(self):
+        selected = set()
+        def collect(item):
+            children = self.tree.get_children(item)
+            if children:
+                for child in children:
+                    collect(child)
+            else:
+                selected.add(item)
+        for item in self.tree.selection():
+            collect(item)
+        return selected
+
     def remove(self, confirm=False):
         if self.running or self.app.manga_busy:
             return
-        selected = set(self.tree.selection())
+        selected = self.selected_job_ids()
         if not selected:
             return
         if confirm and not messagebox.askyesno(
@@ -529,7 +560,7 @@ class TranslationQueue:
 
     def retry(self):
         if not self.app.manga_busy:
-            selected = set(self.tree.selection())
+            selected = self.selected_job_ids()
             for job in self.jobs:
                 if str(id(job)) in selected and job.status in ("failed", "cancelled", "blocked", "done_warning"):
                     job.status, job.error = "pending", ""
@@ -538,7 +569,7 @@ class TranslationQueue:
     def move(self, direction):
         if self.app.manga_busy:
             return
-        selected = set(self.tree.selection())
+        selected = self.selected_job_ids()
         indices = range(len(self.jobs)) if direction < 0 else range(len(self.jobs) - 1, -1, -1)
         for index in indices:
             target = index + direction

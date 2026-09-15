@@ -37,16 +37,28 @@ class WorkflowTests(unittest.TestCase):
         (path / "result/1.png").write_bytes(b"image")
         return path
 
-    def test_queue_path_column_fits_complete_path(self):
-        from tkinter import font as tkfont
+    def test_queue_groups_paths_series_and_chapters_without_reordering_jobs(self):
         q = self.app.translation_queue
-        path = self.folder / ("Long 漫畫 title " * 12) / "Chapter 1-100"
-        q.jobs = [Job(path, "translate")]
+        base = self.folder / "Comics"
+        paths = [base / "漫畫 A" / "Chapter 1-10", base / "漫畫 B" / "Chapter 1-5", base / "漫畫 A" / "Chapter 11-20"]
+        q.jobs = [Job(path, "translate") for path in paths]
         q.render()
-        font = tkfont.Font(root=self.root, font=tk.ttk.Style(q.tree).lookup("Treeview", "font") or "TkDefaultFont")
-        self.assertGreaterEqual(q.tree.column("#0", "minwidth"), font.measure(str(path)) + 40)
-        self.assertFalse(q.tree.column("#0", "stretch"))
-        self.assertEqual(q.tree.item(str(id(q.jobs[0])), "text"), str(path))
+        root = q.tree.get_children()[0]
+        series = q.tree.get_children(root)
+        self.assertEqual(q.tree.item(root, "text"), str(base))
+        self.assertEqual([q.tree.item(item, "text") for item in series], ["漫畫 A", "漫畫 B"])
+        self.assertEqual([q.tree.item(item, "text") for item in q.tree.get_children(series[0])], ["1. Chapter 1-10", "3. Chapter 11-20"])
+        self.assertFalse(q.tree.item(root, "open"))
+        self.assertFalse(q.tree.item(series[0], "open"))
+        self.assertEqual([job.path for job in q.jobs], paths)
+        q.tree.item(root, open=True)
+        q.tree.item(series[0], open=True)
+        q.tree.selection_set(series[0])
+        q.render()
+        self.assertTrue(q.tree.item(series[0], "open"))
+        self.assertEqual(q.selected_job_ids(), {str(id(q.jobs[0])), str(id(q.jobs[2]))})
+        q.remove()
+        self.assertEqual([job.path for job in q.jobs], [paths[1]])
 
     def test_export_all_manga_names_ignores_filter_and_handles_cancel_and_errors(self):
         base = self.folder / "Comics"
@@ -606,7 +618,7 @@ class WorkflowTests(unittest.TestCase):
         self.root.geometry('1024x960')
         self.root.deiconify()
         self.root.update()
-        items = q.tree.get_children()
+        items = tuple(str(id(job)) for job in q.jobs)
         q.tree.selection_set(items[0])
 
         def right_click(item):
@@ -631,7 +643,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual([j.path for j in q.jobs], [first, third])
         self.assertEqual([r['path'] for r in comic.load_json(self.settings, {})['bt_jobs']], [str(first), str(third)])
         self.root.update()
-        q.tree.selection_set(*q.tree.get_children())
+        q.tree.selection_set(*(str(id(job)) for job in q.jobs))
         with mock.patch.object(q.context_menu, 'tk_popup') as popup:
             q.tree.event_generate('<Button-3>', x=50, y=5)
             q.tree.event_generate('<Button-3>', x=50, y=q.tree.winfo_height() - 4)
