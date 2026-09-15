@@ -416,11 +416,7 @@ class WorkflowTests(unittest.TestCase):
         for entry, number in ((self.app.start_entry, "2"), (self.app.end_entry, "3")):
             entry.delete(0, "end")
             entry.insert(0, number)
-        dialog = self.app.edit_sort_settings()
-        field = next(w for w in dialog.winfo_children() if isinstance(w, tk.ttk.Combobox))
-        field.current(tuple(comic.SERIES_SORT_FIELDS).index("name"))
-        next(w for w in dialog.winfo_children() if isinstance(w, tk.ttk.Button)
-             and w["text"] == tr("套用")).invoke()
+        self.root.tk.call(self.app.folder_tree.heading("#0", "command"))
         self.root.update()
         self.assertEqual((self.app.start_entry.get(), self.app.end_entry.get()), ("2", "3"))
         with mock.patch.object(comic.messagebox, "askyesno", return_value=False) as confirm:
@@ -540,13 +536,8 @@ class WorkflowTests(unittest.TestCase):
         for key, names in expected.items():
             for descending in (False, True):
                 with self.subTest(field=key, descending=descending):
-                    dialog = self.app.edit_sort_settings()
-                    fields = [w for w in dialog.winfo_children() if isinstance(w, tk.ttk.Combobox)]
-                    fields[0].current(tuple(comic.SERIES_SORT_FIELDS).index(key))
-                    fields[1].current(int(descending))
-                    next(w for w in dialog.winfo_children() if isinstance(w, tk.ttk.Button)
-                         and w['text'] == tr("套用")).invoke()
-                    self.assertFalse(dialog.winfo_exists())
+                    column = {"name": "#0", "chapters": "status"}.get(key, key)
+                    self.root.tk.call(tree.heading(column, "command"))
                     self.assertEqual(displayed_names(), list(reversed(names)) if descending else names)
                     self.assertEqual(self.app.selected_chapters(), [selected])
                     parent = tree.parent(tree.selection()[0])
@@ -559,16 +550,9 @@ class WorkflowTests(unittest.TestCase):
                     saved = comic.load_json(self.settings, {})
                     self.assertEqual((saved['series_sort'], saved['series_sort_descending']), (key, descending))
 
-        dialog = self.app.edit_sort_settings()
-        fields = [w for w in dialog.winfo_children() if isinstance(w, tk.ttk.Combobox)]
-        fields[0].current(0)
         with mock.patch.object(self.app, "save_settings", return_value=False):
-            next(w for w in dialog.winfo_children() if isinstance(w, tk.ttk.Button)
-                 and w['text'] == tr("套用")).invoke()
-        self.assertTrue(dialog.winfo_exists())
+            self.root.tk.call(tree.heading("#0", "command"))
         self.assertEqual(self.app.series_sort, "size")
-        next(w for w in dialog.winfo_children() if isinstance(w, tk.ttk.Button)
-             and w['text'] == tr("取消")).invoke()
         self.app.search_text.set("Series")
         self.root.after_cancel(self.app.search_after)
         self.app.apply_filter()

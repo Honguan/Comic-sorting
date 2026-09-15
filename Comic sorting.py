@@ -114,8 +114,6 @@ class FileAggregatorApp:
         self.root.bind("<Control-f>", lambda _event: self.search_entry.focus_set())
         self.search_entry.bind("<Escape>", lambda _event: self.search_text.set(""))
         ttk.Button(search_row, text=tr("清除搜尋"), command=lambda: self.search_text.set("")).pack(side="left", padx=(0, 6))
-        self.sort_button = ttk.Button(search_row, text=tr("排序設定"), command=self.edit_sort_settings)
-        self.sort_button.pack(side="left", padx=(0, 6))
         self.selection_text = tk.StringVar(value=tr("已選取 {0} 個資料夾").format(0))
         ttk.Label(search_row, textvariable=self.selection_text).pack(side="left")
         self.search_text.trace_add("write", self.filter_folders)
@@ -276,49 +274,24 @@ class FileAggregatorApp:
                                      ("updated", "updated", tr("更新時間"))):
             if field == self.series_sort:
                 title += " ↓" if self.series_sort_descending else " ↑"
-            self.folder_tree.heading(column, text=title)
+            self.folder_tree.heading(column, text=title, command=lambda key=field: self.sort_by_column(key))
 
-    def edit_sort_settings(self):
-        dialog = tk.Toplevel(self.root)
-        dialog.title(tr("排序設定"))
-        dialog.transient(self.root)
-        dialog.resizable(False, False)
-        fields = tuple(SERIES_SORT_FIELDS)
-        ttk.Label(dialog, text=tr("排序欄位")).grid(row=0, column=0, padx=12, pady=8, sticky="w")
-        field = ttk.Combobox(dialog, values=[tr(SERIES_SORT_FIELDS[key]) for key in fields], state="readonly")
-        field.current(fields.index(self.series_sort))
-        field.grid(row=0, column=1, padx=12, pady=8)
-        ttk.Label(dialog, text=tr("排序方向")).grid(row=1, column=0, padx=12, pady=8, sticky="w")
-        direction = ttk.Combobox(dialog, values=(tr("升冪"), tr("降冪")), state="readonly")
-        direction.current(int(self.series_sort_descending))
-        direction.grid(row=1, column=1, padx=12, pady=8)
-        ttk.Label(dialog, text=tr("章節維持話數排序，整合編號不變。")).grid(
-            row=2, column=0, columnspan=2, padx=12, pady=8, sticky="w")
-
-        def apply():
-            previous = self.series_sort, self.series_sort_descending
-            self.series_sort, self.series_sort_descending = fields[field.current()], direction.current() == 1
-            if not self.save_settings():
-                self.series_sort, self.series_sort_descending = previous
-                return
-            self.update_sort_headings()
-            if self.scan_data:
-                items = {self.tree_items[item][1]: item for item in self.folder_tree.get_children()}
-                for index, series in enumerate(self.sorted_series(self.scan_data[0]), 1):
-                    if series in items:
-                        item = items[series]
-                        name = self.folder_tree.item(item, "text").partition(". ")[2]
-                        self.folder_tree.item(item, text=f"{index}. {name}")
-                        self.folder_tree.move(item, "", "end")
-            dialog.destroy()
-
-        ttk.Button(dialog, text=tr("套用"), command=apply).grid(row=3, column=0, padx=12, pady=8)
-        ttk.Button(dialog, text=tr("取消"), command=dialog.destroy).grid(row=3, column=1, padx=12, pady=8)
-        dialog.bind("<Return>", lambda _event: apply())
-        dialog.bind("<Escape>", lambda _event: dialog.destroy())
-        dialog.grab_set()
-        field.focus_set()
-        return dialog
+    def sort_by_column(self, field):
+        previous = self.series_sort, self.series_sort_descending
+        self.series_sort_descending = not self.series_sort_descending if field == self.series_sort else False
+        self.series_sort = field
+        if not self.save_settings():
+            self.series_sort, self.series_sort_descending = previous
+            return
+        self.update_sort_headings()
+        if self.scan_data:
+            items = {self.tree_items[item][1]: item for item in self.folder_tree.get_children()}
+            for index, series in enumerate(self.sorted_series(self.scan_data[0]), 1):
+                if series in items:
+                    item = items[series]
+                    name = self.folder_tree.item(item, "text").partition(". ")[2]
+                    self.folder_tree.item(item, text=f"{index}. {name}")
+                    self.folder_tree.move(item, "", "end")
 
     def close(self):
         if self.manga_busy:
