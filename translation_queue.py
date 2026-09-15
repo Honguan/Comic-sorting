@@ -132,6 +132,7 @@ class TranslationQueue:
                               ("清除已完成", self.clear_completed)):
             self.button(row, tr(text), command)
         self.start_button = self.button(row, tr("開始主佇列"), self.start)
+        self.start_button.configure(style="Accent.TButton")
         self.pause_button = ttk.Button(row, text=tr("佇列暫停"), command=self.request_pause)
         self.pause_button.pack(side="left", padx=2)
         self.stop_button = ttk.Button(row, text=tr("停止"), command=self.request_stop, width=0)

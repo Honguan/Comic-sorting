@@ -11,6 +11,7 @@ from tkinter import filedialog, messagebox, ttk, font as tkfont
 from translation_queue import TranslationQueue
 from app_logging import configure_logging, logger, log_path, redact
 from ui_language import LANGUAGES, set_language, tr
+from ui_theme import apply_theme
 from comic_core import (
     IMAGE_EXTENSIONS, FOLDER_KINDS, chapter_number, folder_kind, image_files, translation_status,
     natural_sort_key, updated_at, folder_size, format_size, summarize_names,
@@ -40,6 +41,7 @@ class FileAggregatorApp:
         self.history_path = settings_path().with_name("comic-sorting.history.sqlite3")
         self.root.report_callback_exception = self.report_callback_exception
         settings = load_json(settings_path(), {}, strict=True)
+        apply_theme(root)
         language = settings.get("ui_language", "zh-TW")
         set_language(language)
         self.ui_language = tk.StringVar(value=LANGUAGES.get(language, LANGUAGES["zh-TW"]))
@@ -170,7 +172,7 @@ class FileAggregatorApp:
         ttk.Label(range_row, text=tr("結束編號：")).pack(side="left", padx=(10, 0))
         self.end_entry = ttk.Entry(range_row, width=6)
         self.end_entry.pack(side="left")
-        self.aggregate_button = ttk.Button(range_row, text=tr("確認整合"), command=self.confirm_aggregate)
+        self.aggregate_button = ttk.Button(range_row, text=tr("確認整合"), command=self.confirm_aggregate, style="Accent.TButton")
         self.aggregate_button.pack(side="left", padx=10)
         self.remove_sources_checkbox = ttk.Checkbutton(
             range_row, text=tr("整合後清除來源"),
