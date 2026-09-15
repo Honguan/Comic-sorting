@@ -78,6 +78,26 @@ class WorkflowTests(unittest.TestCase):
             info.assert_called_once()
             self.assertFalse(app.manga_busy)
 
+    def test_button_hover_press_and_disabled_feedback(self):
+        style = tk.ttk.Style(self.root)
+        for name in ('TButton', 'Accent.TButton'):
+            button = tk.ttk.Button(self.root, style=name)
+            button.event_generate('<Enter>')
+            self.assertTrue(button.instate(['active']))
+            normal = style.lookup(name, 'background')
+            hover = style.lookup(name, 'background', ('active',))
+            pressed = style.lookup(name, 'background', ('active', 'pressed'))
+            self.assertEqual(len({normal, hover, pressed}), 3)
+            button.event_generate('<Leave>')
+            self.assertFalse(button.instate(['active']))
+            self.assertEqual(style.lookup(name, 'background', ('disabled', 'active')),
+                             style.lookup(name, 'background', ('disabled',)))
+            called = mock.Mock()
+            button.configure(command=called, state='disabled')
+            button.invoke()
+            called.assert_not_called()
+            button.destroy()
+
     def wait_counts(self, q):
         deadline = time.monotonic() + 3
         while q.counting and time.monotonic() < deadline:

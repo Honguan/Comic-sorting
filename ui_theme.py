@@ -22,13 +22,20 @@ def apply_theme(root):
     style.configure("TLabelframe", borderwidth=1)
     style.configure("TLabelframe.Label", font=heading, foreground=accent)
     style.configure("TButton", padding=(3, 1))
-    # Native controls retain their focus/hover behavior; only primary buttons use a solid fill.
+    # Share a drawable border so hover colors are visible on native Windows themes.
     if "Primary.border" not in style.element_names():
         style.element_create("Primary.border", "from", "clam", "Button.border")
-    style.layout("Accent.TButton", [("Primary.border", {"sticky": "nswe", "children": [
+    style.layout("TButton", [("Primary.border", {"sticky": "nswe", "children": [
         ("Button.focus", {"sticky": "nswe", "children": [
             ("Button.padding", {"sticky": "nswe", "children": [
                 ("Button.label", {"sticky": "nswe"})]})]})]})])
+    style.configure("TButton", background=surface, foreground=ink,
+                    bordercolor="#bac7d6", lightcolor=surface, darkcolor=surface,
+                    relief="flat", borderwidth=1, focusthickness=1, focuscolor=accent)
+    style.map("TButton",
+              background=[("disabled", "#edf0f4"), ("pressed", "#badcff"), ("active", "#dceeff")],
+              foreground=[("disabled", "#8793a3"), ("active", "#004e92")],
+              bordercolor=[("disabled", "#d6dfe9"), ("pressed", "#004e92"), ("active", accent), ("focus", accent)])
     style.configure("Accent.TButton", background=accent, foreground=surface,
                     bordercolor=accent, lightcolor=accent, darkcolor=accent,
                     relief="flat", borderwidth=1, focusthickness=1, focuscolor=surface)
