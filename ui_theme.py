@@ -1,11 +1,11 @@
-"""Compact light desktop theme inspired by Linear's restrained accent and surfaces."""
+"""Light Windows desktop theme with native controls and a blue primary action."""
 from tkinter import font, ttk
 
 
 def apply_theme(root):
-    background, surface = "#f5f6f8", "#ffffff"
-    ink, muted, border = "#20232d", "#626774", "#d7dbe3"
-    accent, selected = "#5e6ad2", "#e9ecff"
+    background, surface = "#f7f9fc", "#ffffff"
+    ink, muted, accent = "#192b40", "#607086", "#0067c0"
+    selected = "#dceeff"
     family = font.nametofont("TkDefaultFont", root=root).cget("family")
     heading = (family, font.nametofont("TkDefaultFont", root=root).cget("size"), "bold")
     root.configure(background=background)
@@ -15,35 +15,32 @@ def apply_theme(root):
     root.option_add("*Text.selectBackground", selected)
     root.option_add("*Text.selectForeground", ink)
     style = ttk.Style(root)
-    style.theme_use("clam")
-    style.configure(".", background=background, foreground=ink, font="TkDefaultFont",
-                    bordercolor=border, lightcolor=border, darkcolor=border)
+    style.theme_use("vista" if "vista" in style.theme_names() else "clam")
+    style.configure(".", background=background, foreground=ink, font="TkDefaultFont")
     style.configure("TLabel", padding=0)
     style.configure("Muted.TLabel", foreground=muted)
-    style.configure("TLabelframe", relief="solid", borderwidth=1)
-    style.configure("TLabelframe.Label", font=heading, foreground=ink)
-    style.configure("TButton", background=surface, padding=(4, 2), relief="flat", focusthickness=1, focuscolor=accent)
-    style.map("TButton", background=[("disabled", background), ("pressed", selected), ("active", "#eef0f6")],
-              foreground=[("disabled", "#8c919c")], bordercolor=[("focus", accent)])
-    style.configure("Accent.TButton", background=accent, foreground=surface)
-    style.map("Accent.TButton", background=[("disabled", "#e2e4ed"), ("pressed", "#4753b4"), ("active", "#515dc4")],
-              foreground=[("disabled", "#727887"), ("!disabled", surface)])
+    style.configure("TLabelframe", borderwidth=1)
+    style.configure("TLabelframe.Label", font=heading, foreground=accent)
+    style.configure("TButton", padding=(3, 1))
+    # Native controls retain their focus/hover behavior; only primary buttons use a solid fill.
+    if "Primary.border" not in style.element_names():
+        style.element_create("Primary.border", "from", "clam", "Button.border")
+    style.layout("Accent.TButton", [("Primary.border", {"sticky": "nswe", "children": [
+        ("Button.focus", {"sticky": "nswe", "children": [
+            ("Button.padding", {"sticky": "nswe", "children": [
+                ("Button.label", {"sticky": "nswe"})]})]})]})])
+    style.configure("Accent.TButton", background=accent, foreground=surface,
+                    bordercolor=accent, lightcolor=accent, darkcolor=accent,
+                    relief="flat", borderwidth=1, focusthickness=1, focuscolor=surface)
+    style.map("Accent.TButton", background=[("disabled", "#e6ebf1"), ("pressed", "#004e92"), ("active", "#1979ca")],
+              foreground=[("disabled", "#778599"), ("!disabled", surface)],
+              bordercolor=[("disabled", "#d6dfe9")])
     for name in ("TEntry", "TCombobox", "TSpinbox"):
-        style.configure(name, fieldbackground=surface, padding=2, arrowsize=12)
-        style.map(name, bordercolor=[("focus", accent)],
-                  fieldbackground=[("disabled", background), ("readonly", "#f0f2f6")],
-                  foreground=[("disabled", muted), ("readonly", ink)])
-    for name in ("TCheckbutton", "TRadiobutton"):
-        style.map(name, background=[("active", background)], foreground=[("disabled", muted)])
-    style.configure("TNotebook", borderwidth=0, tabmargins=(0, 4, 0, 0))
-    style.configure("TNotebook.Tab", padding=(10, 3), background=background)
-    style.map("TNotebook.Tab", background=[("selected", surface), ("active", selected)],
-              foreground=[("selected", "#4652b5")])
-    style.configure("Treeview", background=surface, fieldbackground=surface, borderwidth=1,
+        style.configure(name, padding=1)
+    style.configure("TNotebook", tabmargins=(0, 2, 0, 0))
+    style.configure("TNotebook.Tab", padding=(10, 2))
+    style.map("TNotebook.Tab", foreground=[("selected", accent)])
+    style.configure("Treeview", background=surface, fieldbackground=surface,
                     rowheight=font.nametofont("TkDefaultFont", root=root).metrics("linespace") + 8)
     style.map("Treeview", background=[("selected", selected)], foreground=[("selected", ink)])
-    style.configure("Treeview.Heading", background="#eef0f5", font=heading, padding=(4, 4), relief="flat")
-    style.map("Treeview.Heading", background=[("active", "#e3e6f0")])
-    style.configure("Horizontal.TProgressbar", background=accent, troughcolor="#e6e9f0", borderwidth=0)
-    style.configure("TScrollbar", background="#c5cad6", troughcolor=background, borderwidth=0, arrowsize=12)
-    style.map("TScrollbar", background=[("active", "#a5adbf")])
+    style.configure("Treeview.Heading", font=heading, padding=(4, 3))
