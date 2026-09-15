@@ -5,10 +5,44 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from queue_history import find_runs, save_run, scope_records, usage_text
+from queue_history import find_runs, history_totals, save_run, scope_records, usage_text
 
 
 class HistoryStorageTests(unittest.TestCase):
+    def test_grand_totals_include_all_runs_and_known_costs_without_double_counting(self):
+        from queue_worker import parse_bt_usage
+        from test_bt_usage import usage_line
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'history.sqlite3'
+            empty = history_totals(path)
+            self.assertEqual((empty['runs'], empty['jobs'], empty['elapsed_seconds']), (0, 0, 0))
+            self.assertEqual(empty['usage']['total'], '尚未回報')
+            self.assertFalse(path.exists())
+            total = dict(total_tokens=1000, requests=2, cost='0.004', missing_usage_requests=0, unpriced_requests=0)
+            for index in range(200):
+                save_run(path, dict(id=str(index), started_at='2026-09-15', elapsed_seconds=1.25, jobs=[
+                    dict(path='Chapter 1', usage={'OCR': dict(total, total_tokens=250, requests=1, cost='0.001'),
+                                               'translation': dict(total, total_tokens=750, requests=1, cost='0.003'),
+                                               'total': total})]))
+            line = usage_line(cost='unavailable', subtotal='0.998713', unpriced=1)
+            legacy = dict(parse_bt_usage(line), cost=None)
+            save_run(path, dict(id='legacy', started_at='2026-09-14', elapsed_seconds=None, jobs=[
+                dict(path='Older', status='failed', error=line, usage={'total': legacy})]))
+            for name, cost, seconds in (('unknown', None, 15), ('zero', '0', 35)):
+                record = dict(id=name, started_at='2026-09-14', elapsed_seconds=seconds, jobs=[
+                    dict(path=name, status='cancelled', usage={'total': dict(total, cost=cost)})])
+                save_run(path, record)
+                save_run(path, record)  # Updating a checkpoint must not add a second batch.
+            original = path.read_bytes()
+            self.assertEqual(len(find_runs(path)), 200)
+            result = history_totals(path)
+            self.assertEqual((result['runs'], result['jobs'], result['elapsed_seconds']), (203, 203, 300))
+            self.assertIn('50.00K tokens｜預估 US$0.20｜200', result['usage']['OCR'])
+            self.assertIn('150.00K tokens｜預估 US$0.60｜200', result['usage']['translation'])
+            self.assertIn('1.48M tokens｜預估 US$1.80｜498', result['usage']['total'])
+            self.assertIn('僅含已知金額', result['usage']['total'])
+            self.assertEqual(path.read_bytes(), original)
+
     def test_legacy_history_adds_sort_index_on_save_and_keeps_latest_200_order(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / 'history.sqlite3'

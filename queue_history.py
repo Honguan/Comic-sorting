@@ -52,6 +52,11 @@ def save_run(path, record):
 
 
 def find_runs(path, keyword='', start='', end=''):
+    # ponytail: show 200 matches at once; add pagination if browsing longer ranges is needed.
+    return list(iter_runs(path, keyword, start, end, limit=200))
+
+
+def iter_runs(path, keyword='', start='', end='', *, limit=-1):
     try:
         if start:
             date.fromisoformat(start)
@@ -62,7 +67,7 @@ def find_runs(path, keyword='', start='', end=''):
     if start and end and end < start:
         raise ValueError(tr("結束日期不可早於開始日期"))
     if not Path(path).exists():
-        return []
+        return
     clauses, values = [], []
     if keyword:
         clauses.append("instr(lower(paths), lower(?)) > 0")
@@ -75,24 +80,36 @@ def find_runs(path, keyword='', start='', end=''):
         values.append(end)
     where = " WHERE " + " AND ".join(clauses) if clauses else ""
     with closing(sqlite3.connect(Path(path).resolve().as_uri() + '?mode=ro', uri=True, timeout=1)) as db:
-        # ponytail: show 200 matches at once; add pagination if browsing longer ranges is needed.
-        rows = db.execute("SELECT data FROM runs" + where + " ORDER BY started_at DESC, rowid DESC LIMIT 200", values)
-        records = [json.loads(row[0]) for row in rows]
-    for record in records:
-        for job in record['jobs']:
-            # Older versions omitted priced subtotals; recover only matching saved summaries.
-            for line in job.get('error', '').splitlines():
-                parsed = parse_bt_usage(line)
-                saved = job.get('usage', {}).get(parsed['scope']) if parsed else None
-                if (saved and saved['cost'] is None and parsed['cost'] is not None
-                        and all(saved[key] == parsed[key] for key in
-                                ('requests', 'total_tokens', 'missing_usage_requests', 'unpriced_requests'))):
-                    saved['cost'] = str(parsed['cost'])
-    return records
+        rows = db.execute("SELECT data FROM runs" + where + " ORDER BY started_at DESC, rowid DESC LIMIT ?", [*values, limit])
+        for row in rows:
+            record = json.loads(row[0])
+            for job in record['jobs']:
+                # Older versions omitted priced subtotals; recover only matching saved summaries.
+                for line in job.get('error', '').splitlines():
+                    parsed = parse_bt_usage(line)
+                    saved = job.get('usage', {}).get(parsed['scope']) if parsed else None
+                    if (saved and saved['cost'] is None and parsed['cost'] is not None
+                            and all(saved[key] == parsed[key] for key in
+                                    ('requests', 'total_tokens', 'missing_usage_requests', 'unpriced_requests'))):
+                        saved['cost'] = str(parsed['cost'])
+            yield record
 
 
 def scope_records(record, scope):
     return [job['usage'][scope] for job in record['jobs'] if scope in job.get('usage', {})]
+
+
+def history_totals(path):
+    counts = dict(runs=0, jobs=0, elapsed_seconds=0)
+    usage = {scope: [] for scope in ('OCR', 'translation', 'total')}
+    # ponytail: scan stored runs on refresh; persist aggregates if history scanning becomes slow.
+    for record in iter_runs(path):
+        counts['runs'] += 1
+        counts['jobs'] += len(record['jobs'])
+        counts['elapsed_seconds'] += record.get('elapsed_seconds') or 0
+        for scope, values in usage.items():
+            values.extend(scope_records(record, scope))
+    return dict(counts, usage={scope: usage_text(values) for scope, values in usage.items()})
 
 
 class HistoryWindow(tk.Toplevel):
@@ -120,6 +137,13 @@ class HistoryWindow(tk.Toplevel):
         ttk.Button(filters, text=tr("查詢／重新整理"), command=self.refresh).pack(side='left')
         self.note = tk.StringVar()
         ttk.Label(self, textvariable=self.note, padding=(8, 0), wraplength=780).pack(anchor='w')
+        totals = ttk.LabelFrame(self, text=tr("全部總累計（所有歷史）"), padding=8)
+        totals.pack(side='bottom', fill='x', padx=8, pady=(0, 8))
+        self.totals = tk.Text(totals, wrap='word', state='disabled', height=5)
+        totals_scroll = ttk.Scrollbar(totals, command=self.totals.yview)
+        self.totals.configure(yscrollcommand=totals_scroll.set)
+        totals_scroll.pack(side='right', fill='y')
+        self.totals.pack(fill='x')
         panes = ttk.Panedwindow(self, orient='vertical')
         panes.pack(fill='both', expand=True, padx=8, pady=8)
         listing, detail = ttk.Frame(panes), ttk.Frame(panes)
@@ -152,9 +176,19 @@ class HistoryWindow(tk.Toplevel):
     def refresh(self):
         try:
             rows = find_runs(self.path, self.keyword.get().strip(), self.start.get().strip(), self.end.get().strip())
+            totals = history_totals(self.path)
         except (OSError, sqlite3.Error, ValueError) as error:
             messagebox.showerror(tr("歷史紀錄讀取失敗"), str(error), parent=self)
             return
+        lines = [tr("佇列 {0} 批｜工作 {1} 項｜累計耗時：{2}").format(
+            totals['runs'], totals['jobs'], elapsed_text(totals['elapsed_seconds']))]
+        for scope, label in (('OCR', 'OCR'), ('translation', tr("翻譯")), ('total', tr("合計"))):
+            lines.append(label + ': ' + totals['usage'][scope])
+        lines.append(tr("全部歷史，含失敗／停止已回報用量，不受查詢條件影響；耗時為各批次加總，可能重疊。"))
+        self.totals.configure(state='normal')
+        self.totals.delete('1.0', 'end')
+        self.totals.insert('1.0', '\n'.join(lines))
+        self.totals.configure(state='disabled')
         self.tree.delete(*self.tree.get_children())
         self.records = {}
         for record in rows:

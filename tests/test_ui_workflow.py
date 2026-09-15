@@ -1109,6 +1109,47 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn('US$2.49', q.usage_labels['total'].get())
         self.assertIn('僅含已知金額', q.usage_labels['total'].get())
 
+    def test_history_grand_totals_stay_at_bottom_and_ignore_filters_and_selection(self):
+        from queue_history import save_run
+        usage = dict(total_tokens=1000, requests=1, cost='0.004', missing_usage_requests=0, unpriced_requests=0)
+        for index in range(2):
+            record = dict(id=f'run-{index}', started_at=f'2026-09-1{index + 3}', saved_at='2026-09-15',
+                          status='done', elapsed_seconds=3600, jobs=[dict(
+                              path=f'Chapter {index}', action='export', status='done', usage={'total': usage})])
+            save_run(self.app.history_path, record)
+        self.app.translation_queue.open_history()
+        window = self.app.translation_queue.history_window
+        self.root.update()
+        expected = window.totals.get('1.0', 'end')
+        self.assertIn('佇列 2 批｜工作 2 項｜累計耗時：02:00:00', expected)
+        self.assertIn('2.00K tokens｜預估 US$0.01｜2 次請求', expected)
+        self.assertEqual(window.totals.cget('state'), 'disabled')
+        window.tree.selection_set('run-0')
+        window.show_details()
+        self.assertEqual(window.totals.get('1.0', 'end'), expected)
+        window.keyword.set('Chapter 0')
+        window.start.set('2026-09-13')
+        window.end.set('2026-09-13')
+        window.refresh()
+        self.assertEqual(len(window.tree.get_children()), 1)
+        self.assertEqual(window.totals.get('1.0', 'end'), expected)
+        window.keyword.set('no matching folder')
+        window.refresh()
+        self.assertEqual(window.tree.get_children(), ())
+        self.assertEqual(window.totals.get('1.0', 'end'), expected)
+        window.geometry('820x480')
+        self.root.update()
+        self.assertGreater(window.totals.winfo_rooty(), window.details.winfo_rooty())
+        self.assertLessEqual(window.totals.winfo_rooty() + window.totals.winfo_height(),
+                             window.winfo_rooty() + window.winfo_height())
+        record.update(id='run-2')
+        save_run(self.app.history_path, record)
+        window.refresh()
+        self.assertIn('佇列 3 批', window.totals.get('1.0', 'end'))
+        self.assertIn('US$0.02', window.totals.get('1.0', 'end'))
+        window.refresh()
+        self.assertIn('佇列 3 批', window.totals.get('1.0', 'end'))
+
     def test_queue_totals_match_collapsed_history_and_folder_breakdown(self):
         from queue_history import find_runs
         from queue_worker import parse_bt_usage
