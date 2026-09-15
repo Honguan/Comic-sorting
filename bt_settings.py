@@ -1,4 +1,4 @@
-"""Complete, typed editing of a selected BallonsTranslator config file."""
+"""Native run options and font settings without exposing unrelated config fields."""
 from copy import deepcopy
 from datetime import datetime
 import json
@@ -10,8 +10,8 @@ import subprocess
 import sys
 import threading
 import tkinter as tk
-from tkinter import filedialog, messagebox, simpledialog, ttk
-import uuid
+from tkinter import font as tkfont
+from tkinter import filedialog, messagebox, ttk
 
 from app_logging import logger
 from comic_core import save_json
@@ -220,63 +220,24 @@ class ConfigDocument:
         return backup
 
 
-class NewFieldDialog(simpledialog.Dialog):
-    TYPES = {"文字": "", "整數": 0, "小數": 0.0, "布林值": False,
-             "物件": {}, "清單": [], "空值": None}
-
-    def __init__(self, parent, named):
-        self.named = named
-        super().__init__(parent, tr("新增欄位／項目"))
-
-    def body(self, master):
-        self.name = ttk.Entry(master)
-        if self.named:
-            ttk.Label(master, text=tr("欄位名稱")).pack(anchor="w")
-            self.name.pack(fill="x", pady=5)
-        ttk.Label(master, text=tr("欄位型別")).pack(anchor="w")
-        self.type_choice = ttk.Combobox(master, state="readonly", values=[tr(k) for k in self.TYPES])
-        self.type_choice.current(0)
-        self.type_choice.pack(fill="x", pady=5)
-        return self.name if self.named else self.type_choice
-
-    def validate(self):
-        return bool(self.name.get().strip()) if self.named else True
-
-    def apply(self):
-        value = next(value for label, value in self.TYPES.items() if tr(label) == self.type_choice.get())
-        self.result = (self.name.get(), deepcopy(value))
-
-
 class ConfigEditor(tk.Toplevel):
+    """Focused editor; hidden native settings remain in ConfigDocument."""
     def __init__(self, parent, settings):
         super().__init__(parent)
-        self.title(tr("編輯 BallonsTranslator 設定檔"))
-        self.geometry("1050x700")
+        self.title(tr("BallonsTranslator 運行設定"))
+        self.geometry("980x780")
         self.minsize(760, 540)
         self.transient(parent)
         self.grab_set()
         self.settings = dict(settings)
         self.document = None
-        self.current = None
-        self.edit_value = None
+        self.fields = {}
         self.events = queue.Queue()
         self.working = False
-        self.selecting = False
         self.protocol("WM_DELETE_WINDOW", self.close)
+        self.bind("<MouseWheel>", self.scroll)
         self.bind("<Control-s>", lambda _e: self.save())
         self.bind("<Escape>", lambda _e: self.close())
-        self.bind("<Control-f>", lambda _e: self.search_entry.focus_set())
-
-        ttk.Label(self, text=str(Path(settings["bt_config"]).resolve()), wraplength=980).pack(anchor="w", padx=10, pady=8)
-        top = ttk.Frame(self, padding=(10, 0))
-        top.pack(fill="x")
-        ttk.Label(top, text=tr("搜尋設定欄位")).pack(side="left")
-        self.search = tk.StringVar()
-        self.search_entry = ttk.Entry(top, textvariable=self.search)
-        self.search_entry.pack(side="left", fill="x", expand=True, padx=8)
-        self.search_entry.bind("<Return>", lambda _e: self.rebuild())
-        ttk.Button(top, text=tr("搜尋"), command=self.rebuild).pack(side="left")
-        ttk.Button(top, text=tr("全部欄位"), command=self.clear_search).pack(side="left", padx=4)
         footer = ttk.Frame(self, padding=10)
         footer.pack(side="bottom", fill="x")
         self.status = tk.StringVar(value=tr("正在讀取設定定義…"))
@@ -284,30 +245,151 @@ class ConfigEditor(tk.Toplevel):
         self.save_button.pack(side="right")
         ttk.Button(footer, text=tr("關閉"), command=self.close).pack(side="right", padx=5)
         ttk.Button(footer, text=tr("重新載入"), command=self.reload).pack(side="right")
-        self.status_label = ttk.Label(footer, textvariable=self.status, wraplength=650)
+        self.status_label = ttk.Label(footer, textvariable=self.status, wraplength=380)
         self.status_label.pack(side="left", fill="x", expand=True)
-        self.status_label.bind("<Configure>", lambda event: self.status_label.configure(wraplength=max(100, event.width)))
-
-        self.panes = ttk.Panedwindow(self, orient="horizontal")
-        self.panes.pack(fill="both", expand=True, padx=10, pady=10)
-        left = ttk.Frame(self.panes)
-        self.panes.add(left, weight=3)
-        self.tree = ttk.Treeview(left, columns=("value",), selectmode="browse")
-        self.tree.heading("#0", text=tr("設定欄位"))
-        self.tree.heading("value", text=tr("目前值"))
-        self.tree.column("#0", width=300)
-        self.tree.column("value", width=130)
-        scroll = ttk.Scrollbar(left, command=self.tree.yview)
-        self.tree.configure(yscrollcommand=scroll.set)
-        self.tree.grid(row=0, column=0, sticky="nsew")
-        scroll.grid(row=0, column=1, sticky="ns")
-        left.rowconfigure(0, weight=1)
-        left.columnconfigure(0, weight=1)
-        self.tree.bind("<<TreeviewSelect>>", self.select)
-        self.panel = ttk.Frame(self.panes, padding=10)
-        self.panes.add(self.panel, weight=2)
-        self.paths = {}
+        self.status_label.bind("<Configure>", lambda e: self.status_label.configure(wraplength=max(100, e.width)))
+        ttk.Label(self, text=tr("儲存後供下一次佇列運行使用；頁數範圍請在主佇列設定。"), padding=10).pack(anchor="w")
+        self.panel = ttk.Notebook(self)
+        self.panel.pack(fill="both", expand=True, padx=10, pady=5)
         self.run_async(lambda: ConfigDocument(settings["bt_config"], bridge(settings, "metadata")), self.loaded)
+
+    def loaded(self, document):
+        self.document = document
+        self.fields = {}
+        self.rebuild()
+
+    def scroll(self, event):
+        if self.panel.select():
+            tab = self.nametowidget(self.panel.select())
+            canvas = next(w for w in tab.winfo_children() if isinstance(w, tk.Canvas))
+            canvas.yview_scroll(-int(event.delta / 120), "units")
+
+    def section(self, title):
+        tab = ttk.Frame(self.panel)
+        self.panel.add(tab, text=tr(title))
+        canvas = tk.Canvas(tab, highlightthickness=0)
+        scroll = ttk.Scrollbar(tab, command=canvas.yview)
+        canvas.configure(yscrollcommand=scroll.set)
+        scroll.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        frame = ttk.Frame(canvas, padding=15)
+        window = canvas.create_window(0, 0, anchor="nw", window=frame)
+        frame.bind("<Configure>", lambda _e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda e: canvas.itemconfigure(window, width=e.width))
+        frame.columnconfigure(1, weight=1)
+        return frame
+
+    def field(self, frame, path, label=None, choices=None, refresh=False):
+        try:
+            value = self.document.get(path)
+        except (KeyError, IndexError):
+            return
+        schema = self.document.schema(path)
+        if isinstance(value, (dict, list)) and not secret_path(path):
+            return
+        row = frame.grid_size()[1]
+        ttk.Label(frame, text=tr(label or LABELS.get(path[-1], schema.get("title", path[-1])))).grid(row=row, column=0, sticky="w", padx=(0, 20), pady=6)
+        options = choices if choices is not None else self.document.choices(path)
+        mapping = {tr(k): v for k, v in options.items()} if isinstance(options, dict) else {str(v): v for v in options}
+        if isinstance(value, bool):
+            var = tk.BooleanVar(value=value)
+            widget = ttk.Checkbutton(frame, variable=var)
+            read = var.get
+        else:
+            var = tk.StringVar(value="" if secret_path(path) else next((k for k, v in mapping.items() if v == value), str(value)))
+            if mapping or path[-1] == "font_family":
+                widget = ttk.Combobox(frame, textvariable=var, values=tuple(mapping), state="readonly" if choices is not None or schema.get("strict_choices") else "normal")
+            else:
+                widget = ttk.Entry(frame, textvariable=var, show="•" if secret_path(path) else "")
+            def read():
+                text = var.get()
+                if secret_path(path):
+                    return text if text else value
+                if text in mapping:
+                    return mapping[text]
+                if isinstance(value, int):
+                    return int(text)
+                if isinstance(value, float):
+                    return float(text)
+                return text
+        widget.grid(row=row, column=1, sticky="ew", pady=6)
+        self.fields[path] = (var, read)
+        if refresh:
+            widget.bind("<<ComboboxSelected>>", lambda _e: self.rebuild())
+        if path[-1] == "font_family":
+            widget.configure(values=sorted(set(tkfont.families(self))), state="normal")
+        if path[-1] == "llm_glossary_path":
+            ttk.Button(frame, text=tr("瀏覽"), command=lambda: self.browse(var)).grid(row=row, column=2)
+
+    def rebuild(self):
+        if not self.document or self.working or not self.apply():
+            return
+        tab = self.panel.index(self.panel.select()) if self.panel.tabs() else 0
+        for child in self.panel.winfo_children():
+            child.destroy()
+        self.fields = {}
+        run = self.section("運行")
+        self.field(run, ("run_pipeline_mode",), "原生介面運行模式", {"自動化流程": "pipeline", "僅排版 / 渲染": "rendering"})
+        module = self.document.data.get("module", {})
+        for key, enabled, label in (("textdetector", "enable_detect", "文字偵測"), ("ocr", "enable_ocr", "OCR"), ("inpainter", "enable_inpaint", "圖像修復"), ("translator", "enable_translate", "翻譯")):
+            self.field(run, ("module", enabled), "啟用" + label)
+            self.field(run, ("module", key), label + "模組", refresh=True)
+        for key, label in (("keep_exist_textlines", "保留已有文本"), ("ocr_font_detect", "字體檢測"), ("ocr_text_postprocess", "大小寫轉換"), ("check_need_inpaint", "跳過簡單區域"), ("filter_mask_by_bboxes", "僅修復文本框內區域"), ("translate_source", "來源語言"), ("translate_target", "目標語言"), ("llm_glossary_path", "術語表"), ("llm_glossary_mode", "術語表模式"), ("llm_translate_vision", "LLM 上下文：視覺"), ("llm_translate_summary_memory", "LLM 上下文：摘要"), ("llm_translate_context", "LLM 上下文"), ("translate_context", "翻譯分組"), ("llm_prior_context_token_budget", "Token 預算"), ("llm_translate_overwrite_summary", "覆寫已有摘要")):
+            self.field(run, ("module", key), label)
+        self.field(run, ("restore_ocr_empty",), "移除空文本塊")
+        self.field(run, ("render_without_text_style_update",), "原生渲染時保留文本樣式")
+        params = self.section("目前模組參數")
+        for key in ("textdetector", "ocr", "inpainter", "translator"):
+            name = module.get(key)
+            for param in module.get(key + "_params", {}).get(name, {}):
+                self.field(params, ("module", key + "_params", name, param), str(name) + " / " + field_name(param))
+        selected = set()
+        for key, capability in (("translator_llm_id", "support_text"), ("ocr_llm_id", "support_vision"), ("inpaint_llm_id", "support_image")):
+            native = {"translator_llm_id": ("translator", "LLMTranslator"), "ocr_llm_id": ("ocr", "LLMOCR"), "inpaint_llm_id": ("inpainter", "LLMInpaint")}
+            module_key, llm_name = native[key]
+            if module_key in module and module[module_key] != llm_name:
+                continue
+            profiles = module.get("llm_profiles", [])
+            choices = {str(p.get("name") or p["id"]) + " (" + p["id"] + ")": p["id"] for p in profiles if p.get(capability)}
+            self.field(params, ("module", key), choices=choices, refresh=True)
+            selected.add(module.get(key))
+        for index, profile in enumerate(module.get("llm_profiles", [])):
+            if profile.get("id") in selected:
+                for key in ("model", "vision_model", "image_model", "base_url", "api_key", "max_tokens", "temperature", "thinking_level", "prompt", "vision_prompt"):
+                    self.field(params, ("module", "llm_profiles", index, key), str(profile.get("name", "LLM")) + " / " + field_name(key))
+        font = self.section("翻譯字體")
+        for key, label in (("let_family_flag", "字體來源"), ("let_fntsize_flag", "字號來源"), ("let_alignment_flag", "對齊來源"), ("let_writing_mode_flag", "書寫方向來源")):
+            self.field(font, (key,), label, {"依原文 / 自動": 0, "使用下方全域設定": 1})
+        for key, label, choices in (("font_family", "字體", {}), ("font_size", "字號（像素）", None), ("vertical", "直排", None), ("alignment", "對齊", {"靠左": 0, "置中": 1, "靠右": 2}), ("line_spacing", "行距", None), ("letter_spacing", "字距", None), ("italic", "斜體", None), ("underline", "底線", None)):
+            self.field(font, ("global_fontformat", key), label, choices)
+        self.panel.select(tab)
+        self.status.set(tr("尚未儲存") if self.document.dirty else tr("設定已載入"))
+
+    def apply(self):
+        if not self.document:
+            return True
+        before = deepcopy(self.document.data)
+        try:
+            for path, (_var, read) in self.fields.items():
+                self.document.set(path, read())
+            return True
+        except (ValueError, TypeError):
+            self.document.data = before
+            messagebox.showerror(tr("設定檔"), tr("欄位值無效：") + field_name(path[-1]), parent=self)
+            return False
+
+    def has_changes(self):
+        if not self.document:
+            return False
+        try:
+            return self.document.dirty or any(read() != self.document.get(path) for path, (_var, read) in self.fields.items())
+        except (ValueError, TypeError):
+            return True
+
+    def browse(self, variable):
+        selected = filedialog.askopenfilename(parent=self)
+        if selected:
+            variable.set(selected)
 
     def run_async(self, work, complete):
         if self.working:
@@ -347,253 +429,6 @@ class ConfigEditor(tk.Toplevel):
         else:
             complete(result)
 
-    def loaded(self, document):
-        self.document = document
-        self.current = None
-        self.edit_value = None
-        self.rebuild()
-
-    def clear_search(self):
-        self.search.set("")
-        self.rebuild()
-
-    def rebuild(self, select_path=None):
-        if not self.document or self.working or not self.apply():
-            return
-        selected = self.current if select_path is None else select_path
-        self.selecting = True
-        self.tree.delete(*self.tree.get_children())
-        self.paths = {}
-        query = self.search.get().strip().casefold()
-        def insert(path, value, parent, inherited=False):
-            name = field_name(path[-1]) if path else tr("全部設定")
-            if isinstance(path[-1] if path else None, int) and isinstance(value, dict):
-                name += " " + str(value.get("name") or value.get("id") or value.get("effect_type") or value.get("transform_type") or "")
-            matches = inherited or not query or query in name.casefold() or query in ".".join(map(str, path)).casefold()
-            secret = secret_path(path)
-            summary = tr("已設定（遮蔽）") if secret and value else ""
-            if not secret:
-                summary = tr("{0} 個欄位／項目").format(len(value)) if isinstance(value, (dict, list)) else str(value)
-                summary = summary.replace("\n", " ")[:90]
-            item = self.tree.insert(parent, "end", text=name, values=(summary,), open=bool(query) or len(path) < 2)
-            self.paths[item] = path
-            children = value.items() if isinstance(value, dict) else enumerate(value) if isinstance(value, list) else ()
-            count = 0
-            if not secret:
-                for key, child in children:
-                    count += insert(path + (key,), child, item, matches)
-            if not matches and not count:
-                self.tree.delete(item)
-                del self.paths[item]
-                return 0
-            return 1
-        insert((), self.document.data, "")
-        self.selecting = False
-        self.current = None
-        self.edit_value = None
-        target = next((i for i, path in self.paths.items() if path == selected), next(iter(self.paths), None))
-        if target:
-            self.tree.selection_set(target)
-            self.tree.focus(target)
-            self.tree.see(target)
-            self.select()
-        self.status.set(tr("{0} 個可見欄位；{1}").format(len(self.paths), tr("尚未儲存") if self.document.dirty else tr("設定已載入")))
-
-    def select(self, _event=None):
-        if self.selecting or self.working or not self.tree.selection():
-            return
-        path = self.paths.get(self.tree.selection()[0])
-        if path is None or path == self.current:
-            return
-        if not self.apply():
-            previous = next((i for i, p in self.paths.items() if p == self.current), None)
-            if previous:
-                self.selecting = True
-                self.tree.selection_set(previous)
-                self.selecting = False
-            return
-        self.current = path
-        self.edit_value = None
-        for widget in self.panel.winfo_children():
-            widget.destroy()
-        value = self.document.get(path)
-        schema = self.document.schema(path)
-        ttk.Label(self.panel, text=field_name(path[-1]) if path else tr("全部設定"), wraplength=330).pack(anchor="w")
-        ttk.Label(self.panel, text=" / ".join(map(str, path)), wraplength=330, foreground="#666666").pack(anchor="w", pady=(4, 12))
-        if schema.get("description"):
-            ttk.Label(self.panel, text=schema["description"], wraplength=330).pack(anchor="w", pady=(0, 8))
-        if path == ("module", "finish_code"):
-            ttk.Label(self.panel, text=tr("此值由偵測、OCR、翻譯與修補開關自動計算。"), wraplength=330).pack(anchor="w")
-            return
-        if schema.get("read_only"):
-            ttk.Label(self.panel, text=tr("舊版相容欄位；請展開「文字特效」修改對應設定。"), wraplength=330).pack(anchor="w")
-            return
-        if secret_path(path):
-            ttk.Label(self.panel, text=tr("金鑰留白會保留原值；輸入新值可取代。"), wraplength=330).pack(anchor="w")
-            variable = tk.StringVar()
-            entry = ttk.Entry(self.panel, textvariable=variable, show="•")
-            entry.pack(fill="x", pady=8)
-            clear = tk.BooleanVar()
-            ttk.Checkbutton(self.panel, text=tr("清除已保存的金鑰"), variable=clear).pack(anchor="w")
-            self.edit_value = lambda: "" if clear.get() else variable.get() if variable.get() else value
-        elif isinstance(value, (dict, list)):
-            ttk.Label(self.panel, text=tr("展開左側項目即可編輯每個欄位。"), wraplength=330).pack(anchor="w")
-            ttk.Button(self.panel, text=tr("新增欄位／項目"), command=self.add).pack(anchor="w", pady=8)
-            template_key = str(path[-1]) if path else ""
-            templates = self.document.metadata["templates"].get(template_key, {})
-            if templates:
-                choice = ttk.Combobox(self.panel, state="readonly", values=tuple(templates))
-                choice.current(0)
-                choice.pack(fill="x", pady=4)
-                ttk.Button(self.panel, text=tr("加入／套用範本"), command=lambda: self.template(templates[choice.get()])).pack(anchor="w")
-        elif isinstance(value, bool):
-            variable = tk.BooleanVar(value=value)
-            ttk.Checkbutton(self.panel, text=tr("啟用"), variable=variable).pack(anchor="w")
-            self.edit_value = variable.get
-        else:
-            current_type = schema.get("type", kind(value))
-            if current_type in ("any", "secret"):
-                current_type = kind(value)
-            choices = self.document.choices(path)
-            if isinstance(value, str) and ("prompt" in str(path[-1]) or "\n" in value or len(value) > 160):
-                entry = tk.Text(self.panel, height=10, wrap="word", undo=True)
-                entry.insert("1.0", value)
-                entry.pack(fill="both", expand=True)
-                self.edit_value = lambda: entry.get("1.0", "end-1c")
-            else:
-                variable = tk.StringVar(value="null" if value is None else str(value))
-                if choices:
-                    entry = ttk.Combobox(self.panel, textvariable=variable, values=choices,
-                                         state="readonly" if schema.get("strict_choices") else "normal")
-                else:
-                    entry = ttk.Entry(self.panel, textvariable=variable)
-                entry.pack(fill="x", pady=8)
-                def read():
-                    text = variable.get()
-                    if current_type == "string":
-                        return text
-                    if current_type == "integer":
-                        return int(text)
-                    if current_type == "number":
-                        return float(text)
-                    # Nullable settings (e.g. mirrors) accept a string or null.
-                    return None if text == "null" else text
-                self.edit_value = read
-                if isinstance(value, str) and any(p in str(path[-1]).lower() for p in ("path", "file", "directory")):
-                    ttk.Button(self.panel, text=tr("選擇檔案"), command=lambda: self.browse(variable, False)).pack(anchor="w")
-                    ttk.Button(self.panel, text=tr("選擇資料夾"), command=lambda: self.browse(variable, True)).pack(anchor="w", pady=3)
-            if schema.get("nullable") or value is None:
-                null = tk.BooleanVar(value=value is None)
-                ttk.Checkbutton(self.panel, text=tr("使用空值（null）"), variable=null).pack(anchor="w")
-                read_value = self.edit_value
-                self.edit_value = lambda: None if null.get() else read_value()
-            ttk.Label(self.panel, text=tr("型別：{0}").format(schema.get("type", current_type))).pack(anchor="w", pady=4)
-        if self.edit_value:
-            ttk.Button(self.panel, text=tr("套用欄位"), command=self.rebuild).pack(anchor="w", pady=10)
-        if path:
-            ttk.Button(self.panel, text=tr("移除欄位／項目"), command=self.remove).pack(anchor="w", pady=4)
-            if isinstance(path[-1], int):
-                row = ttk.Frame(self.panel)
-                row.pack(anchor="w")
-                ttk.Button(row, text=tr("複製項目"), command=self.duplicate).pack(side="left")
-                ttk.Button(row, text=tr("上移"), command=lambda: self.move(-1)).pack(side="left")
-                ttk.Button(row, text=tr("下移"), command=lambda: self.move(1)).pack(side="left")
-
-    def apply(self):
-        if self.current is None or not self.edit_value:
-            return True
-        try:
-            self.document.set(self.current, self.edit_value())
-            return True
-        except (ValueError, TypeError):
-            messagebox.showerror(tr("設定檔"), tr("欄位值無效，請檢查型別與數值"), parent=self)
-            return False
-
-    def has_changes(self):
-        if not self.document:
-            return False
-        try:
-            return self.document.dirty or bool(self.edit_value and self.edit_value() != self.document.get(self.current))
-        except (ValueError, TypeError):
-            return True
-
-    def browse(self, variable, directory):
-        selected = filedialog.askdirectory(parent=self) if directory else filedialog.askopenfilename(parent=self)
-        if selected:
-            variable.set(selected)
-
-    def template(self, value):
-        if self.working or not self.apply():
-            return
-        value = deepcopy(value)
-        parent = self.document.get(self.current)
-        if isinstance(parent, list):
-            if self.current[-1] == "llm_profiles":
-                value.update(id="custom-" + uuid.uuid4().hex[:8], name=tr("新 LLM 配置卡"), built_in=False)
-            parent.append(value)
-            self.rebuild(self.current + (len(parent) - 1,))
-        elif messagebox.askyesno(tr("設定檔"), tr("以範本取代此物件？尚未儲存前可以重新載入還原。"), parent=self):
-            self.document.set(self.current, value)
-            self.rebuild()
-
-    def add(self):
-        if self.working or not self.apply():
-            return
-        parent = self.document.get(self.current)
-        if not isinstance(parent, (dict, list)):
-            return
-        templates = self.document.metadata["templates"].get(str(self.current[-1]) if self.current else "", {})
-        if isinstance(parent, list) and templates:
-            self.template(next(iter(templates.values())))
-            return
-        key = len(parent)
-        dialog = NewFieldDialog(self, isinstance(parent, dict))
-        self.grab_set()
-        if dialog.result is None:
-            return
-        name, value = dialog.result
-        if isinstance(parent, dict):
-            key = name
-            if key in parent:
-                messagebox.showerror(tr("設定檔"), tr("欄位已存在"), parent=self)
-                return
-        if isinstance(parent, list):
-            parent.append(value)
-        else:
-            parent[key] = value
-        self.rebuild(self.current + (key,))
-
-    def remove(self):
-        if self.working or not self.current or not self.apply():
-            return
-        if not messagebox.askyesno(tr("設定檔"), tr("移除此欄位或項目？變更會在儲存後生效。"), parent=self):
-            return
-        path = self.current
-        del self.document.get(path[:-1])[path[-1]]
-        self.current = None
-        self.edit_value = None
-        self.rebuild(path[:-1])
-
-    def duplicate(self):
-        if self.working or not self.apply():
-            return
-        value = deepcopy(self.document.get(self.current))
-        parent = self.document.get(self.current[:-1])
-        if self.current[:-1] == ("module", "llm_profiles"):
-            value.update(id="custom-" + uuid.uuid4().hex[:8], built_in=False)
-        parent.insert(self.current[-1] + 1, value)
-        self.rebuild(self.current[:-1] + (self.current[-1] + 1,))
-
-    def move(self, delta):
-        if self.working or not self.apply():
-            return
-        parent = self.document.get(self.current[:-1])
-        source, target = self.current[-1], self.current[-1] + delta
-        if 0 <= target < len(parent):
-            parent.insert(target, parent.pop(source))
-            self.edit_value = None
-            self.rebuild(self.current[:-1] + (target,))
-
     def save(self):
         if self.working or not self.document or not self.apply():
             return
@@ -601,7 +436,7 @@ class ConfigEditor(tk.Toplevel):
         self.run_async(lambda: self.document.save(lambda data: bridge(self.settings, "prepare", data)), self.saved)
 
     def saved(self, backup):
-        self.edit_value = None
+        self.fields = {}
         self.rebuild()
         self.status.set(tr("已儲存；備份：{0}").format(backup) if backup else tr("沒有變更"))
 

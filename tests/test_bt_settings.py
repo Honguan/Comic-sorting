@@ -159,134 +159,53 @@ class ConfigEditorTests(ConfigFixture, unittest.TestCase):
         self.root.update()
         self.assertFalse(self.editor.working)
 
-    def select(self, path):
-        item = next(i for i, p in self.editor.paths.items() if p == path)
-        self.editor.tree.selection_set(item)
-        self.editor.select()
-        self.root.update()
-
-    def entry(self):
-        return next(w for w in self.editor.panel.winfo_children() if isinstance(w, (tk.ttk.Entry, tk.ttk.Combobox)))
-
-    def test_all_fields_are_reachable_and_secret_is_masked(self):
-        from bt_settings import secret_path
-        def paths(value, path=()):
-            yield path
-            children = value.items() if isinstance(value, dict) else enumerate(value) if isinstance(value, list) else ()
-            if not secret_path(path):
-                for key, child in children:
-                    yield from paths(child, path + (key,))
-        self.assertEqual(set(self.editor.paths.values()), set(paths(self.editor.document.data)))
-        displayed = str([self.editor.tree.item(i) for i in self.editor.paths])
-        self.assertNotIn("opaque", displayed)
-        self.select(("module", "llm_profiles", 0, "api_key"))
-        self.assertEqual(self.entry().get(), "")
-        self.assertTrue(self.entry().cget("show"))
-
-    def test_edit_save_reload_and_secret_retention(self):
-        self.select(("module", "llm_profiles", 0, "temperature"))
-        self.entry().delete(0, "end")
-        self.entry().insert(0, "0.3")
-        self.select(("module", "llm_profiles", 0, "api_key"))
+    def test_focused_form_preserves_hidden_settings_and_saves_active_profile(self):
+        paths = self.editor.fields
+        self.assertNotIn(("imgsave_quality",), paths)
+        self.assertNotIn(("custom", "future"), paths)
+        profile = ("module", "llm_profiles", 0)
+        self.assertNotIn(profile + ("support_text",), paths)
+        paths[profile + ("temperature",)][0].set("0.7")
+        paths[profile + ("prompt",)][0].set("繁體中文\n日本語")
         self.editor.save()
         self.wait_idle()
         saved = json.loads(self.path.read_text(encoding="utf-8"))
-        self.assertEqual(saved["module"]["llm_profiles"][0]["temperature"], .3)
+        self.assertEqual(saved["module"]["llm_profiles"][0]["temperature"], 0.7)
         self.assertEqual(saved["module"]["llm_profiles"][0]["api_key"], self.raw["module"]["llm_profiles"][0]["api_key"])
-        self.editor.reload()
-        self.wait_idle()
-        self.assertEqual(self.editor.document.data, saved)
+        self.assertEqual(saved["custom"], self.raw["custom"])
+        self.assertFalse(self.editor.has_changes())
 
-    def test_api_key_requirement_edits_as_boolean_and_keeps_secret(self):
-        from bt_settings import secret_path
-        from ui_language import tr
-        self.select(("module", "llm_profiles", 0, "require_api_key"))
-        switches = [w for w in self.editor.panel.winfo_children()
-                    if isinstance(w, tk.ttk.Checkbutton) and w["text"] == tr("啟用")]
-        self.assertEqual(len(switches), 1)
-        switches[0].invoke()
-        self.editor.save()
-        self.wait_idle()
-        saved = json.loads(self.path.read_text(encoding="utf-8"))["module"]["llm_profiles"][0]
-        self.assertIs(saved["require_api_key"], False)
-        self.assertEqual(saved["api_key"], self.raw["module"]["llm_profiles"][0]["api_key"])
-        self.editor.reload()
-        self.wait_idle()
-        self.assertIs(self.editor.document.data["module"]["llm_profiles"][0]["require_api_key"], False)
-        self.select(("module", "llm_profiles", 0, "api_key"))
-        self.assertTrue(self.entry().cget("show"))
-        self.assertTrue(secret_path(("api_key", "require_api_key")))
-
-    def test_search_and_prompt_unicode_newlines(self):
-        self.editor.search.set("溫度")
-        self.editor.rebuild()
-        self.assertIn(("module", "llm_profiles", 0, "temperature"), self.editor.paths.values())
-        self.editor.clear_search()
-        self.select(("module", "llm_profiles", 0, "prompt"))
-        widget = next(w for w in self.editor.panel.winfo_children() if isinstance(w, tk.Text))
-        widget.delete("1.0", "end")
-        widget.insert("1.0", "繁體中文\n日本語\n한국어")
-        self.editor.save()
-        self.wait_idle()
-        self.assertEqual(self.editor.document.data["module"]["llm_profiles"][0]["prompt"], "繁體中文\n日本語\n한국어")
-
-    def test_profile_add_duplicate_reorder_remove(self):
-        self.select(("module", "llm_profiles"))
-        self.editor.add()
-        self.root.update()
-        profiles = self.editor.document.data["module"]["llm_profiles"]
-        self.assertEqual(len(profiles), 2)
-        self.editor.duplicate()
-        self.root.update()
-        self.assertEqual(len(set(p["id"] for p in profiles)), 3)
-        copied_id = profiles[-1]["id"]
-        self.editor.move(-1)
-        self.root.update()
-        self.assertEqual(profiles[1]["id"], copied_id)
-        with mock.patch("bt_settings.messagebox.askyesno", return_value=True):
-            self.editor.remove()
-        self.assertEqual(len(profiles), 2)
-
-    def test_invalid_field_blocks_save_and_navigation(self):
-        self.select(("imgsave_quality",))
-        self.entry().delete(0, "end")
-        self.entry().insert(0, "not a number")
+    def test_invalid_form_is_atomic_and_close_can_cancel(self):
+        path = ("module", "llm_profiles", 0, "temperature")
+        self.editor.fields[path][0].set("invalid")
         with mock.patch("bt_settings.messagebox.showerror") as error:
             self.editor.save()
-            self.assertTrue(error.called)
+        error.assert_called_once()
         self.assertEqual(self.path.read_bytes(), self.before)
-
-    def test_invalid_draft_can_be_discarded_without_touching_disk(self):
-        self.select(("imgsave_quality",))
-        self.entry().delete(0, "end")
-        self.entry().insert(0, "invalid")
-        with mock.patch("bt_settings.messagebox.askyesno", return_value=True):
-            self.editor.reload()
-        self.wait_idle()
-        self.assertEqual(self.editor.document.data["imgsave_quality"], 100)
-        self.assertEqual(self.path.read_bytes(), self.before)
-
-    def test_closing_can_cancel_save_or_discard(self):
-        self.select(("imgsave_quality",))
-        self.entry().delete(0, "end")
-        self.entry().insert(0, "90")
         with mock.patch("bt_settings.messagebox.askyesnocancel", return_value=None):
             self.editor.close()
         self.assertTrue(self.editor.winfo_exists())
-        with mock.patch("bt_settings.messagebox.askyesnocancel", return_value=False):
-            self.editor.close()
-        self.assertFalse(self.editor.winfo_exists())
-        self.assertEqual(self.path.read_bytes(), self.before)
 
-    def test_footer_stays_usable_at_minimum_size(self):
-        self.root.deiconify()
-        self.editor.geometry("760x540")
-        self.editor.status.set("Long backup path " * 40)
-        self.root.update()
-        self.assertTrue(self.editor.save_button.winfo_ismapped())
-        self.assertGreaterEqual(self.editor.save_button.winfo_width(), self.editor.save_button.winfo_reqwidth())
-        self.assertLessEqual(self.editor.save_button.winfo_rootx() + self.editor.save_button.winfo_width(),
-                             self.editor.winfo_rootx() + self.editor.winfo_width())
+    def test_mode_module_and_font_round_trip(self):
+        self.meta["defaults"].update(run_pipeline_mode="pipeline", let_family_flag=0,
+            global_fontformat=dict(font_family="Arial", font_size=24.0, vertical=False))
+        self.meta["defaults"]["module"].update(translator="LLM", translator_params={"LLM": {"delay": .3}, "Other": {"delay": .5}})
+        self.meta["schema"] = describe(self.meta["defaults"])
+        self.meta["schema"]["children"]["module"]["children"]["llm_profiles"]["item"]["children"]["api_key"] = {"type": "secret"}
+        self.editor.loaded(self.document())
+        self.assertNotIn(("module", "translator_params", "Other", "delay"), self.editor.fields)
+        self.editor.fields[("run_pipeline_mode",)][0].set("僅排版 / 渲染")
+        self.editor.fields[("let_family_flag",)][0].set("使用下方全域設定")
+        self.editor.fields[("global_fontformat", "font_family")][0].set("Microsoft JhengHei")
+        self.editor.fields[("module", "translator")][0].set("Other")
+        self.editor.rebuild()
+        self.assertIn(("module", "translator_params", "Other", "delay"), self.editor.fields)
+        self.editor.save()
+        self.wait_idle()
+        saved = json.loads(self.path.read_text(encoding="utf-8"))
+        self.assertEqual(saved["run_pipeline_mode"], "rendering")
+        self.assertEqual(saved["let_family_flag"], 1)
+        self.assertEqual(saved["global_fontformat"]["font_family"], "Microsoft JhengHei")
 
 
 class EditorIntegrationTests(ConfigFixture, unittest.TestCase):
