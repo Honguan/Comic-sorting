@@ -16,6 +16,10 @@
 - 手動清空 `mask`、`inpainted` 內容；Komga 整批匯出成功後自動清理。
 - 大型目錄掃描、漫畫整合、CBZ 匯出與清理皆在背景執行。
 
+## 授權
+
+本專案採用 [MIT License](LICENSE)，Copyright (c) 2026 CHEN HONG GUAN。第三方依賴與外部工具仍依各自授權條款使用。
+
 ## 下載
 
 從 [GitHub Releases](https://github.com/Honguan/Comic-sorting/releases/latest) 下載最新的 Windows x64 EXE。程式不依賴 WinRAR、7-Zip 或外部壓縮工具。
