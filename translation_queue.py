@@ -180,6 +180,7 @@ class TranslationQueue:
             footer, tr("本次佇列 LLM 消耗（非實際帳單）"))
         self.history_button = ttk.Button(self.usage_toggle.master, text=tr("歷史紀錄"), command=self.open_history, padding=0)
         self.history_button.pack(side='left', padx=(8, 0))
+        self.selection_buttons["重試異常"] = self.button(self.usage_toggle.master, tr("重試異常"), self.retry_failed)
         self.elapsed_label = tk.StringVar(value='00:00:00')
         elapsed_row = ttk.Frame(self.usage_toggle.master)
         elapsed_row.pack(side='right')
@@ -447,6 +448,7 @@ class TranslationQueue:
         selected = self.selected_job_ids()
         enabled = {
             "移除選取": bool(selected),
+            "重試異常": any(j.status in ("failed", "done_warning") for j in self.jobs),
             "重試選取": any(str(id(j)) in selected and j.status in ("failed", "cancelled", "blocked", "done_warning") for j in self.jobs),
             "清除已完成": any(j.status in ("done", "done_warning") for j in self.jobs),
         }
@@ -703,6 +705,22 @@ class TranslationQueue:
         if not self.running and not self.app.manga_busy:
             self.jobs[:] = [job for job in self.jobs if job.status not in ("done", "done_warning")]
             self.changed()
+
+    def retry_failed(self):
+        if self.running or self.app.manga_busy:
+            return
+        items = [str(id(job)) for job in self.jobs if job.status in ("failed", "done_warning")]
+        if not items:
+            return
+        self.tree.selection_set(items)
+        for item in items:
+            parent = self.tree.parent(item)
+            while parent:
+                self.tree.item(parent, open=True)
+                parent = self.tree.parent(parent)
+        self.tree.focus(items[0])
+        self.tree.see(items[0])
+        self.retry()
 
     def retry(self):
         if not self.running and not self.app.manga_busy:

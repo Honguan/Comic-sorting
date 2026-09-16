@@ -98,6 +98,27 @@ class WorkflowTests(unittest.TestCase):
             called.assert_not_called()
             button.destroy()
 
+    def test_retry_failures_selects_only_failed_and_warning_without_starting(self):
+        q = self.app.translation_queue
+        statuses = ('done', 'failed', 'done_warning', 'pending', 'cancelled', 'blocked')
+        q.jobs = [Job(self.folder / str(i), 'cleanup', status=status, error='original')
+                  for i, status in enumerate(statuses)]
+        q.render()
+        q.update_controls()
+        with mock.patch.object(q, 'start') as start:
+            q.selection_buttons['重試異常'].invoke()
+            start.assert_not_called()
+        self.assertEqual([j.status for j in q.jobs], ['done', 'pending', 'pending', 'pending', 'cancelled', 'blocked'])
+        self.assertEqual(q.selected_job_ids(), {str(id(q.jobs[1])), str(id(q.jobs[2]))})
+        self.assertEqual([j.error for j in q.jobs], ['original', '', '', 'original', 'original', 'original'])
+        self.assertFalse(q.running)
+        self.assertEqual(str(q.selection_buttons['重試異常']['state']), 'disabled')
+        q.jobs[1].status = 'failed'
+        q.running = True
+        q.retry_failed()
+        self.assertEqual(q.jobs[1].status, 'failed')
+        q.running = False
+
     def wait_counts(self, q):
         deadline = time.monotonic() + 3
         while q.counting and time.monotonic() < deadline:

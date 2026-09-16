@@ -9,6 +9,7 @@ def tr(text):
     return TRANSLATIONS.get(text, {}).get(_language, text)
 
 TRANSLATIONS = {
+    "重試異常": {"en": "Retry failures", "ja": "異常を再試行"},
     "整合完成": {"en": "Merge complete", "ja": "統合完了"},
     '（{0} 項計算中）': {'en': ' ({0} counting)', 'ja': '（{0} 件を計算中）'},
     '路徑已變更，請先成功重新掃描後再操作。': {'en': 'The path has changed. Rescan successfully before continuing.', 'ja': 'パスが変更されています。再スキャンが成功してから操作してください。'},
