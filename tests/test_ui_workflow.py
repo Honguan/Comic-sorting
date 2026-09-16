@@ -1417,6 +1417,8 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual((self.root.winfo_width(), self.root.winfo_height()), (820, 640))
 
     def test_expanded_queue_sections_borrow_manga_space_and_restore_it(self):
+        # Test the roomy layout even on CI's 1024x768 desktop; small-screen coverage follows below.
+        self.root.maxsize(1200, 1100)
         self.root.geometry('980x900')
         self.root.deiconify()
         self.root.update()
