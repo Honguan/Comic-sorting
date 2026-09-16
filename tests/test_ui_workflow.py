@@ -106,13 +106,13 @@ class WorkflowTests(unittest.TestCase):
         q.render()
         q.update_controls()
         with mock.patch.object(q, 'start') as start:
-            q.selection_buttons['重試異常'].invoke()
+            q.selection_buttons['重選異常'].invoke()
             start.assert_not_called()
         self.assertEqual([j.status for j in q.jobs], ['done', 'pending', 'pending', 'pending', 'cancelled', 'blocked'])
         self.assertEqual(q.selected_job_ids(), {str(id(q.jobs[1])), str(id(q.jobs[2]))})
         self.assertEqual([j.error for j in q.jobs], ['original', '', '', 'original', 'original', 'original'])
         self.assertFalse(q.running)
-        self.assertEqual(str(q.selection_buttons['重試異常']['state']), 'disabled')
+        self.assertEqual(str(q.selection_buttons['重選異常']['state']), 'disabled')
         q.jobs[1].status = 'failed'
         q.running = True
         q.retry_failed()

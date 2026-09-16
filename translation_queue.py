@@ -180,7 +180,7 @@ class TranslationQueue:
             footer, tr("本次佇列 LLM 消耗（非實際帳單）"))
         self.history_button = ttk.Button(self.usage_toggle.master, text=tr("歷史紀錄"), command=self.open_history, padding=0)
         self.history_button.pack(side='left', padx=(8, 0))
-        self.selection_buttons["重試異常"] = self.button(self.usage_toggle.master, tr("重試異常"), self.retry_failed)
+        self.selection_buttons["重選異常"] = self.button(self.usage_toggle.master, tr("重選異常"), self.retry_failed)
         self.elapsed_label = tk.StringVar(value='00:00:00')
         elapsed_row = ttk.Frame(self.usage_toggle.master)
         elapsed_row.pack(side='right')
@@ -448,7 +448,7 @@ class TranslationQueue:
         selected = self.selected_job_ids()
         enabled = {
             "移除選取": bool(selected),
-            "重試異常": any(j.status in ("failed", "done_warning") for j in self.jobs),
+            "重選異常": any(j.status in ("failed", "done_warning") for j in self.jobs),
             "重試選取": any(str(id(j)) in selected and j.status in ("failed", "cancelled", "blocked", "done_warning") for j in self.jobs),
             "清除已完成": any(j.status in ("done", "done_warning") for j in self.jobs),
         }
