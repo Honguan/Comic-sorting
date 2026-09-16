@@ -9,7 +9,6 @@ def tr(text):
     return TRANSLATIONS.get(text, {}).get(_language, text)
 
 TRANSLATIONS = {
-    "重選異常": {"en": "Retry failures", "ja": "異常を再試行"},
     "整合完成": {"en": "Merge complete", "ja": "統合完了"},
     '（{0} 項計算中）': {'en': ' ({0} counting)', 'ja': '（{0} 件を計算中）'},
     '路徑已變更，請先成功重新掃描後再操作。': {'en': 'The path has changed. Rescan successfully before continuing.', 'ja': 'パスが変更されています。再スキャンが成功してから操作してください。'},
@@ -508,7 +507,7 @@ TRANSLATIONS.update({
     "前置工作失敗": {"en": "Blocked", "ja": "前の処理が失敗"},
     "上移": {"en": "Move up", "ja": "上へ"},
     "下移": {"en": "Move down", "ja": "下へ"},
-    "重試選取": {"en": "Retry selected", "ja": "選択項目を再試行"},
+    "重新選取": {"en": "Requeue", "ja": "再登録"},
     "清除已完成": {"en": "Clear completed", "ja": "完了項目を除去"},
     "工作詳情": {"en": "Job details", "ja": "処理の詳細"},
     "佇列 {0} 項｜等待 {1}｜完成 {2}｜需處理 {3}": {"en": "Queue: {0} | Pending: {1} | Done: {2} | Needs attention: {3}", "ja": "キュー {0} 件｜待機 {1}｜完了 {2}｜要確認 {3}"},

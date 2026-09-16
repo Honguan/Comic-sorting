@@ -106,18 +106,37 @@ class WorkflowTests(unittest.TestCase):
         q.render()
         q.update_controls()
         with mock.patch.object(q, 'start') as start:
-            q.selection_buttons['重選異常'].invoke()
+            q.selection_buttons['重新選取'].invoke()
             start.assert_not_called()
         self.assertEqual([j.status for j in q.jobs], ['done', 'pending', 'pending', 'pending', 'cancelled', 'blocked'])
         self.assertEqual(q.selected_job_ids(), {str(id(q.jobs[1])), str(id(q.jobs[2]))})
         self.assertEqual([j.error for j in q.jobs], ['original', '', '', 'original', 'original', 'original'])
         self.assertFalse(q.running)
-        self.assertEqual(str(q.selection_buttons['重選異常']['state']), 'disabled')
+        self.assertEqual(str(q.selection_buttons['重新選取']['state']), 'disabled')
         q.jobs[1].status = 'failed'
         q.running = True
-        q.retry_failed()
+        q.retry()
         self.assertEqual(q.jobs[1].status, 'failed')
         q.running = False
+
+    def test_requeue_respects_selection_and_only_explicit_single_done(self):
+        q = self.app.translation_queue
+        q.jobs = [Job(self.folder / series / str(i), 'cleanup', status=status)
+                  for i, (series, status) in enumerate((('A', 'done'), ('A', 'failed'), ('B', 'failed')))]
+        q.render()
+        ids = [str(id(j)) for j in q.jobs]
+        q.tree.selection_set('series:' + str(self.folder / 'A'))
+        q.retry()
+        self.assertEqual([j.status for j in q.jobs], ['done', 'pending', 'failed'])
+        q.tree.selection_set(ids[0], ids[2])
+        q.retry()
+        self.assertEqual([j.status for j in q.jobs], ['done', 'pending', 'pending'])
+        q.tree.selection_set(ids[0])
+        q.update_controls()
+        self.assertEqual(str(q.selection_buttons['重新選取']['state']), 'normal')
+        q.retry()
+        self.assertEqual(q.jobs[0].status, 'pending')
+        self.assertFalse(q.running)
 
     def wait_counts(self, q):
         deadline = time.monotonic() + 3
@@ -198,12 +217,12 @@ class WorkflowTests(unittest.TestCase):
         q.render()
         q.update_controls()
         self.assertEqual(str(q.selection_buttons['移除選取']['state']), 'disabled')
-        self.assertEqual(str(q.selection_buttons['重試選取']['state']), 'disabled')
+        self.assertEqual(str(q.selection_buttons['重新選取']['state']), 'normal')
         q.tree.selection_set(str(id(q.jobs[0])))
         q.update_controls()
         self.assertEqual(str(q.selection_buttons['上移']['state']), 'disabled')
         self.assertEqual(str(q.selection_buttons['下移']['state']), 'normal')
-        self.assertEqual(str(q.selection_buttons['重試選取']['state']), 'normal')
+        self.assertEqual(str(q.selection_buttons['重新選取']['state']), 'normal')
         before = [(id(job), job.status, job.error) for job in q.jobs]
         q.running = True
         try:

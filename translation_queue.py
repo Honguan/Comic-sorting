@@ -137,10 +137,10 @@ class TranslationQueue:
         row.pack(fill="x")
         self.selection_buttons = {}
         for text, command in (("移除選取", self.remove), ("上移", lambda: self.move(-1)),
-                              ("下移", lambda: self.move(1)), ("重試選取", self.retry),
+                              ("下移", lambda: self.move(1)), ("重新選取", self.retry),
                               ("清除已完成", self.clear_completed)):
             self.selection_buttons[text] = self.button(row, tr(text), command)
-        for text in ("重試選取", "上移", "下移"):
+        for text in ("重新選取", "上移", "下移"):
             self.context_menu.add_command(label=tr(text), command=self.selection_buttons[text].invoke)
         self.context_menu.add_command(label=tr("翻譯頁數"), command=self.edit_page_range)
         self.context_menu.add_separator()
@@ -180,7 +180,6 @@ class TranslationQueue:
             footer, tr("本次佇列 LLM 消耗（非實際帳單）"))
         self.history_button = ttk.Button(self.usage_toggle.master, text=tr("歷史紀錄"), command=self.open_history, padding=0)
         self.history_button.pack(side='left', padx=(8, 0))
-        self.selection_buttons["重選異常"] = self.button(self.usage_toggle.master, tr("重選異常"), self.retry_failed)
         self.elapsed_label = tk.StringVar(value='00:00:00')
         elapsed_row = ttk.Frame(self.usage_toggle.master)
         elapsed_row.pack(side='right')
@@ -448,8 +447,7 @@ class TranslationQueue:
         selected = self.selected_job_ids()
         enabled = {
             "移除選取": bool(selected),
-            "重選異常": any(j.status in ("failed", "done_warning") for j in self.jobs),
-            "重試選取": any(str(id(j)) in selected and j.status in ("failed", "cancelled", "blocked", "done_warning") for j in self.jobs),
+            "重新選取": bool(self.retry_targets()),
             "清除已完成": any(j.status in ("done", "done_warning") for j in self.jobs),
         }
         for label, direction in (("上移", -1), ("下移", 1)):
@@ -661,7 +659,7 @@ class TranslationQueue:
         self.tree.focus(item)
         self.update_controls()
         self.context_menu.entryconfigure(0, state="disabled" if self.running or self.app.manga_busy else "normal")
-        for index, label in enumerate(("重試選取", "上移", "下移"), 1):
+        for index, label in enumerate(("重新選取", "上移", "下移"), 1):
             self.context_menu.entryconfigure(index, state=self.selection_buttons[label].cget("state"))
         self.context_menu.entryconfigure(4, state=self.range_button.cget("state"))
         try:
@@ -706,12 +704,26 @@ class TranslationQueue:
             self.jobs[:] = [job for job in self.jobs if job.status not in ("done", "done_warning")]
             self.changed()
 
-    def retry_failed(self):
+    def retry_targets(self):
+        selection = self.tree.selection()
+        selected = self.selected_job_ids()
+        return [job for job in self.jobs
+                if (not selection and job.status in ("failed", "done_warning"))
+                or (str(id(job)) in selected and
+                    (job.status in ("failed", "done_warning", "cancelled", "blocked")
+                     or (job.status == "done" and selection == (str(id(job)),))))]
+
+    def retry(self):
         if self.running or self.app.manga_busy:
             return
-        items = [str(id(job)) for job in self.jobs if job.status in ("failed", "done_warning")]
-        if not items:
+        targets = self.retry_targets()
+        if not targets:
             return
+        items = [str(id(job)) for job in targets]
+        self.count_generation += 1
+        for job in targets:
+            job.status, job.error = "pending", ""
+            self.count_cache.pop((job.path, job.start_page, job.end_page), None)
         self.tree.selection_set(items)
         for item in items:
             parent = self.tree.parent(item)
@@ -720,16 +732,7 @@ class TranslationQueue:
                 parent = self.tree.parent(parent)
         self.tree.focus(items[0])
         self.tree.see(items[0])
-        self.retry()
-
-    def retry(self):
-        if not self.running and not self.app.manga_busy:
-            selected = self.selected_job_ids()
-            for job in self.jobs:
-                if str(id(job)) in selected and job.status in ("failed", "cancelled", "blocked", "done_warning"):
-                    job.status, job.error = "pending", ""
-                    self.count_cache.pop((job.path, job.start_page, job.end_page), None)
-            self.changed()
+        self.changed()
 
     def move(self, direction):
         if self.running or self.app.manga_busy:
