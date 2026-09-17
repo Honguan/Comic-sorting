@@ -248,6 +248,29 @@ class WorkflowTests(unittest.TestCase):
         q.move(1, to_edge=True)
         self.assertEqual(q.jobs, [other] + before)
 
+    def test_context_menus_copy_manga_names_without_paths_or_duplicates(self):
+        q = self.app.translation_queue
+        paths = [self.chapter('Chapter 1'), self.chapter('Chapter 2')]
+        base = self.folder / 'Comics'
+        self.app.base_path.set(str(base))
+        self.app.apply_scan_data(base, self.app.scan_folder_data(base))
+        tree = self.app.folder_tree
+        parent = tree.get_children()[0]
+        for item in (parent, tree.get_children(parent)[0]):
+            tree.selection_set(item)
+            self.app.folder_context_menu.invoke('複製漫畫名稱')
+            self.assertEqual(tree.clipboard_get(), 'Series')
+        other = base / '另一部 Manga' / 'Chapter 3'
+        q.jobs = [Job(path, 'export') for path in [*paths, other]]
+        q.render()
+        for selection in ([str(id(job)) for job in q.jobs], q.tree.get_children()):
+            q.tree.selection_set(selection)
+            q.context_menu.invoke('複製漫畫名稱')
+            self.assertEqual(q.tree.clipboard_get(), 'Series\n另一部 Manga')
+        q.tree.selection_set(())
+        q.context_menu.invoke('複製漫畫名稱')
+        self.assertEqual(q.tree.clipboard_get(), 'Series\n另一部 Manga')
+
     def test_add_number_range_uses_series_indices_and_open_end(self):
         q = self.app.translation_queue
         paths = [self.chapter(name) for name in ('Chapter 1', 'Chapter 5', 'Chapter 10-20', 'Chapter 30')]

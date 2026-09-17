@@ -1,6 +1,13 @@
 """Keyboard actions scoped to the focused table, never to text inputs."""
 
 
+def copy_manga_names(tree, series_paths):
+    names = list(dict.fromkeys(path.name for path in series_paths))
+    if names:
+        tree.clipboard_clear()
+        tree.clipboard_append("\n".join(names))
+
+
 def bind_table_shortcuts(tree, selected_paths):
     def select_all(_event=None):
         tree.selection_set(tree.get_children())

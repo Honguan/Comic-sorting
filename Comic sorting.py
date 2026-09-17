@@ -12,7 +12,7 @@ from translation_queue import TranslationQueue
 from app_logging import configure_logging, logger, log_path, redact
 from ui_language import LANGUAGES, set_language, tr
 from ui_theme import apply_theme
-from ui_interactions import bind_table_shortcuts
+from ui_interactions import bind_table_shortcuts, copy_manga_names
 from comic_core import (
     IMAGE_EXTENSIONS, FOLDER_KINDS, chapter_number, folder_kind, image_files, translation_status,
     natural_sort_key, updated_at, folder_size, format_size, summarize_names,
@@ -157,6 +157,9 @@ class FileAggregatorApp:
             self.folder_context_menu.add_command(label=tr(label))
         self.folder_context_menu.add_separator()
         self.folder_context_menu.add_command(label=tr("複製完整路徑"), accelerator="Ctrl+C", command=copy_paths)
+        self.folder_context_menu.add_command(label=tr("複製漫畫名稱"), command=lambda: copy_manga_names(
+            self.folder_tree, (path if kind == "series" else path.parent
+                               for kind, path in (self.tree_items[item] for item in self.folder_tree.selection()))))
         self.folder_tree.bind("<Button-3>", self.show_folder_context_menu)
 
         scan_row = ttk.Frame(manga_footer)

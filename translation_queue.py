@@ -10,7 +10,7 @@ import subprocess
 import os
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk, font as tkfont
-from ui_interactions import bind_table_shortcuts
+from ui_interactions import bind_table_shortcuts, copy_manga_names
 
 from queue_worker import BT_STAGES, Job, run_jobs, translator_command
 from app_logging import logger, log_path
@@ -170,6 +170,8 @@ class TranslationQueue:
         self.context_menu.add_command(label=tr("執行選取項目"), command=self.start)
         self.run_menu_index = self.context_menu.index("end")
         self.context_menu.add_command(label=tr("取消選取"), command=self.clear_selection)
+        self.context_menu.add_command(label=tr("複製漫畫名稱"), command=lambda: copy_manga_names(
+            self.tree, (path.parent for path in self.selected_paths())))
         self.pause_button = ttk.Button(row, text=tr("佇列暫停"), command=self.request_pause)
         self.pause_button.pack(side="left", padx=2)
         self.stop_button = ttk.Button(row, text=tr("停止"), command=self.request_stop, width=0)
