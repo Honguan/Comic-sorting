@@ -137,10 +137,12 @@ class TranslationQueue:
         row.pack(fill="x")
         self.selection_buttons = {}
         for text, command in (("移除選取", self.remove), ("上移", lambda: self.move(-1)),
-                              ("下移", lambda: self.move(1)), ("重新選取", self.retry),
+                              ("下移", lambda: self.move(1)),
+                              ("移到最上", lambda: self.move(-1, to_edge=True)),
+                              ("移到最下", lambda: self.move(1, to_edge=True)), ("重新選取", self.retry),
                               ("清除已完成", self.clear_completed)):
             self.selection_buttons[text] = self.button(row, tr(text), command)
-        for text in ("重新選取", "上移", "下移"):
+        for text in ("重新選取", "上移", "下移", "移到最上", "移到最下"):
             self.context_menu.add_command(label=tr(text), command=self.selection_buttons[text].invoke)
         self.context_menu.add_command(label=tr("翻譯頁數"), command=self.edit_page_range)
         self.context_menu.add_separator()
@@ -455,7 +457,8 @@ class TranslationQueue:
                                  and str(id(self.jobs[index + direction])) not in selected
                                  for index, job in enumerate(self.jobs))
         for label, button in self.selection_buttons.items():
-            button.configure(state="normal" if not busy and enabled[label] else "disabled")
+            key = {"移到最上": "上移", "移到最下": "下移"}.get(label, label)
+            button.configure(state="normal" if not busy and enabled[key] else "disabled")
 
     def page_range_text(self, job):
         if job.action != "translate":
@@ -659,9 +662,9 @@ class TranslationQueue:
         self.tree.focus(item)
         self.update_controls()
         self.context_menu.entryconfigure(0, state="disabled" if self.running or self.app.manga_busy else "normal")
-        for index, label in enumerate(("重新選取", "上移", "下移"), 1):
+        for index, label in enumerate(("重新選取", "上移", "下移", "移到最上", "移到最下"), 1):
             self.context_menu.entryconfigure(index, state=self.selection_buttons[label].cget("state"))
-        self.context_menu.entryconfigure(4, state=self.range_button.cget("state"))
+        self.context_menu.entryconfigure(6, state=self.range_button.cget("state"))
         try:
             self.context_menu.tk_popup(event.x_root, event.y_root)
         finally:
@@ -734,10 +737,19 @@ class TranslationQueue:
         self.tree.see(items[0])
         self.changed()
 
-    def move(self, direction):
+    def move(self, direction, *, to_edge=False):
         if self.running or self.app.manga_busy:
             return
         selected = self.selected_job_ids()
+        if to_edge:
+            moving = [job for job in self.jobs if str(id(job)) in selected]
+            remaining = [job for job in self.jobs if str(id(job)) not in selected]
+            self.jobs[:] = moving + remaining if direction < 0 else remaining + moving
+            self.changed()
+            selection = self.tree.selection()
+            if selection:
+                self.tree.see(selection[0] if direction < 0 else selection[-1])
+            return
         indices = range(len(self.jobs)) if direction < 0 else range(len(self.jobs) - 1, -1, -1)
         for index in indices:
             target = index + direction

@@ -507,6 +507,8 @@ TRANSLATIONS.update({
     "前置工作失敗": {"en": "Blocked", "ja": "前の処理が失敗"},
     "上移": {"en": "Move up", "ja": "上へ"},
     "下移": {"en": "Move down", "ja": "下へ"},
+    "移到最上": {"en": "Move to top", "ja": "最上部へ"},
+    "移到最下": {"en": "Move to bottom", "ja": "最下部へ"},
     "重新選取": {"en": "Requeue", "ja": "再登録"},
     "清除已完成": {"en": "Clear completed", "ja": "完了項目を除去"},
     "工作詳情": {"en": "Job details", "ja": "処理の詳細"},

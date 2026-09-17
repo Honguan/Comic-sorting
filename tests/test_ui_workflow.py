@@ -210,6 +210,44 @@ class WorkflowTests(unittest.TestCase):
         (path / "result/1.png").write_bytes(b"image")
         return path
 
+    def test_queue_move_to_edges_preserves_order_selection_and_settings(self):
+        import json
+        q = self.app.translation_queue
+        jobs = [Job(self.chapter(f'Chapter {i}'), 'export') for i in range(5)]
+        q.jobs = jobs.copy()
+        q.render()
+        selected = [str(id(jobs[i])) for i in (1, 3)]
+        q.tree.selection_set(selected)
+        q.update_controls()
+        q.selection_buttons['移到最上'].invoke()
+        self.assertEqual(q.jobs, [jobs[i] for i in (1, 3, 0, 2, 4)])
+        self.assertEqual(set(q.tree.selection()), set(selected))
+        self.assertEqual(str(q.selection_buttons['移到最上']['state']), 'disabled')
+        q.selection_buttons['移到最下'].invoke()
+        self.assertEqual(q.jobs, [jobs[i] for i in (0, 2, 4, 1, 3)])
+        saved = json.loads(self.settings.read_text(encoding='utf-8'))
+        self.assertEqual([j['path'] for j in saved['bt_jobs']], [str(j.path) for j in q.jobs])
+        self.assertEqual(str(q.selection_buttons['移到最下']['state']), 'disabled')
+        before = q.jobs.copy()
+        for running, busy in ((True, False), (False, True)):
+            q.running, self.app.manga_busy = running, busy
+            q.move(-1, to_edge=True)
+            self.assertEqual(q.jobs, before)
+        q.running = self.app.manga_busy = False
+        q.tree.selection_set('series:' + str(jobs[0].path.parent))
+        q.move(-1, to_edge=True)
+        self.assertEqual(q.jobs, before)
+        q.update_controls()
+        self.assertEqual(str(q.selection_buttons['移到最上']['state']), 'disabled')
+        self.assertEqual(str(q.selection_buttons['移到最下']['state']), 'disabled')
+        other = Job(self.folder / 'Comics' / 'Other' / 'Chapter 1', 'export')
+        q.jobs.insert(0, other)
+        q.render()
+        q.move(-1, to_edge=True)
+        self.assertEqual(q.jobs, before + [other])
+        q.move(1, to_edge=True)
+        self.assertEqual(q.jobs, [other] + before)
+
     def test_queue_actions_follow_selection_and_running_state(self):
         q = self.app.translation_queue
         q.jobs = [Job(self.chapter('Chapter 1'), 'translate', 'failed', 'error'),
