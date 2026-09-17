@@ -510,6 +510,8 @@ TRANSLATIONS.update({
     "移到最上": {"en": "Move to top", "ja": "最上部へ"},
     "移到最下": {"en": "Move to bottom", "ja": "最下部へ"},
     "取消選取": {"en": "Clear selection", "ja": "選択を解除"},
+    "放大佇列": {"en": "Expand queue", "ja": "キューを拡大"},
+    "還原佇列大小": {"en": "Restore queue size", "ja": "キューのサイズを戻す"},
     "搜尋漫畫名稱／路徑": {"en": "Search manga / path", "ja": "漫画名／パスを検索"},
     "顯示 {0} / {1} 項": {"en": "Showing {0} / {1} jobs", "ja": "{0} / {1} 件を表示"},
     "執行選取項目": {"en": "Run selected", "ja": "選択項目を実行"},

@@ -112,6 +112,11 @@ class TranslationQueue:
         ttk.Button(search_row, text=tr("清除搜尋"), command=lambda: self.search.set("")).pack(side="left", padx=4)
         self.search_count = tk.StringVar()
         ttk.Label(search_row, textvariable=self.search_count).pack(side="left")
+        self.queue_restore_ratio = None
+        self.zoom_button = ttk.Button(search_row, text=tr("放大佇列"), command=self.toggle_queue_size)
+        self.zoom_button.pack(side="right", padx=(4, 0))
+        app.panes.bind("<Configure>", lambda _event: app.panes.sashpos(0, 0)
+                       if self.queue_restore_ratio is not None else None, add="+")
         tree_frame = ttk.Frame(box)
         tree_frame.pack(fill="both", expand=True, pady=4)
         self.tree = ttk.Treeview(tree_frame, columns=("kind", "action", "pages", "status", "error_reason"), show="tree headings", height=3)
@@ -228,6 +233,18 @@ class TranslationQueue:
         self.render()
         self.update_controls()
 
+    def toggle_queue_size(self):
+        panes = self.app.panes
+        panes.update_idletasks()
+        if self.queue_restore_ratio is None:
+            self.queue_restore_ratio = panes.sashpos(0) / max(1, panes.winfo_height())
+            panes.sashpos(0, 0)
+            self.zoom_button.configure(text=tr("還原佇列大小"))
+        else:
+            panes.sashpos(0, round(self.queue_restore_ratio * panes.winfo_height()))
+            self.queue_restore_ratio = None
+            self.zoom_button.configure(text=tr("放大佇列"))
+
     def collapsible_frame(self, parent, title):
         frame = ttk.Frame(parent)
         frame.pack(fill="x", pady=(2, 0))
@@ -249,11 +266,14 @@ class TranslationQueue:
             else:
                 content.pack(fill="x")
                 button.configure(text=f"▼ {title}")
+            if self.queue_restore_ratio is not None:
+                borrowed_height = 0
+                return
             if not layout_ready:
                 borrowed_height = 0
                 if not collapsing:
                     def fit_initial():
-                        if not panes.winfo_exists() or not content.winfo_manager():
+                        if not panes.winfo_exists() or not content.winfo_manager() or self.queue_restore_ratio is not None:
                             return
                         panes.update_idletasks()
                         manga = panes.nametowidget(panes.panes()[0])

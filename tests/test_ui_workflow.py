@@ -1533,6 +1533,36 @@ class WorkflowTests(unittest.TestCase):
         self.root.update()
         self.assertEqual((self.root.winfo_width(), self.root.winfo_height()), (820, 640))
 
+    def test_queue_can_expand_restore_and_resize_with_progress_open(self):
+        self.root.geometry('1024x780')
+        self.root.deiconify()
+        self.root.update()
+        q, panes = self.app.translation_queue, self.app.panes
+        panes.sashpos(0, 300)
+        self.root.update()
+        before = q.tree.winfo_height()
+        ratio = panes.sashpos(0) / panes.winfo_height()
+        q.zoom_button.invoke()
+        self.root.update()
+        self.assertEqual(panes.sashpos(0), 0)
+        self.assertGreater(q.tree.winfo_height(), before)
+        for button in (q.bt_toggle, q.usage_toggle):
+            button.invoke()
+            self.root.update()
+            self.assertEqual(panes.sashpos(0), 0)
+            self.assertTrue(q.tree.winfo_ismapped())
+            button.invoke()
+        self.root.geometry('900x700')
+        self.root.update()
+        self.assertEqual(panes.sashpos(0), 0)
+        q.zoom_button.invoke()
+        self.root.update()
+        self.assertAlmostEqual(panes.sashpos(0) / panes.winfo_height(), ratio, delta=.01)
+        self.assertEqual(q.zoom_button['text'], '放大佇列')
+        panes.sashpos(0, 200)  # The native divider remains manually resizable.
+        self.root.update()
+        self.assertEqual(panes.sashpos(0), 200)
+
     def test_expanded_queue_sections_borrow_manga_space_and_restore_it(self):
         # Test the roomy layout even on CI's 1024x768 desktop; small-screen coverage follows below.
         self.root.maxsize(1200, 1100)
