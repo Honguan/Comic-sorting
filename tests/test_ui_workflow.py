@@ -248,6 +248,39 @@ class WorkflowTests(unittest.TestCase):
         q.move(1, to_edge=True)
         self.assertEqual(q.jobs, [other] + before)
 
+    def test_add_number_range_uses_series_indices_and_open_end(self):
+        q = self.app.translation_queue
+        paths = [self.chapter(name) for name in ('Chapter 1', 'Chapter 5', 'Chapter 10-20', 'Chapter 30')]
+        base = self.folder / 'Comics'
+        self.app.base_path.set(str(base))
+        self.app.apply_scan_data(base, self.app.scan_folder_data(base))
+        parent = self.app.folder_tree.get_children()[0]
+        self.app.folder_tree.selection_set(parent)
+        self.app.on_tree_select()
+        def set_range(start, end):
+            for entry, value in ((self.app.start_entry, start), (self.app.end_entry, end)):
+                entry.delete(0, 'end')
+                entry.insert(0, value)
+        set_range('2', '3')
+        with mock.patch.object(q, 'start') as start:
+            q.add_number_range()
+            self.assertEqual([job.path for job in q.jobs], paths[1:3])
+            set_range('3', '')
+            q.add_number_range()
+            self.assertEqual([job.path for job in q.jobs], paths[1:])
+            start.assert_not_called()
+        with mock.patch('translation_queue.messagebox.showwarning') as warning:
+            for first, last in (('0', '2'), ('4', '2'), ('2', '9'), ('bad', '3'), ('', '')):
+                set_range(first, last)
+                q.add_number_range()
+            self.assertEqual(warning.call_count, 5)
+            self.assertEqual([job.path for job in q.jobs], paths[1:])
+        set_range('1', '1')
+        q.running = True
+        q.add_number_range()
+        q.running = False
+        self.assertEqual([job.path for job in q.jobs], paths[1:])
+
     def test_queue_search_filters_names_paths_and_keeps_hidden_jobs_running(self):
         q = self.app.translation_queue
         first = Job(self.folder / 'Comics' / 'Hero 漫畫' / 'Chapter 1', 'cleanup')

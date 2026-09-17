@@ -90,6 +90,7 @@ class TranslationQueue:
                                          state="readonly", width=10)
         self.action_choice.pack(side="left", padx=(0, 4))
         self.button(row, tr("加入上方選取項目"), self.add_selected)
+        self.button(row, tr("依編號加入佇列"), self.add_number_range)
         self.button(row, tr("加入指定路徑"), self.add_directory)
         self.button(row, tr("整合＋加入佇列"), self.integrate)
         self.range_button = self.button(row, tr("翻譯頁數"), self.edit_page_range)
@@ -692,6 +693,30 @@ class TranslationQueue:
             messagebox.showinfo(tr("主佇列"), tr("請先選擇父系列或章節"))
             return
         self.add_paths(paths)
+
+    def add_number_range(self):
+        if self.running or self.app.manga_busy or not self.app.source_is_current():
+            return
+        selected = self.app.selected_tree_item()
+        if not selected:
+            messagebox.showinfo(tr("主佇列"), tr("請先選擇父系列或章節"))
+            return
+        series = {path if kind == "series" else path.parent
+                  for kind, path in (self.app.tree_items[item] for item in self.app.folder_tree.selection())}
+        if len(series) != 1:
+            messagebox.showwarning(tr("警告"), tr("依編號加入時請只選擇同一系列"))
+            return
+        chapters = selected[2]
+        try:
+            start = int(self.app.start_entry.get().strip())
+            end = int(self.app.end_entry.get().strip() or len(chapters))
+        except ValueError:
+            messagebox.showwarning(tr("警告"), tr("請輸入有效的起始和結束編號"))
+            return
+        if not 1 <= start <= end <= len(chapters):
+            messagebox.showwarning(tr("警告"), tr("請確保編號範圍有效"))
+            return
+        self.add_paths([item[0] for item in chapters[start - 1:end]])
 
     def add_directory(self):
         path = filedialog.askdirectory()
