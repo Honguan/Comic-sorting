@@ -248,6 +248,44 @@ class WorkflowTests(unittest.TestCase):
         q.move(1, to_edge=True)
         self.assertEqual(q.jobs, [other] + before)
 
+    def test_queue_search_filters_names_paths_and_keeps_hidden_jobs_running(self):
+        q = self.app.translation_queue
+        first = Job(self.folder / 'Comics' / 'Hero 漫畫' / 'Chapter 1', 'cleanup')
+        second = Job(first.path.parent / 'Chapter 2', 'cleanup', 'failed', 'error')
+        other = Job(self.folder / 'Comics' / 'Other' / 'Chapter 3', 'cleanup')
+        q.jobs = [first, second, other]
+        q.render()
+        q.search.set('hERO 漫畫')
+        self.assertTrue(q.tree.exists(str(id(first))))
+        self.assertTrue(q.tree.exists(str(id(second))))
+        self.assertFalse(q.tree.exists(str(id(other))))
+        self.assertEqual(q.search_count.get(), '顯示 2 / 3 項')
+        series = 'series:' + str(first.path.parent)
+        self.assertTrue(q.tree.item(series, 'open'))
+        q.tree.selection_set(series)
+        self.assertEqual(q.start_targets(), (first,))
+        q.search.set(str(first.path).replace('\\', '/').upper())
+        self.assertEqual(q.search_count.get(), '顯示 1 / 3 項')
+        q.active_jobs = (other,)
+        q.events.put(('status', 0, 'running', ''))
+        q.poll()
+        self.assertEqual(other.status, 'running')
+        self.assertFalse(q.tree.exists(str(id(other))))
+        q.search.set('missing manga')
+        self.assertEqual(q.tree.get_children(), ())
+        self.assertEqual(q.search_count.get(), '顯示 0 / 3 項')
+        self.assertEqual(q.start_targets(), (first,))  # Search filters display, not the full queue.
+        q.retry()  # No selection retries all failures, even hidden ones.
+        self.assertEqual(q.search.get(), '')
+        self.assertEqual(second.status, 'pending')
+        self.assertEqual(q.tree.selection(), (str(id(second)),))
+        self.assertEqual(q.jobs, [first, second, other])
+        q.search.set('  chapter 1  ')
+        self.assertEqual(q.search_count.get(), '顯示 1 / 3 項')
+        q.search.set('')
+        self.assertEqual(q.search_count.get(), '顯示 3 / 3 項')
+        self.assertEqual(q.tree.set(str(id(other)), 'status'), '執行中')
+
     def test_start_uses_selected_scope_and_clear_restores_full_order(self):
         q = self.app.translation_queue
         paths = [self.chapter(f'Chapter {i}') for i in range(3)]

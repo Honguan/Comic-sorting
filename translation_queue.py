@@ -103,6 +103,15 @@ class TranslationQueue:
             self.controls.append(check)
         footer = ttk.Frame(box)
         footer.pack(side="bottom", fill="x")
+        search_row = ttk.Frame(box)
+        search_row.pack(fill="x", pady=(4, 0))
+        ttk.Label(search_row, text=tr("搜尋漫畫名稱／路徑")).pack(side="left", padx=(0, 6))
+        self.search = tk.StringVar()
+        self.search_entry = ttk.Entry(search_row, textvariable=self.search)
+        self.search_entry.pack(side="left", fill="x", expand=True)
+        ttk.Button(search_row, text=tr("清除搜尋"), command=lambda: self.search.set("")).pack(side="left", padx=4)
+        self.search_count = tk.StringVar()
+        ttk.Label(search_row, textvariable=self.search_count).pack(side="left")
         tree_frame = ttk.Frame(box)
         tree_frame.pack(fill="both", expand=True, pady=4)
         self.tree = ttk.Treeview(tree_frame, columns=("kind", "action", "pages", "status", "error_reason"), show="tree headings", height=3)
@@ -126,11 +135,12 @@ class TranslationQueue:
         self.selection_details = tk.StringVar()
         self.selection_label = ttk.Label(tree_frame, textvariable=self.selection_details, anchor="w", justify="left", wraplength=700)
         self.selection_label.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(4, 0))
-        self.clear_selection_button = ttk.Button(tree_frame, text=tr("取消選取"), command=self.clear_selection)
-        self.clear_selection_button.grid(row=3, column=0, sticky="w", pady=(2, 0))
+        self.clear_selection_button = ttk.Button(search_row, text=tr("取消選取"), command=self.clear_selection)
+        self.clear_selection_button.pack(side="left", padx=(4, 0))
         self.tree.bind("<Configure>", self.fit_columns)
         self.tree.bind("<Double-1>", self.show_details)
         self.tree.bind("<<TreeviewSelect>>", lambda _event: self.update_controls())
+        self.search.trace_add("write", lambda *_args: self.filter_jobs())
         copy_paths = bind_table_shortcuts(self.tree, self.selected_paths)
         self.context_menu = tk.Menu(self.tree, tearoff=False)
         self.context_menu.add_command(label=tr("移除佇列項目"), command=lambda: self.remove(confirm=True))
@@ -474,6 +484,10 @@ class TranslationQueue:
             return tr("全部頁面")
         return tr("第 {0}–{1} 頁").format(job.start_page, job.end_page if job.end_page is not None else tr("最後"))
 
+    def filter_jobs(self):
+        self.render()
+        self.update_controls()
+
     def render(self, refresh_counts=False):
         if refresh_counts:
             self.count_cache.clear()
@@ -490,17 +504,22 @@ class TranslationQueue:
         keys = {(j.path, j.start_page, j.end_page) for j in self.jobs}
         self.count_cache = {key: value for key, value in self.count_cache.items() if key in keys}
         single_root = len({job.path.parent.parent for job in self.jobs}) == 1
+        query = self.search.get().strip().replace("\\", "/").casefold()
+        visible = 0
         for index, job in enumerate(self.jobs, 1):
             item = str(id(job))
             if job.action == "translate" and job.status == "pending":
                 key = (job.path, job.start_page, job.end_page)
                 self.pending_file_counts[item] = self.count_cache.get(key)
+            if query and query not in str(job.path).replace("\\", "/").casefold():
+                continue
+            visible += 1
             root = "path:" + str(job.path.parent.parent)
             series = "series:" + str(job.path.parent)
             if not self.tree.exists(root):
-                self.tree.insert("", "end", iid=root, text=str(job.path.parent.parent), open=open_groups.get(root, single_root))
+                self.tree.insert("", "end", iid=root, text=str(job.path.parent.parent), open=bool(query) or open_groups.get(root, single_root))
             if not self.tree.exists(series):
-                self.tree.insert(root, "end", iid=series, text=job.path.parent.name, open=open_groups.get(series, False))
+                self.tree.insert(root, "end", iid=series, text=job.path.parent.name, open=bool(query) or open_groups.get(series, False))
             self.tree.insert(series, "end", iid=item, text=f"{index}. {job.path.name}",
                              values=(tr(FOLDER_KINDS[folder_kind(job.path.name)]), tr(ACTIONS[job.action]), self.page_range_text(job), tr(STATUSES[job.status]),
                                      error_info(job.status, job.error)[1]))
@@ -515,6 +534,7 @@ class TranslationQueue:
             self.tree.focus(focus)
         if view:
             self.tree.yview_moveto(view[0])
+        self.search_count.set(tr("顯示 {0} / {1} 項").format(visible, len(self.jobs)))
         self.update_summary()
         self.count_pages()
 
@@ -732,6 +752,8 @@ class TranslationQueue:
         if not targets:
             return
         items = [str(id(job)) for job in targets]
+        if any(not self.tree.exists(item) for item in items):
+            self.search.set("")
         self.count_generation += 1
         for job in targets:
             job.status, job.error = "pending", ""
@@ -983,15 +1005,19 @@ class TranslationQueue:
                 job = self.active_jobs[event[1]]
                 job.status, job.error = event[2], event[3]
                 changed = True
-                self.tree.set(str(id(job)), "status", tr(STATUSES[job.status]))
+                visible = self.tree.exists(str(id(job)))
+                if visible:
+                    self.tree.set(str(id(job)), "status", tr(STATUSES[job.status]))
                 code, reason = error_info(job.status, job.error)
                 if code:
                     logger.warning("queue_status path=%s error_code=%s reason=%s", job.path, code, reason)
-                self.tree.set(str(id(job)), "error_reason", reason)
+                if visible:
+                    self.tree.set(str(id(job)), "error_reason", reason)
                 self.update_summary()
                 self.update_controls()
                 if job.status == "running":
-                    self.tree.see(str(id(job)))
+                    if visible:
+                        self.tree.see(str(id(job)))
                     self.stage.configure(value=0)
                     self.stage.pack_forget()
                     self.reset_bt_progress()
