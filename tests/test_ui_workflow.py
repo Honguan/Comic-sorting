@@ -248,6 +248,30 @@ class WorkflowTests(unittest.TestCase):
         q.move(1, to_edge=True)
         self.assertEqual(q.jobs, [other] + before)
 
+    def test_queue_group_chapter_and_page_totals_include_completed_and_ranges(self):
+        q = self.app.translation_queue
+        first, second = self.chapter('Chapter 1'), self.chapter('Chapter 2')
+        for path in (first, second):
+            for number in range(1, 4):
+                (path / f'{number}.png').touch()
+        q.jobs = [Job(first, 'translate', 'done'), Job(first, 'export'),
+                  Job(second, 'translate', start_page=2, end_page=3)]
+        q.render()
+        self.wait_counts(q)
+        series = 'series:' + str(first.parent)
+        root = 'path:' + str(first.parent.parent)
+        for group in (series, root):
+            self.assertEqual(q.tree.set(group, 'kind'), '2 個章節')
+            self.assertEqual(q.tree.set(group, 'pages'), '5 頁')
+        self.assertEqual(q.tree.set(str(id(q.jobs[0])), 'pages'), '3 頁')
+        self.assertEqual(q.tree.set(str(id(q.jobs[2])), 'pages'), '2 頁（第 2–3 頁）')
+        q.search.set('Chapter 2')
+        self.assertEqual(q.tree.set(series, 'kind'), '1 個章節')
+        self.assertEqual(q.tree.set(series, 'pages'), '2 頁')
+        q.count_cache[(second, 2, 3)] = None
+        q.update_group_counts()
+        self.assertIn('無法計數', q.tree.set(series, 'pages'))
+
     def test_context_menus_copy_manga_names_without_paths_or_duplicates(self):
         q = self.app.translation_queue
         paths = [self.chapter('Chapter 1'), self.chapter('Chapter 2')]

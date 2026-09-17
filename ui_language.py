@@ -510,6 +510,8 @@ TRANSLATIONS.update({
     "移到最上": {"en": "Move to top", "ja": "最上部へ"},
     "移到最下": {"en": "Move to bottom", "ja": "最下部へ"},
     "取消選取": {"en": "Clear selection", "ja": "選択を解除"},
+    "{0} 頁": {"en": "{0} pages", "ja": "{0} ページ"},
+    "無法計數": {"en": "Unable to count", "ja": "計数できません"},
     "複製漫畫名稱": {"en": "Copy manga name", "ja": "漫画名をコピー"},
     "依編號加入佇列": {"en": "Add number range", "ja": "番号範囲を追加"},
     "依編號加入時請只選擇同一系列": {"en": "Select only one series when adding a number range", "ja": "番号範囲を追加する場合は同じシリーズだけを選択してください"},

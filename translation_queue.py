@@ -558,6 +558,7 @@ class TranslationQueue:
         if view:
             self.tree.yview_moveto(view[0])
         self.search_count.set(tr("顯示 {0} / {1} 項").format(visible, len(self.jobs)))
+        self.update_group_counts()
         self.update_summary()
         self.count_pages()
 
@@ -565,7 +566,7 @@ class TranslationQueue:
         if self.counting:
             return
         keys = {(j.path, j.start_page, j.end_page) for j in self.jobs
-                if j.action == "translate" and j.status == "pending"}
+                if j.action == "translate"}
         missing = keys.difference(self.count_cache)
         if not missing:
             return
@@ -599,8 +600,38 @@ class TranslationQueue:
             self.count_cache.update(results)
         self.pending_file_counts = {str(id(j)): self.count_cache.get((j.path, j.start_page, j.end_page))
                                     for j in self.jobs if j.action == "translate" and j.status == "pending"}
+        self.update_group_counts()
         self.update_summary()
         self.count_pages()
+
+    def update_group_counts(self):
+        groups = {}
+        for job in self.jobs:
+            item = str(id(job))
+            if not self.tree.exists(item):
+                continue
+            key = (job.path, job.start_page, job.end_page)
+            count = self.count_cache.get(key)
+            if job.action == "translate":
+                pages = tr("{0} 頁").format(f"{count:,}") if count is not None else tr("估算中") if key not in self.count_cache else tr("無法計數")
+                self.tree.set(item, "pages", pages if job.start_page == 1 and job.end_page is None
+                              else f"{pages}（{self.page_range_text(job)}）")
+            for group in ("path:" + str(job.path.parent.parent), "series:" + str(job.path.parent)):
+                paths, keys = groups.setdefault(group, (set(), set()))
+                paths.add(job.path)
+                if job.action == "translate":
+                    keys.add(key)
+        for group, (paths, keys) in groups.items():
+            self.tree.set(group, "kind", tr("{0} 個章節").format(len(paths)))
+            counts = [self.count_cache.get(key) for key in keys]
+            text = tr("{0} 頁").format(f"{sum(count for count in counts if count is not None):,}") if keys else "—"
+            calculating = sum(key not in self.count_cache for key in keys)
+            unknown = counts.count(None) - calculating
+            if calculating:
+                text += tr("（{0} 項計算中）").format(calculating)
+            if unknown:
+                text += tr("（{0} 項無法計數）").format(unknown)
+            self.tree.set(group, "pages", text)
 
     def update_summary(self):
         counts = [self.pending_file_counts.get(str(id(job))) for job in self.jobs
