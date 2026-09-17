@@ -126,6 +126,8 @@ class TranslationQueue:
         self.selection_details = tk.StringVar()
         self.selection_label = ttk.Label(tree_frame, textvariable=self.selection_details, anchor="w", justify="left", wraplength=700)
         self.selection_label.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+        self.clear_selection_button = ttk.Button(tree_frame, text=tr("取消選取"), command=self.clear_selection)
+        self.clear_selection_button.grid(row=3, column=0, sticky="w", pady=(2, 0))
         self.tree.bind("<Configure>", self.fit_columns)
         self.tree.bind("<Double-1>", self.show_details)
         self.tree.bind("<<TreeviewSelect>>", lambda _event: self.update_controls())
@@ -149,6 +151,9 @@ class TranslationQueue:
         self.context_menu.add_command(label=tr("複製完整路徑"), accelerator="Ctrl+C", command=copy_paths)
         self.start_button = self.button(row, tr("開始主佇列"), self.start)
         self.start_button.configure(style="Accent.TButton")
+        self.context_menu.add_command(label=tr("執行選取項目"), command=self.start)
+        self.run_menu_index = self.context_menu.index("end")
+        self.context_menu.add_command(label=tr("取消選取"), command=self.clear_selection)
         self.pause_button = ttk.Button(row, text=tr("佇列暫停"), command=self.request_pause)
         self.pause_button.pack(side="left", padx=2)
         self.stop_button = ttk.Button(row, text=tr("停止"), command=self.request_stop, width=0)
@@ -435,8 +440,10 @@ class TranslationQueue:
             control.configure(state="disabled" if busy else "normal")
         self.action_choice.configure(state="disabled" if busy else "readonly")
         resumable = self.running and self.pause_requested.is_set() and not self.stop.is_set()
-        self.start_button.configure(text=tr("繼續佇列") if resumable else tr("開始主佇列"),
-                                    state="normal" if resumable or (not busy and any(j.status == "pending" for j in self.jobs)) else "disabled")
+        self.start_button.configure(text=tr("繼續佇列") if resumable else
+                                    tr("執行選取項目") if self.tree.selection() else tr("開始主佇列"),
+                                    state="normal" if resumable or (not busy and self.start_targets()) else "disabled")
+        self.clear_selection_button.configure(state="normal" if self.tree.selection() else "disabled")
         self.pause_button.configure(
             state="normal" if self.running and not self.stop.is_set() and not self.pause_requested.is_set()
             and any(j.status == "pending" for j in self.active_jobs) else "disabled",
@@ -665,6 +672,8 @@ class TranslationQueue:
         for index, label in enumerate(("重新選取", "上移", "下移", "移到最上", "移到最下"), 1):
             self.context_menu.entryconfigure(index, state=self.selection_buttons[label].cget("state"))
         self.context_menu.entryconfigure(6, state=self.range_button.cget("state"))
+        self.context_menu.entryconfigure(self.run_menu_index, state="normal" if not self.running
+                                         and not self.app.manga_busy and self.start_targets() else "disabled")
         try:
             self.context_menu.tk_popup(event.x_root, event.y_root)
         finally:
@@ -833,7 +842,7 @@ class TranslationQueue:
         return dialog
 
     def confirm_cleanup(self):
-        needs_cleanup = self.cleanup.get() or any(j.action == "cleanup" and j.status == "pending" for j in self.jobs)
+        needs_cleanup = self.cleanup.get() or any(j.action == "cleanup" for j in self.active_jobs)
         return not needs_cleanup or messagebox.askyesno(
             tr("確認清理"), tr("佇列將清空指定路徑的 mask / inpainted 內容，無法復原。繼續？"))
 
@@ -841,8 +850,8 @@ class TranslationQueue:
         if not self.app.manga_busy:
             self.app.confirm_aggregate(translate_after=True)
 
-    def validate(self, translate=False):
-        pending = [job for job in self.jobs if job.status == "pending"]
+    def validate(self, translate=False, jobs=None):
+        pending = [job for job in (self.jobs if jobs is None else jobs) if job.status == "pending"]
         error_tab = self.app.queue_tab
         try:
             translating = translate or any(job.action == "translate" for job in pending)
@@ -875,6 +884,16 @@ class TranslationQueue:
         self.stop.set()
         self.update_controls()
 
+    def clear_selection(self):
+        self.tree.selection_remove(self.tree.selection())
+        self.update_controls()
+
+    def start_targets(self):
+        has_selection = bool(self.tree.selection())
+        selected = self.selected_job_ids()
+        return tuple(job for job in self.jobs if job.status == "pending"
+                     and (not has_selection or str(id(job)) in selected))
+
     def start(self, cleanup_confirmed=False):
         if self.running and self.pause_requested.is_set() and not self.stop.is_set():
             self.pause_requested.clear()
@@ -886,8 +905,8 @@ class TranslationQueue:
         if self.history_save_failed and not self.save_history(refresh=False):
             return
         self.render()
-        self.active_jobs = tuple(job for job in self.jobs if job.status == "pending")
-        if not self.active_jobs or not self.validate():
+        self.active_jobs = self.start_targets()
+        if not self.active_jobs or not self.validate(jobs=self.active_jobs):
             return
         if not cleanup_confirmed and not self.confirm_cleanup():
             return
@@ -925,7 +944,7 @@ class TranslationQueue:
         for job in self.jobs:
             if job.status in ("failed", "cancelled", "blocked"):
                 previous_failures.add(job.path)
-            elif job.status == "pending" and job.path in previous_failures:
+            elif id(job) in indices and job.path in previous_failures:
                 blocked_jobs.add(indices[id(job)])
         options = (self.settings(), self.app.komga_path.get(), self.app.skip_unchanged.get())
         threading.Thread(target=run_jobs, args=(self.active_jobs, *options, self.stop, self.events.put),

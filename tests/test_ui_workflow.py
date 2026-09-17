@@ -248,6 +248,46 @@ class WorkflowTests(unittest.TestCase):
         q.move(1, to_edge=True)
         self.assertEqual(q.jobs, [other] + before)
 
+    def test_start_uses_selected_scope_and_clear_restores_full_order(self):
+        q = self.app.translation_queue
+        paths = [self.chapter(f'Chapter {i}') for i in range(3)]
+        jobs = [Job(paths[0], 'cleanup'), Job(paths[1], 'cleanup'),
+                Job(paths[2], 'cleanup', 'done'),
+                Job(self.folder / 'Elsewhere' / 'Other' / 'Chapter 1', 'translate', 'failed'),
+                Job(self.folder / 'Elsewhere' / 'Other' / 'Chapter 1', 'translate')]
+        q.jobs = jobs
+        q.cleanup.set(False)
+        q.render()
+        q.tree.selection_set(str(id(jobs[0])))
+        q.update_controls()
+        self.assertEqual(q.start_button['text'], '執行選取項目')
+        self.assertEqual(q.start_targets(), (jobs[0],))
+        q.tree.selection_set('series:' + str(paths[0].parent))
+        self.assertEqual(q.start_targets(), tuple(jobs[:2]))
+        q.tree.selection_set('path:' + str(paths[0].parent.parent))
+        self.assertEqual(q.start_targets(), tuple(jobs[:2]))
+        with mock.patch('translation_queue.threading.Thread') as worker, \
+                mock.patch.object(q, 'command', side_effect=AssertionError('unselected translator must not validate')), \
+                mock.patch('translation_queue.messagebox.askyesno', return_value=True):
+            q.context_menu.invoke(q.run_menu_index)
+            self.assertEqual(worker.call_args.kwargs['args'][0], tuple(jobs[:2]))
+            self.assertEqual(worker.call_args.kwargs['kwargs']['blocked_jobs'], set())
+            self.assertEqual(len(q.history_run['jobs']), 2)
+            self.assertEqual(jobs[4].status, 'pending')
+            q.tree.selection_set(str(id(jobs[4])))
+            q.pause_requested.set()
+            q.start()
+            self.assertEqual(worker.call_count, 1)
+            self.assertEqual(q.active_jobs, tuple(jobs[:2]))
+        q.running = self.app.manga_busy = False
+        q.tree.selection_set(str(id(jobs[2])))
+        q.update_controls()
+        self.assertTrue(q.start_button.instate(['disabled']))
+        q.clear_selection_button.invoke()
+        self.assertEqual(q.tree.selection(), ())
+        self.assertEqual(q.start_button['text'], '開始主佇列')
+        self.assertEqual(q.start_targets(), (jobs[0], jobs[1], jobs[4]))
+
     def test_queue_actions_follow_selection_and_running_state(self):
         q = self.app.translation_queue
         q.jobs = [Job(self.chapter('Chapter 1'), 'translate', 'failed', 'error'),
@@ -503,6 +543,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual((q.jobs[0].status, q.jobs[0].error), ("pending", ""))
         q.jobs[0].status = "done"
         self.app.komga_path.set(str(self.folder / "Komga"))
+        q.clear_selection()
         q.start()
         deadline = time.monotonic() + 5
         while q.running and time.monotonic() < deadline:
@@ -762,7 +803,7 @@ class WorkflowTests(unittest.TestCase):
                 mock.patch.object(q, "confirm_cleanup", return_value=False) as cleanup, \
                 mock.patch("translation_queue.threading.Thread") as worker:
             q.start()
-            validate.assert_called_once_with()
+            validate.assert_called_once_with(jobs=q.active_jobs)
             cleanup.assert_called_once_with()
             worker.assert_not_called()
 

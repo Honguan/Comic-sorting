@@ -509,6 +509,8 @@ TRANSLATIONS.update({
     "下移": {"en": "Move down", "ja": "下へ"},
     "移到最上": {"en": "Move to top", "ja": "最上部へ"},
     "移到最下": {"en": "Move to bottom", "ja": "最下部へ"},
+    "取消選取": {"en": "Clear selection", "ja": "選択を解除"},
+    "執行選取項目": {"en": "Run selected", "ja": "選択項目を実行"},
     "重新選取": {"en": "Requeue", "ja": "再登録"},
     "清除已完成": {"en": "Clear completed", "ja": "完了項目を除去"},
     "工作詳情": {"en": "Job details", "ja": "処理の詳細"},
