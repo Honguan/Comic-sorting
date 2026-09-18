@@ -9,6 +9,14 @@ def tr(text):
     return TRANSLATIONS.get(text, {}).get(_language, text)
 
 TRANSLATIONS = {
+    '漫畫優先順序': {'en': 'Manga priority', 'ja': '漫画の優先順位'},
+    '翻譯章節範圍': {'en': 'Translation chapter range', 'ja': '翻訳する章の範囲'},
+    '拖曳調整漫畫順序；取消不會開始。': {'en': 'Drag to reorder manga. Cancel leaves the batch unstarted.', 'ja': 'ドラッグで漫画を並べ替えます。キャンセルすると開始しません。'},
+    '選擇單一章節起訖；整合章節仍照原佇列執行。': {'en': 'Choose a range of single chapters. Merged chapters keep their queue order.', 'ja': '単一章の範囲を選択します。統合済みの章は元の順序で実行します。'},
+    '漫畫／章節': {'en': 'Manga / chapter', 'ja': '漫画／章'},
+    '完整路徑': {'en': 'Full path', 'ja': 'フルパス'},
+    '確認開始': {'en': 'Confirm start', 'ja': '開始を確認'},
+    '請輸入有效的章節起訖編號。': {'en': 'Enter a valid start and end chapter index.', 'ja': '有効な開始・終了番号を入力してください。'},
     "整合完成": {"en": "Merge complete", "ja": "統合完了"},
     '（{0} 項計算中）': {'en': ' ({0} counting)', 'ja': '（{0} 件を計算中）'},
     '路徑已變更，請先成功重新掃描後再操作。': {'en': 'The path has changed. Rescan successfully before continuing.', 'ja': 'パスが変更されています。再スキャンが成功してから操作してください。'},

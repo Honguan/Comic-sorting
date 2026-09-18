@@ -394,6 +394,88 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(q.search_count.get(), '顯示 3 / 3 項')
         self.assertEqual(q.tree.set(str(id(other)), 'status'), '執行中')
 
+    def test_selected_translation_range_and_manga_priority(self):
+        q = self.app.translation_queue
+        a = self.folder / 'A'
+        b = self.folder / 'B'
+        jobs = [Job(a / 'Chapter 1', 'translate'), Job(b / 'Chapter 1', 'translate'),
+                Job(a / 'Chapter 2', 'translate'), Job(a / 'Chapter 1-10', 'translate'),
+                Job(a / 'Chapter 3', 'translate', 'done'), Job(a / 'Chapter 1', 'cleanup')]
+        q.jobs = jobs
+        q.render()
+        with mock.patch('translation_queue.QueueStartDialog') as dialog:
+            q.tree.selection_set('series:' + str(a))
+            targets = q.start_targets()
+            dialog.return_value.result = [jobs[2].path]
+            self.assertEqual(q.configure_start(targets), (jobs[2], jobs[3]))
+            self.assertEqual(dialog.call_args.args[1], [jobs[0].path, jobs[2].path])
+            dialog.return_value.result = None
+            self.assertEqual(q.configure_start(targets), ())
+            with mock.patch('translation_queue.threading.Thread') as worker:
+                q.start()
+                worker.assert_not_called()
+                self.assertFalse(q.running)
+                self.assertIsNone(q.history_run)
+            q.tree.selection_set(str(id(jobs[0])))
+            dialog.reset_mock()
+            self.assertEqual(q.configure_start(q.start_targets()), (jobs[0],))
+            dialog.assert_not_called()
+            q.tree.selection_set(('series:' + str(a), 'series:' + str(b)))
+            targets = q.start_targets()
+            dialog.return_value.result = [a, b]
+            self.assertEqual(q.configure_start(targets), targets)  # Preserve even interleaved defaults.
+            dialog.return_value.result = [b, a]
+            self.assertEqual(q.configure_start(targets), (jobs[1], jobs[0], jobs[2], jobs[3], jobs[5]))
+            self.assertTrue(dialog.call_args.kwargs['reorder'])
+            with mock.patch.object(q, 'validate', return_value=True), \
+                    mock.patch.object(q, 'confirm_cleanup', return_value=True), \
+                    mock.patch('translation_queue.threading.Thread') as worker:
+                q.start()
+                self.assertEqual(worker.call_args.kwargs['args'][0], (jobs[1], jobs[0], jobs[2], jobs[3], jobs[5]))
+                self.assertEqual(q.history_run['jobs'][0]['path'], str(jobs[1].path))
+            q.running = self.app.manga_busy = False
+            q.tree.selection_remove(q.tree.selection())
+            dialog.reset_mock()
+            self.assertEqual(q.configure_start(q.start_targets()), targets)
+            dialog.assert_not_called()
+            q.jobs = [jobs[0], jobs[3]]  # One single chapter plus a merged chapter needs no question.
+            q.render()
+            q.tree.selection_set('series:' + str(a))
+            self.assertEqual(q.configure_start(q.start_targets()), tuple(q.jobs))
+            dialog.assert_not_called()
+
+    def test_start_dialog_range_validation_drag_and_cancel(self):
+        from queue_start_dialog import QueueStartDialog
+        from types import SimpleNamespace
+        paths = [self.folder / name for name in ('A', 'B', 'C')]
+        with mock.patch.object(QueueStartDialog, 'wait_window'):
+            dialog = QueueStartDialog(self.root, paths)
+        self.assertEqual((dialog.first.get(), dialog.last.get()), ('1', '3'))
+        dialog.first.set('3')
+        dialog.last.set('1')
+        with mock.patch('queue_start_dialog.messagebox.showerror'):
+            self.assertFalse(dialog.validate())
+        dialog.first.set('2')
+        dialog.last.set('3')
+        self.assertTrue(dialog.validate())
+        dialog.apply()
+        self.assertEqual(dialog.result, paths[1:])
+        dialog.destroy()
+        with mock.patch.object(QueueStartDialog, 'wait_window'):
+            dialog = QueueStartDialog(self.root, paths, reorder=True)
+        dialog.update_idletasks()
+        first_y = dialog.list.bbox('0')[1] + 3
+        last_y = dialog.list.bbox('2')[1] + 3
+        dialog.begin_drag(SimpleNamespace(y=first_y))
+        dialog.drag(SimpleNamespace(y=last_y))
+        dialog.apply()
+        self.assertEqual(dialog.result, [paths[1], paths[2], paths[0]])
+        dialog.destroy()
+        with mock.patch.object(QueueStartDialog, 'wait_window'):
+            dialog = QueueStartDialog(self.root, paths, reorder=True)
+        dialog.cancel()
+        self.assertIsNone(dialog.result)
+
     def test_start_uses_selected_scope_and_clear_restores_full_order(self):
         q = self.app.translation_queue
         paths = [self.chapter(f'Chapter {i}') for i in range(3)]

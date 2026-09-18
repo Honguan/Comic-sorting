@@ -20,6 +20,7 @@ from comic_core import FOLDER_KINDS, folder_kind, image_files
 from queue_history import HistoryWindow, elapsed_text, save_run, usage_text, usage_columns
 from queue_errors import error_details, error_info
 from ntfy_notifications import NtfyNotifications
+from queue_start_dialog import QueueStartDialog
 
 
 ACTIONS = {"translate": "翻譯", "export": "匯出", "cleanup": "清理"}
@@ -1020,6 +1021,28 @@ class TranslationQueue:
         return tuple(job for job in self.jobs if job.status == "pending"
                      and (not has_selection or str(id(job)) in selected))
 
+    def configure_start(self, jobs):
+        if not self.tree.selection():
+            return jobs
+        translations = [job for job in jobs if job.action == "translate"]
+        series = list(dict.fromkeys(job.path.parent for job in translations))
+        if len(series) > 1:
+            order = QueueStartDialog(self.app.root, series, reorder=True).result
+            if order is None:
+                return ()
+            if order != series:
+                ranks = {path: index for index, path in enumerate(order)}
+                return tuple(sorted(jobs, key=lambda job: ranks.get(job.path.parent, len(ranks))))
+        elif len(series) == 1 and any(item.startswith(("series:", "path:")) for item in self.tree.selection()):
+            singles = list(dict.fromkeys(job.path for job in translations if folder_kind(job.path.name) != "merged"))
+            if len(singles) > 1:
+                chosen = QueueStartDialog(self.app.root, singles).result
+                if chosen is None:
+                    return ()
+                excluded = set(singles).difference(chosen)
+                return tuple(job for job in jobs if job.path not in excluded)
+        return jobs
+
     def start(self, cleanup_confirmed=False):
         if self.running and self.pause_requested.is_set() and not self.stop.is_set():
             self.pause_requested.clear()
@@ -1032,6 +1055,7 @@ class TranslationQueue:
             return
         self.render()
         self.active_jobs = self.start_targets()
+        self.active_jobs = self.configure_start(self.active_jobs)
         if not self.active_jobs or not self.validate(jobs=self.active_jobs):
             return
         if not cleanup_confirmed and not self.confirm_cleanup():

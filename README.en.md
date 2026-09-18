@@ -34,6 +34,7 @@ The EXE includes this tool's dependencies; no separate Python or archive utility
 | Names and paths | Export all manga names, or use the context menu to copy manga names or full paths. |
 
 - **Search only filters the display.** Select results to run only those jobs; starting without a selection still runs all pending jobs.
+- Starting one selected manga with multiple pending single chapters asks for a chapter range, defaulting to all; merged chapters remain included. Selecting chapter rows directly skips this question. Multiple manga instead show a draggable priority list with up/down controls. The default preserves queue order; changes apply only to this batch, and Cancel does not start it.
 - Adding the same path and action again resets the existing job to pending. Requeuing does not start work automatically. Adding and reordering jobs are disabled while running or paused.
 - Lists support Ctrl/Shift selection, Ctrl+A to select all, Esc to clear selection, and Ctrl+C to copy paths. Selecting a group while searching includes only visible matches.
 - Click manga-list column headers to sort. Maximize the window or drag the divider to resize the upper and lower areas.
