@@ -12,6 +12,125 @@ from queue_worker import Job, run_jobs
 
 
 class PageRangeTests(unittest.TestCase):
+    def continuous_native(self):
+        package = Path(self.settings['bt_path']) / 'ballontranslator'
+        launch = package / 'launch.py'
+        source = launch.read_text(encoding='utf-8')
+        source = source.replace('    MainWindow(args.exec_dirs[0]).on_run_imgtrans()',
+                                '    MainWindow(args.exec_dirs[0]).run_batch(args.exec_dirs)')
+        source = source.replace("    print('finished translating all dirs')\n    input()\n", '')
+        launch.write_text(source, encoding='utf-8')
+        main = package / 'ui/mainwindow.py'
+        source = main.read_text(encoding='utf-8').replace('def on_run_imgtrans(', 'def translate_pages(')
+        source += '''
+    def on_run_imgtrans(self, pages_to_process=None):
+        import os, time
+        with (self.path.parent / 'pids.txt').open('a') as log:
+            log.write(str(os.getpid()) + '\\n')
+        if self.path.name == 'Fail':
+            print('[INFO] module_manager:run:1 - Image translation pipeline stopped.', flush=True)
+            time.sleep(30)
+            return
+        self.translate_pages(pages_to_process)
+        print('[INFO] module_manager:_finish_llm_usage_run:1 - LLM run usage: requests=1, total_tokens=10, missing_usage_requests=0, unpriced_requests=0, estimated_cost_usd=0.01', flush=True)
+        self.run_next_dir()
+    def run_batch(self, paths):
+        assert isinstance(paths, list)
+        self.exec_dirs = list(paths)
+        self.imsave_thread = SimpleNamespace(isRunning=lambda: False)
+        self.app = SimpleNamespace(quit=lambda: None)
+        self.run_next_dir()
+    def run_next_dir(self):
+        if self.exec_dirs:
+            self.path = Path(self.exec_dirs.pop(0))
+            self.imgtrans_proj = SimpleNamespace(pages={p.name: [] for p in self.path.glob('*.png')})
+            self.on_run_imgtrans()
+'''
+        main.write_text(source, encoding='utf-8')
+
+    def test_continuous_process_keeps_pages_usage_and_pause_boundaries(self):
+        import subprocess
+        self.continuous_native()
+        other = self.chapter.parent / 'Chapter 2, Unicode 漫畫'
+        other.mkdir()
+        (other / '1.png').write_bytes(b'source')
+        jobs = [Job(self.chapter, 'translate', start_page=2, end_page=3), Job(other, 'translate')]
+        pause, paused, stop = threading.Event(), threading.Event(), threading.Event()
+        events = []
+        def emit(event):
+            events.append(event)
+            if event[:3] == ('status', 0, 'done'):
+                pause.set()
+            if event[0] == 'paused':
+                paused.set()
+        processes = []
+        original = subprocess.Popen
+        def spawn(*args, **kwargs):
+            process = original(*args, **kwargs)
+            processes.append(process)
+            return process
+        with mock.patch('queue_worker.subprocess.Popen', side_effect=spawn):
+            worker = threading.Thread(target=run_jobs, args=(jobs, self.settings, str(self.output), True, stop, emit),
+                                      kwargs={'pause': pause})
+            worker.start()
+            try:
+                self.assertTrue(paused.wait(8), events)
+                self.assertEqual(len(processes), 1)
+                self.assertIsNone(processes[0].poll())
+                self.assertFalse((other / 'result').exists())
+                pause.clear()
+                worker.join(8)
+                self.assertFalse(worker.is_alive())
+            finally:
+                stop.set()
+                pause.clear()
+                worker.join(8)
+        self.assertEqual(len(processes), 1)
+        self.assertIsNotNone(processes[0].poll())
+        self.assertEqual([e[2] for e in events if e[0] == 'status'], ['running', 'done', 'running', 'done'])
+        self.assertEqual({p.name for p in (self.chapter / 'result').iterdir()}, {'2.png', '3.png'})
+        self.assertEqual({p.name for p in (other / 'result').iterdir()}, {'1.png'})
+        self.assertEqual([(e[1], e[2]['total_tokens']) for e in events if e[0] == 'usage'], [(0, 10), (1, 10)])
+        self.assertEqual(len(set((self.chapter.parent / 'pids.txt').read_text().splitlines())), 1)
+
+    def test_continuous_failure_restarts_for_next_folder(self):
+        self.continuous_native()
+        failed = self.chapter.parent / 'Fail'
+        failed.mkdir()
+        (failed / '1.png').write_bytes(b'source')
+        events = []
+        run_jobs([Job(failed, 'translate'), Job(self.chapter, 'translate')], self.settings,
+                 str(self.output), True, threading.Event(), events.append)
+        self.assertEqual([e[2] for e in events if e[0] == 'status'], ['running', 'failed', 'running', 'done'])
+        self.assertEqual(len(set((self.chapter.parent / 'pids.txt').read_text().splitlines())), 2)
+
+    def test_stop_while_session_paused_closes_process_and_keeps_next_job_pending(self):
+        import subprocess
+        self.continuous_native()
+        other = self.chapter.parent / 'Chapter 2'
+        other.mkdir()
+        (other / '1.png').write_bytes(b'source')
+        pause, stop = threading.Event(), threading.Event()
+        events, processes = [], []
+        def emit(event):
+            events.append(event)
+            if event[:3] == ('status', 0, 'done'):
+                pause.set()
+            if event[0] == 'paused':
+                stop.set()
+        original = subprocess.Popen
+        def spawn(*args, **kwargs):
+            process = original(*args, **kwargs)
+            processes.append(process)
+            return process
+        with mock.patch('queue_worker.subprocess.Popen', side_effect=spawn):
+            run_jobs([Job(self.chapter, 'translate'), Job(other, 'translate')], self.settings,
+                     str(self.output), True, stop, emit, pause=pause)
+        self.assertEqual(len(processes), 1)
+        self.assertIsNotNone(processes[0].poll())
+        self.assertFalse(any(event[0] == 'status' and event[1] == 1 for event in events))
+        self.assertFalse((other / 'result').exists())
+
     def test_selected_pages_do_not_import_bundled_python_modules(self):
         bundle = self.root / 'bundle'
         bundle.mkdir()

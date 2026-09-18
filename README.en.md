@@ -41,6 +41,7 @@ The EXE includes this tool's dependencies; no separate Python or archive utility
 
 ### Translation, export, and records
 
+- Multi-chapter translation reuses one BallonsTranslator process. Each chapter finishes result checks, export, cleanup, and saving before the next is submitted. Pausing retains models and GPU memory; stopping or finishing the batch closes the process. After a translation failure, the next chapter gets a new process. BallonsTranslator source files are unchanged; its per-request Codex connection behavior is unchanged.
 - The settings editor exposes run options, current module parameters, and translation fonts. Hidden fields are preserved; saving validates, backs up, and checks for external changes.
 - Page ranges require BallonsTranslator support for native page selection. Completing a range does not mean the whole chapter is complete; incomplete chapter results skip automatic export and cleanup. Range jobs require a separate export opt-in.
 - CBZ files use `result` images and are saved as `<Komga folder>/<series>/<chapter>.cbz`. Export checks completeness and can skip unchanged content incrementally.

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from datetime import datetime
 import os
+import json
 from pathlib import Path
 import re
 import subprocess
@@ -114,7 +115,106 @@ def translator_command(installation, config, python_path="", chapter=None, page_
     return command, root, env
 
 
-def run_translation(command, root, env, stop, progress, log_context="", usage=None, timing=None):
+class TranslationSession:
+    """Own one translator process and its descendants for a batch."""
+    def __init__(self, stop):
+        self.stop = stop
+        self.process = None
+        self.process_job = None
+        self.watcher = None
+        self.finished = threading.Event()
+        self.fatal = threading.Event()
+
+    def open(self, command, root, env, request, log_context):
+        if self.stop.is_set():
+            raise RuntimeError(tr("已停止"))
+        if self.process is not None and self.process.poll() is None:
+            self.process.stdin.write(json.dumps(request, ensure_ascii=False) + "\n")
+            self.process.stdin.flush()
+            logger.info("[%s] translator_reuse pid=%s", log_context, self.process.pid)
+            return self.process
+        self.close()
+        self.finished.clear()
+        self.fatal.clear()
+        logger.info("[%s] translator_start command=%s cwd=%s", log_context, subprocess.list2cmdline(command), root)
+        process = self.process = subprocess.Popen(
+            command, cwd=root, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        logger.info("[%s] translator_pid=%s", log_context, process.pid)
+        try:
+            if os.name == "nt":
+                import win32api
+                import win32con
+                import win32job
+                self.process_job = win32job.CreateJobObject(None, "")
+                limits = win32job.QueryInformationJobObject(self.process_job, win32job.JobObjectExtendedLimitInformation)
+                limits['BasicLimitInformation']['LimitFlags'] |= win32job.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+                win32job.SetInformationJobObject(self.process_job, win32job.JobObjectExtendedLimitInformation, limits)
+                handle = win32api.OpenProcess(win32con.PROCESS_SET_QUOTA | win32con.PROCESS_TERMINATE, False, process.pid)
+                try:
+                    win32job.AssignProcessToJobObject(self.process_job, handle)
+                finally:
+                    handle.Close()
+            self.watcher = threading.Thread(target=self.watch, daemon=True)
+            self.watcher.start()
+        except BaseException:
+            self.close()
+            raise
+        return process
+
+    def terminate(self):
+        process = self.process
+        if process is None:
+            return
+        try:
+            if self.process_job is not None:
+                import win32job
+                win32job.TerminateJobObject(self.process_job, 1)
+            elif process.poll() is None:
+                process.terminate()
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+        except OSError:
+            pass  # The child can exit between poll and terminate.
+
+    def watch(self):
+        while not self.finished.wait(.2):
+            if self.stop.is_set() or self.fatal.is_set() or self.process.poll() is not None:
+                self.terminate()
+                return
+
+    def close(self, graceful=False):
+        if self.process is None:
+            return
+        try:
+            if graceful and not self.stop.is_set() and self.process.poll() is None:
+                try:
+                    self.process.stdin.write("exit\n")
+                    self.process.stdin.flush()
+                    self.process.wait(timeout=5)
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
+        finally:
+            self.finished.set()
+            self.terminate()
+            if self.watcher is not None:
+                self.watcher.join()
+                self.watcher = None
+            try:
+                self.process.stdin.close()
+            except OSError:
+                pass  # The child may already have closed its input pipe.
+            self.process.stdout.close()
+            if self.process_job is not None:
+                self.process_job.Close()
+                self.process_job = None
+            self.process = None
+
+
+def run_translation(command, root, env, stop, progress, log_context="", usage=None, timing=None, *, session=None, request=None):
     completed = False
     failures = deque(maxlen=5)
     fatal_count = 0
@@ -122,63 +222,22 @@ def run_translation(command, root, env, stop, progress, log_context="", usage=No
     recent = deque(maxlen=20)
     stages = {}
     ansi = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\))")
-    logger.info("[%s] translator_start command=%s cwd=%s", log_context, subprocess.list2cmdline(command), root)
-    process = subprocess.Popen(command, cwd=root, env=env, stdin=subprocess.PIPE,
-                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                               text=True, encoding="utf-8", errors="replace",
-                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    logger.info("[%s] translator_pid=%s", log_context, process.pid)
-    process_job = None
-    if os.name == "nt":
-        import win32api
-        import win32con
-        import win32job
-        try:
-            process_job = win32job.CreateJobObject(None, "")
-            limits = win32job.QueryInformationJobObject(process_job, win32job.JobObjectExtendedLimitInformation)
-            limits['BasicLimitInformation']['LimitFlags'] |= win32job.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-            win32job.SetInformationJobObject(process_job, win32job.JobObjectExtendedLimitInformation, limits)
-            handle = win32api.OpenProcess(win32con.PROCESS_SET_QUOTA | win32con.PROCESS_TERMINATE, False, process.pid)
-            try:
-                win32job.AssignProcessToJobObject(process_job, handle)
-            finally:
-                handle.Close()
-        except Exception:
-            process.kill()
-            process.wait()
-            process.stdin.close()
-            process.stdout.close()
-            if process_job is not None:
-                process_job.Close()
-            raise
-    finished = threading.Event()
-    fatal = threading.Event()
-
-    def cancel():
-        while not finished.wait(.2):
-            if stop.is_set() or fatal.is_set() or process.poll() is not None:
-                try:
-                    if process_job is not None:
-                        win32job.TerminateJobObject(process_job, 1)
-                    elif process.poll() is None:
-                        process.terminate()
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                except OSError:
-                    pass  # The process may exit between poll() and terminate().
-                return
-
-    watcher = threading.Thread(target=cancel, daemon=True)
-    watcher.start()
+    owned = session is None
+    session = session or TranslationSession(stop)
     try:
-        try:
-            process.stdin.write("exit\n")
-            process.stdin.flush()
-        except (BrokenPipeError, OSError):
-            pass  # Read startup diagnostics even if the child already exited.
+        process = session.open(command, root, env, request, log_context)
+        if owned:
+            try:
+                process.stdin.write("exit\n")
+                process.stdin.flush()
+            except (BrokenPipeError, OSError):
+                pass  # Read startup diagnostics even if the child already exited.
+        boundary = False
         for line in process.stdout:
             line = redact(ansi.sub("", line).rstrip())
+            if request is not None and line == "COMIC_SORTING_DONE:" + request["token"]:
+                boundary = True
+                break
             if line:
                 logger.info("[%s] BT %s", log_context, line)
             recent.append(line)
@@ -197,7 +256,7 @@ def run_translation(command, root, env, stop, progress, log_context="", usage=No
                 fatal_count += 1
                 failures.append(line)
                 if "Image translation pipeline stopped" in diagnostic:
-                    fatal.set()
+                    session.fatal.set()
             stage_progress = parse_bt_progress(line)
             if stage_progress:
                 stages[stage_progress[0]] = stage_progress[1]
@@ -210,15 +269,16 @@ def run_translation(command, root, env, stop, progress, log_context="", usage=No
                         for part in parts:
                             seconds = seconds * 60 + part
                         timing(stage_progress[0], seconds)
-        code = process.wait()
-        logger.info("[%s] translator_exit=%s completed=%s fatal_errors=%s retry_diagnostics=%s stopped=%s",
-                    log_context, code, completed, fatal_count, retries, stop.is_set())
+        code = 0 if boundary else process.wait()
+        logger.info("[%s] translator_%s=%s completed=%s fatal_errors=%s retry_diagnostics=%s stopped=%s",
+                    log_context, "boundary" if boundary else "exit", code, completed, fatal_count, retries, stop.is_set())
         if stop.is_set():
             raise RuntimeError(tr("已停止；未執行此項目的後續動作"))
-        if fatal.is_set():
+        if session.fatal.is_set():
             raise RuntimeError("\n".join(failures) + tr("；紀錄：{0}").format(log_path()))
-        if code or not completed or failures or any(value < 100 for value in stages.values()):
-            finished_with_anomalies = completed and stages and all(value == 100 for value in stages.values())
+        if code or not completed or (request is not None and not boundary) or failures or any(value < 100 for value in stages.values()):
+            finished_with_anomalies = (completed and stages and all(value == 100 for value in stages.values())
+                                       and (request is None or boundary))
             detail = (tr("流程已完成但發現異常（exit={0}）") if finished_with_anomalies else
                       tr("BallonsTranslator 未成功完成（exit={0}）；請查看其 logs")).format(code)
             detail += tr("；紀錄：{0}").format(log_path())
@@ -231,25 +291,12 @@ def run_translation(command, root, env, stop, progress, log_context="", usage=No
                 logger.warning("[%s] completed_with_anomalies %s", log_context, detail)
                 return detail
             raise RuntimeError(detail)
+    except BaseException:
+        session.close()
+        raise
     finally:
-        finished.set()
-        try:
-            if process.poll() is None:
-                process.terminate()
-                try:
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait()
-        finally:
-            try:
-                process.stdin.close()
-            except OSError:
-                pass
-            process.stdout.close()
-            watcher.join()
-            if process_job is not None:
-                process_job.Close()
+        if owned:
+            session.close()
 
 
 def run_jobs(jobs, settings, output, skip, stop, emit, *, pause=None, checkpoint=None, blocked_jobs=()):
@@ -262,6 +309,7 @@ def run_jobs(jobs, settings, output, skip, stop, emit, *, pause=None, checkpoint
             raise RuntimeError(tr("已停止；未執行此項目的後續動作"))
         emit(("stage", "匯出", int(count * 100 / total)))
 
+    session = TranslationSession(stop) if sum(job.action == "translate" for job in jobs) > 1 else None
     failed_paths = set()
     run_id = uuid.uuid4().hex[:10]
     logger.info("[%s] queue_start jobs=%s export=%s cleanup=%s", run_id, len(jobs),
@@ -323,15 +371,22 @@ def run_jobs(jobs, settings, output, skip, stop, emit, *, pause=None, checkpoint
                                 job.start_page, job.end_page or len(sources), len(selected), len(sources))
                     with tempfile.TemporaryDirectory(prefix="comic-sorting-pages-") as temporary:
                         page_manifest = None
+                        request = None
                         if len(selected) != len(sources):
                             page_manifest = Path(temporary) / "pages.json"
                             save_json(page_manifest, [p.name for p in selected])
+                        if session is not None:
+                            request = dict(path=str(path), pages=[p.name for p in selected] if len(selected) != len(sources) else None,
+                                           token=uuid.uuid4().hex)
+                            page_manifest = Path(temporary) / "session.json"
+                            save_json(page_manifest, request)
                         command_options = {"page_manifest": page_manifest} if page_manifest else {}
+                        session_options = dict(session=session, request=request) if session is not None else {}
                         diagnostic = run_translation(*translator_command(settings["bt_path"], settings["bt_config"],
                                                             settings.get("bt_python", ""), path, **command_options), stop,
                                         lambda *values: emit(("bt_progress", *values)), log_context=job_id,
                                         usage=lambda values: emit(("usage", index, values)),
-                                        timing=lambda name, seconds: emit(("stage_time", index, name, seconds)))
+                                        timing=lambda name, seconds: emit(("stage_time", index, name, seconds)), **session_options)
                         if isinstance(diagnostic, str):
                             completion_note = diagnostic
                     status, translated = translation_status(path)
@@ -374,6 +429,8 @@ def run_jobs(jobs, settings, output, skip, stop, emit, *, pause=None, checkpoint
                     emit(("result", result_path))
                 logger.info("[%s] job_done", job_id)
             except Exception as error:
+                if action == "translate" and session is not None:
+                    session.close()
                 status = "cancelled" if stop.is_set() else "failed"
                 code, reason = error_info(status, str(error))
                 logger.exception("[%s] job_%s action=%s path=%s error_code=%s reason=%s", job_id,
@@ -386,6 +443,8 @@ def run_jobs(jobs, settings, output, skip, stop, emit, *, pause=None, checkpoint
             if checkpoint is not None and not checkpoint():
                 break
     finally:
+        if session is not None:
+            session.close(graceful=True)
         logger.info("[%s] queue_end stopped=%s failed_paths=%s", run_id, stop.is_set(), len(failed_paths))
         emit(("run_time", run_timestamp, datetime.now().astimezone().isoformat(timespec='seconds'),
               time.monotonic() - run_started - paused_seconds))
