@@ -1,0 +1,82 @@
+<div align="center">
+  <img src="assets/comic-sorting.png" width="120" alt="Comic Sorting">
+  <h1>Comic Sorting</h1>
+  <p>A Windows tool for merging manga chapters, queuing BallonsTranslator jobs, and exporting CBZ files for Komga.</p>
+</div>
+
+[繁體中文](README.md) | **English**
+
+## Install and get started
+
+1. Download the Windows x64 EXE from [GitHub Releases](https://github.com/Honguan/Comic-sorting/releases/latest), place it in a writable folder, and launch it.
+2. Choose your manga root folder and rescan to load series and chapters.
+3. For translation, configure a separately installed BallonsTranslator and its `config/config.json` in Settings. Leave Python blank to use that installation's bundled environment or `.venv`.
+4. For CBZ export, set the output folder in the Komga export tab.
+5. Select chapters and an action, add them to the queue, then start.
+
+The EXE includes this tool's dependencies; no separate Python or archive utility is needed. Install BallonsTranslator, its models, and translation services separately. The interface supports Traditional Chinese, English, and Japanese; restart after changing languages.
+
+## Common operations
+
+| Operation | Behavior |
+|---|---|
+| Merge chapters | Select chapters and a range within one series. Already merged folders are skipped. |
+| Add to queue | Choose translation, export, or cleanup, then add selected items or a specific path. Double-clicking a chapter in the upper list also adds it. |
+| Add by number range | Uses list start/end indices; a blank end means the last item. Adds jobs without merging or starting them. |
+| Merge and queue | Adds the merged output as a pending translation job. Start it manually. |
+| Start | With a selection: runs pending jobs within the selected chapters or groups. Without a selection: runs all pending jobs in queue order. |
+| Reorder | Move up, down, to the top, or to the bottom. Selected jobs retain their relative order. |
+| Pause / resume | Finishes the current folder and its follow-up export/cleanup, then pauses. Resume continues the same batch. |
+| Stop | Interrupts current processing and keeps later pending jobs. Restarting the app does not automatically resume work. |
+| Requeue | With a selection: resets failed, warning, stopped, and blocked jobs in that scope. Without a selection: resets all failed/warning jobs. A completed job can only be requeued when its individual row is selected alone. |
+| Translation pages | Select one translation job and set an inclusive page range. Pages start at 1 and follow natural image-filename order. |
+| Search and view | Search manga names or paths. Groups show single/merged chapter counts and translation page counts. Expand the queue for more space. |
+| Names and paths | Export all manga names, or use the context menu to copy manga names or full paths. |
+
+- **Search only filters the display.** Select results to run only those jobs; starting without a selection still runs all pending jobs.
+- Adding the same path and action again resets the existing job to pending. Requeuing does not start work automatically. Adding and reordering jobs are disabled while running or paused.
+- Lists support Ctrl/Shift selection, Ctrl+A to select all, Esc to clear selection, and Ctrl+C to copy paths. Selecting a group while searching includes only visible matches.
+- Click manga-list column headers to sort. Maximize the window or drag the divider to resize the upper and lower areas.
+
+### Translation, export, and records
+
+- The settings editor exposes run options, current module parameters, and translation fonts. Hidden fields are preserved; saving validates, backs up, and checks for external changes.
+- Page ranges require BallonsTranslator support for native page selection. Completing a range does not mean the whole chapter is complete; incomplete chapter results skip automatic export and cleanup. Range jobs require a separate export opt-in.
+- CBZ files use `result` images and are saved as `<Komga folder>/<series>/<chapter>.cbz`. Export checks completeness and can skip unchanged content incrementally.
+- Stage displays include progress, remaining time, and average seconds per page. Usage and history use structured fields with K/M/B token counts. Costs are estimates of reported usage, **not actual bills**; missing and incomplete data are marked.
+- Enable Windows and ntfy separately in Notifications. Notification failures do not stop jobs. Server acceptance does not guarantee delivery to your phone.
+
+## Data and precautions
+
+| Data | Location |
+|---|---|
+| Settings, queue, and preferences | `comic-sorting.settings.json` beside the EXE |
+| History | `comic-sorting.history.sqlite3` beside the EXE |
+| Logs | `logs/comic-sorting.log` beside the EXE |
+| Komga incremental state | `<Komga folder>/.comic-sorting-state.json` |
+
+- Keep settings and history when moving the app. **Use one app instance at a time** to avoid overwriting shared settings or export state.
+- Removing queue items keeps manga files. Deleting folders through the upper list's context menu moves them to the Windows Recycle Bin.
+- **Removing merge sources and cleaning `mask`/`inpainted` permanently deletes data.** Merging can preserve the last source. Manual Komga export cleans successful chapters' working data after saving export state; queued jobs follow their cleanup option.
+- Types are inferred from names: `Chapter 1` is a single chapter; `Chapter 1-30` is a merged folder. Renaming may affect classification.
+- Invalid settings or state files stop related operations and remain untouched; repair them or restore a backup. Logs may contain paths and translator output, so review them before sharing.
+
+Troubleshooting: [Error codes](ERROR_CODES.md) · [Project audit](docs/audit-2026-09-18.md) (both in Traditional Chinese)
+
+## Development and build
+
+Use Windows and Python 3.10 with the project's pinned dependencies:
+
+```powershell
+py -3.10 -m pip install -r requirements.txt pyinstaller==6.22.2
+py -3.10 -B -m unittest discover -s tests -v
+py -3.10 -m PyInstaller --clean --noconfirm "Comic sorting.spec"
+```
+
+Output: `dist/Comic sorting.exe`. GitHub Actions tests and builds `main` and pull requests; `v*` tags trigger releases.
+
+Core files: `Comic sorting.py` (main window), `comic_core.py` (file operations), `queue_worker.py` (job execution), `translation_queue.py` (queue UI), and `queue_history.py` (history).
+
+## License
+
+[MIT License](LICENSE) · Copyright (c) 2026 CHEN HONG GUAN. Third-party dependencies and external tools retain their own licenses.
