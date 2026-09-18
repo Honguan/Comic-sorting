@@ -469,7 +469,7 @@ class UIImprovementsTests(unittest.TestCase):
                                        app.remove_sources_checkbox, app.keep_last_source_checkbox):
                             self.assertTrue(widget.winfo_ismapped(), str(widget))
                             self.assertGreater(widget.winfo_width(), 1)
-                            self.assertLessEqual(widget.winfo_rootx() - window.winfo_rootx() + widget.winfo_reqwidth(), 820)
+                            self.assertLessEqual(widget.winfo_rootx() - window.winfo_rootx() + widget.winfo_reqwidth(), 820, str(widget))
                             self.assertLessEqual(widget.winfo_rooty() - window.winfo_rooty() + widget.winfo_reqheight(), 640, str(widget))
                     window.destroy()
         finally:

@@ -108,6 +108,7 @@ class TranslationQueue:
         search_row.pack(fill="x", pady=(4, 0))
         ttk.Label(search_row, text=tr("搜尋漫畫名稱／路徑")).pack(side="left", padx=(0, 6))
         self.search = tk.StringVar()
+        self.search_after = None
         self.search_entry = ttk.Entry(search_row, textvariable=self.search)
         self.search_entry.pack(side="left", fill="x", expand=True)
         ttk.Button(search_row, text=tr("清除搜尋"), command=lambda: self.search.set("")).pack(side="left", padx=4)
@@ -172,10 +173,15 @@ class TranslationQueue:
         self.context_menu.add_command(label=tr("取消選取"), command=self.clear_selection)
         self.context_menu.add_command(label=tr("複製漫畫名稱"), command=lambda: copy_manga_names(
             self.tree, (path.parent for path in self.selected_paths())))
-        self.pause_button = ttk.Button(row, text=tr("佇列暫停"), command=self.request_pause)
+        self.pause_button = ttk.Button(row, text=tr("佇列暫停"), command=self.request_pause, width=0)
         self.pause_button.pack(side="left", padx=2)
         self.stop_button = ttk.Button(row, text=tr("停止"), command=self.request_stop, width=0)
         self.stop_button.pack(side="left", padx=2)
+        # Reserve execution controls before less urgent actions in narrow windows.
+        for button in (self.stop_button, self.pause_button, self.start_button):
+            button.pack_configure(side="right", before=self.selection_buttons["移除選取"])
+        self.context_menu.add_command(label=tr("清除已完成"), command=self.clear_completed)
+        self.clear_completed_menu_index = self.context_menu.index("end")
         self.summary = tk.StringVar()
         ttk.Label(footer, textvariable=self.summary).pack(anchor="w")
         self.total = ttk.Progressbar(footer)
@@ -352,7 +358,7 @@ class TranslationQueue:
         return True
 
     def button(self, parent, text, command):
-        button = ttk.Button(parent, text=text, command=command)
+        button = ttk.Button(parent, text=text, command=command, width=0)
         button.pack(side="left", padx=2)
         self.controls.append(button)
         return button
@@ -509,10 +515,18 @@ class TranslationQueue:
         return tr("第 {0}–{1} 頁").format(job.start_page, job.end_page if job.end_page is not None else tr("最後"))
 
     def filter_jobs(self):
+        if self.search_after is not None:
+            self.app.root.after_cancel(self.search_after)
+        self.search_after = self.app.root.after(180, self.apply_queue_filter)
+
+    def apply_queue_filter(self):
         self.render()
         self.update_controls()
 
     def render(self, refresh_counts=False):
+        if self.search_after is not None:
+            self.app.root.after_cancel(self.search_after)
+            self.search_after = None
         if refresh_counts:
             self.count_cache.clear()
             self.count_generation += 1
@@ -585,6 +599,9 @@ class TranslationQueue:
         self.count_after = self.app.root.after(50, self.poll_counts)
 
     def close_counts(self, event):
+        if event.widget is self.app.root and self.search_after is not None:
+            self.app.root.after_cancel(self.search_after)
+            self.search_after = None
         if event.widget is self.app.root and self.count_after is not None:
             self.app.root.after_cancel(self.count_after)
             self.count_after = None
@@ -759,6 +776,8 @@ class TranslationQueue:
             self.add_paths([path])
 
     def show_context_menu(self, event):
+        if self.search_after is not None:
+            self.apply_queue_filter()
         if self.tree.identify_region(event.x, event.y) not in ("tree", "cell"):
             return
         item = self.tree.identify_row(event.y)
@@ -774,6 +793,8 @@ class TranslationQueue:
         self.context_menu.entryconfigure(6, state=self.range_button.cget("state"))
         self.context_menu.entryconfigure(self.run_menu_index, state="normal" if not self.running
                                          and not self.app.manga_busy and self.start_targets() else "disabled")
+        self.context_menu.entryconfigure(self.clear_completed_menu_index,
+                                         state=self.selection_buttons["清除已完成"].cget("state"))
         try:
             self.context_menu.tk_popup(event.x_root, event.y_root)
         finally:
@@ -781,6 +802,8 @@ class TranslationQueue:
         return "break"
 
     def selected_job_ids(self):
+        if self.search_after is not None:
+            self.apply_queue_filter()
         selected = set()
         def collect(item):
             children = self.tree.get_children(item)
@@ -817,8 +840,8 @@ class TranslationQueue:
             self.changed()
 
     def retry_targets(self):
-        selection = self.tree.selection()
         selected = self.selected_job_ids()
+        selection = self.tree.selection()
         return [job for job in self.jobs
                 if (not selection and job.status in ("failed", "done_warning"))
                 or (str(id(job)) in selected and
@@ -834,6 +857,7 @@ class TranslationQueue:
         items = [str(id(job)) for job in targets]
         if any(not self.tree.exists(item) for item in items):
             self.search.set("")
+            self.apply_queue_filter()
         self.count_generation += 1
         for job in targets:
             job.status, job.error = "pending", ""
@@ -991,8 +1015,8 @@ class TranslationQueue:
         self.update_controls()
 
     def start_targets(self):
-        has_selection = bool(self.tree.selection())
         selected = self.selected_job_ids()
+        has_selection = bool(self.tree.selection())
         return tuple(job for job in self.jobs if job.status == "pending"
                      and (not has_selection or str(id(job)) in selected))
 

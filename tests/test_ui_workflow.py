@@ -266,6 +266,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(q.tree.set(str(id(q.jobs[0])), 'pages'), '3 頁')
         self.assertEqual(q.tree.set(str(id(q.jobs[2])), 'pages'), '2 頁（第 2–3 頁）')
         q.search.set('Chapter 2')
+        q.apply_queue_filter()
         self.assertEqual(q.tree.set(series, 'kind'), '0 單一｜1 整合')
         self.assertEqual(q.tree.set(series, 'pages'), '2 頁')
         q.count_cache[(second, 2, 3)] = None
@@ -328,6 +329,28 @@ class WorkflowTests(unittest.TestCase):
         q.running = False
         self.assertEqual([job.path for job in q.jobs], paths[1:])
 
+    def test_queue_search_batches_typing_and_flushes_before_selection_actions(self):
+        q = self.app.translation_queue
+        q.jobs = [Job(self.folder / 'Series' / name, 'export') for name in ('Chapter 1', 'Chapter 2')]
+        q.render()
+        self.root.update()
+        with mock.patch.object(q, 'render', wraps=q.render) as render:
+            for term in ('C', 'Ch', 'Chap', 'Chapter 1'):
+                q.search.set(term)
+            render.assert_not_called()
+            self.assertIsNotNone(q.search_after)
+            deadline = time.monotonic() + 1
+            while q.search_after is not None and time.monotonic() < deadline:
+                self.root.update()
+                time.sleep(.01)
+            self.assertEqual(render.call_count, 1)
+        q.tree.selection_set(str(id(q.jobs[0])))
+        q.search.set('Chapter 2')
+        q.remove()  # Flush the filter before using the old, now-hidden selection.
+        self.assertEqual(len(q.jobs), 2)
+        self.assertFalse(q.tree.exists(str(id(q.jobs[0]))))
+        self.assertIsNone(q.search_after)
+
     def test_queue_search_filters_names_paths_and_keeps_hidden_jobs_running(self):
         q = self.app.translation_queue
         first = Job(self.folder / 'Comics' / 'Hero 漫畫' / 'Chapter 1', 'cleanup')
@@ -336,6 +359,7 @@ class WorkflowTests(unittest.TestCase):
         q.jobs = [first, second, other]
         q.render()
         q.search.set('hERO 漫畫')
+        q.apply_queue_filter()
         self.assertTrue(q.tree.exists(str(id(first))))
         self.assertTrue(q.tree.exists(str(id(second))))
         self.assertFalse(q.tree.exists(str(id(other))))
@@ -345,6 +369,7 @@ class WorkflowTests(unittest.TestCase):
         q.tree.selection_set(series)
         self.assertEqual(q.start_targets(), (first,))
         q.search.set(str(first.path).replace('\\', '/').upper())
+        q.apply_queue_filter()
         self.assertEqual(q.search_count.get(), '顯示 1 / 3 項')
         q.active_jobs = (other,)
         q.events.put(('status', 0, 'running', ''))
@@ -352,6 +377,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(other.status, 'running')
         self.assertFalse(q.tree.exists(str(id(other))))
         q.search.set('missing manga')
+        q.apply_queue_filter()
         self.assertEqual(q.tree.get_children(), ())
         self.assertEqual(q.search_count.get(), '顯示 0 / 3 項')
         self.assertEqual(q.start_targets(), (first,))  # Search filters display, not the full queue.
@@ -361,8 +387,10 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(q.tree.selection(), (str(id(second)),))
         self.assertEqual(q.jobs, [first, second, other])
         q.search.set('  chapter 1  ')
+        q.apply_queue_filter()
         self.assertEqual(q.search_count.get(), '顯示 1 / 3 項')
         q.search.set('')
+        q.apply_queue_filter()
         self.assertEqual(q.search_count.get(), '顯示 3 / 3 項')
         self.assertEqual(q.tree.set(str(id(other)), 'status'), '執行中')
 
