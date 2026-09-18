@@ -436,6 +436,7 @@ class TranslationQueue:
         font = tkfont.Font(root=self.app.root, font=ttk.Style(self.tree).lookup("Treeview", "font") or "TkDefaultFont")
         fixed = {column: font.measure(tr(text)) + 24 for column, text in
                  (("kind", "整合資料夾"), ("action", "翻譯"), ("pages", "第 100–1000 頁"), ("status", "完成（有異常）"))}
+        fixed["kind"] = font.measure(tr("{0} 單一｜{1} 整合").format(9999, 9999)) + 24
         scale = min(1, width * .60 / sum(fixed.values()))
         for column, size in fixed.items():
             size = max(1, int(size * scale))
@@ -622,7 +623,8 @@ class TranslationQueue:
                 if job.action == "translate":
                     keys.add(key)
         for group, (paths, keys) in groups.items():
-            self.tree.set(group, "kind", tr("{0} 個章節").format(len(paths)))
+            merged = sum(folder_kind(path.name) == "merged" for path in paths)
+            self.tree.set(group, "kind", tr("{0} 單一｜{1} 整合").format(len(paths) - merged, merged))
             counts = [self.count_cache.get(key) for key in keys]
             text = tr("{0} 頁").format(f"{sum(count for count in counts if count is not None):,}") if keys else "—"
             calculating = sum(key not in self.count_cache for key in keys)

@@ -250,7 +250,7 @@ class WorkflowTests(unittest.TestCase):
 
     def test_queue_group_chapter_and_page_totals_include_completed_and_ranges(self):
         q = self.app.translation_queue
-        first, second = self.chapter('Chapter 1'), self.chapter('Chapter 2')
+        first, second = self.chapter('Chapter 1'), self.chapter('Chapter 2-3')
         for path in (first, second):
             for number in range(1, 4):
                 (path / f'{number}.png').touch()
@@ -261,12 +261,12 @@ class WorkflowTests(unittest.TestCase):
         series = 'series:' + str(first.parent)
         root = 'path:' + str(first.parent.parent)
         for group in (series, root):
-            self.assertEqual(q.tree.set(group, 'kind'), '2 個章節')
+            self.assertEqual(q.tree.set(group, 'kind'), '1 單一｜1 整合')
             self.assertEqual(q.tree.set(group, 'pages'), '5 頁')
         self.assertEqual(q.tree.set(str(id(q.jobs[0])), 'pages'), '3 頁')
         self.assertEqual(q.tree.set(str(id(q.jobs[2])), 'pages'), '2 頁（第 2–3 頁）')
         q.search.set('Chapter 2')
-        self.assertEqual(q.tree.set(series, 'kind'), '1 個章節')
+        self.assertEqual(q.tree.set(series, 'kind'), '0 單一｜1 整合')
         self.assertEqual(q.tree.set(series, 'pages'), '2 頁')
         q.count_cache[(second, 2, 3)] = None
         q.update_group_counts()
