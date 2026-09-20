@@ -1126,11 +1126,20 @@ class FileAggregatorApp:
 
 
 if __name__ == "__main__":
+    instance = None
     try:
+        if os.name == "nt":
+            from app_instance import AppInstance
+            instance = AppInstance(settings_path())
+            if not instance.acquire():
+                instance.activate_existing()
+                sys.exit(0)
         configure_logging()
         logger.info("application_start executable=%s", sys.executable)
         root = tk.Tk()
         FileAggregatorApp(root)
+        if instance is not None:
+            instance.register_window(root)
         root.mainloop()
     except Exception as error:
         logger.exception("application_failed")
@@ -1138,3 +1147,6 @@ if __name__ == "__main__":
             messagebox.showerror(tr("Comic sorting 錯誤"), str(error))
         except Exception:
             pass
+    finally:
+        if instance is not None:
+            instance.close()

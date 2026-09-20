@@ -58,7 +58,7 @@ The EXE includes this tool's dependencies; no separate Python or archive utility
 | Logs | `logs/comic-sorting.log` beside the EXE |
 | Komga incremental state | `<Komga folder>/.comic-sorting-state.json` |
 
-- Keep settings and history when moving the app. **Use one app instance at a time** to avoid overwriting shared settings or export state.
+- Keep settings and history when moving the app. Only one Windows instance may use the same settings file; launching again activates the existing window. Close all older versions before switching: they do not enforce this guard. Separate installations can still run independently; do not process the same manga or export directory simultaneously.
 - Removing queue items keeps manga files. Deleting folders through the upper list's context menu moves them to the Windows Recycle Bin.
 - **Removing merge sources and cleaning `mask`/`inpainted` permanently deletes data.** Merging can preserve the last source. Manual Komga export cleans successful chapters' working data after saving export state; queued jobs follow their cleanup option.
 - Types are inferred from names: `Chapter 1` is a single chapter; `Chapter 1-30` is a merged folder. Renaming may affect classification.
