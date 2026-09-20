@@ -9,6 +9,16 @@ def tr(text):
     return TRANSLATIONS.get(text, {}).get(_language, text)
 
 TRANSLATIONS = {
+    '倒數啟動': {'en': 'Countdown', 'ja': 'カウントダウン'},
+    '小時': {'en': 'hours', 'ja': '時間'},
+    '分鐘': {'en': 'minutes', 'ja': '分'},
+    '日期': {'en': 'Date', 'ja': '日付'},
+    '時': {'en': 'h', 'ja': '時'},
+    '分': {'en': 'min', 'ja': '分'},
+    '今天': {'en': 'Today', 'ja': '今日'},
+    '明天': {'en': 'Tomorrow', 'ja': '明日'},
+    '請輸入有效的日期與時間，倒數須大於 0 且不超過一年。': {'en': 'Enter a valid date/time; countdown must be above 0 and at most one year.', 'ja': '有効な日時を入力してください。カウントダウンは 0 より大きく 1 年以内です。'},
+    '預計啟動（本機時間）：{0}': {'en': 'Expected start (local time): {0}', 'ja': '開始予定（ローカル時間）：{0}'},
     '排程啟動': {'en': 'Scheduled start', 'ja': '予約開始'},
     '請在佇列閒置時新增排程。': {'en': 'Add schedules while the queue is idle.', 'ja': 'キューの待機中に予約を追加してください。'},
     '倒數分鐘須大於 0 且不超過 525600。': {'en': 'Minutes must be above 0 and at most 525600.', 'ja': '分数は 0 より大きく 525600 以下にしてください。'},

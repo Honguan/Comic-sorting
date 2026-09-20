@@ -1,4 +1,5 @@
 import unittest
+import tkinter as tk
 from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -62,3 +63,43 @@ class ScheduleTests(unittest.TestCase):
         self.assertEqual(self.q.active_jobs, ())
         self.s.close(SimpleNamespace(widget=self.q.app.root))
         self.q.app.root.after_cancel.assert_called_once()
+
+    def test_form_modes_preserve_independent_values_and_validate(self):
+        root = tk.Tk()
+        root.withdraw()
+        self.addCleanup(root.destroy)
+        self.q.app.root = root
+        self.s.show()
+        root.update()
+        self.assertEqual(self.s.form_value()[:2], (True, 60))
+        self.s.hours.set('2')
+        self.s.minutes.set('30')
+        self.s.tabs.select(1)
+        root.update()
+        self.assertFalse(self.s.form_value()[0])
+        self.assertGreater(self.s.form_value()[2], datetime.now())
+        self.s.date.set('2027-02-30')
+        self.assertTrue(self.s.add_button.instate(['disabled']))
+        self.s.date.set((datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d'))
+        self.s.hour.set('24')
+        with self.assertRaises(ValueError):
+            self.s.form_value()
+        self.s.hour.set('12')
+        self.assertFalse(self.s.add_button.instate(['disabled']))
+        self.s.tabs.select(0)
+        root.update()
+        self.assertEqual(self.s.form_value()[:2], (True, 150))
+        self.s.minutes.set('60')
+        self.assertTrue(self.s.add_button.instate(['disabled']))
+        self.s.hours.set('0')
+        self.s.minutes.set('0')
+        with self.assertRaises(ValueError):
+            self.s.form_value()
+        self.s.hours.set('1')
+        self.s.add_button.invoke()
+        self.assertEqual(len(self.s.entries), 1)
+        self.assertEqual(self.s.table.item(self.s.table.get_children()[0], 'values')[1], '1')
+        self.q.start.assert_not_called()
+        self.q.running = True
+        self.s.refresh()
+        self.assertTrue(self.s.add_button.instate(['disabled']))
