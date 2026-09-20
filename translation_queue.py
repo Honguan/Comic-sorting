@@ -464,19 +464,36 @@ class TranslationQueue:
         if not selection:
             self.selection_details.set("")
             return
-        count = len(self.selected_job_ids())
-        if count > 1:
-            self.selection_details.set(tr("已選取 {0} 個佇列項目").format(count))
-            return
+        selected = self.selected_job_ids()
+        jobs = [job for job in self.jobs if str(id(job)) in selected]
+        paths = {job.path for job in jobs}
+        merged = sum(folder_kind(path.name) == "merged" for path in paths)
+        summary = " | ".join((
+            tr("已選取 {0} 個佇列項目").format(len(jobs)),
+            tr("{0} 單一｜{1} 整合").format(len(paths) - merged, merged),
+            tr("翻譯頁數：{0}").format(self.selection_page_count(jobs)),
+            tr("等待執行頁數：{0}").format(self.selection_page_count([j for j in jobs if j.status == "pending"]))))
         item = selection[0]
-        job = next((job for job in self.jobs if str(id(job)) == item), None)
+        job = next((job for job in jobs if len(selection) == 1 and str(id(job)) == item), None)
         if job:
             reason = error_info(job.status, job.error)[1]
             self.selection_details.set(str(job.path) + "\n" + " | ".join(filter(None, (
                 tr(FOLDER_KINDS[folder_kind(job.path.name)]), tr(ACTIONS[job.action]),
-                self.page_range_text(job), tr(STATUSES[job.status]), reason))))
+                self.page_range_text(job), tr(STATUSES[job.status]), reason))) + "\n" + summary)
         else:
-            self.selection_details.set(item.split(":", 1)[1])
+            self.selection_details.set((item.split(":", 1)[1] + "\n" if len(selection) == 1 else "") + summary)
+
+    def selection_page_count(self, jobs):
+        keys = [(j.path, j.start_page, j.end_page) for j in jobs if j.action == "translate"]
+        counts = [self.count_cache.get(key) for key in keys]
+        text = tr("{0} 頁").format(f"{sum(count for count in counts if count is not None):,}")
+        calculating = sum(key not in self.count_cache for key in keys)
+        unknown = counts.count(None) - calculating
+        if calculating:
+            text += tr("（{0} 項計算中）").format(calculating)
+        if unknown:
+            text += tr("（{0} 項無法計數）").format(unknown)
+        return text
 
     def update_controls(self):
         self.update_selection_details()
@@ -625,6 +642,7 @@ class TranslationQueue:
                                     for j in self.jobs if j.action == "translate" and j.status == "pending"}
         self.update_group_counts()
         self.update_summary()
+        self.update_selection_details()
         self.count_pages()
 
     def update_group_counts(self):

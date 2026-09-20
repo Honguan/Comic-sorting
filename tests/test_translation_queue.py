@@ -11,6 +11,45 @@ from test_comic_sorting import comic
 
 
 class TranslationQueueTests(unittest.TestCase):
+    def test_selection_details_page_counts_and_ranges(self):
+        import tkinter as tk
+        from tkinter import ttk
+        from translation_queue import TranslationQueue
+        from ui_language import set_language
+        set_language('zh-TW')
+        root = tk.Tk()
+        root.withdraw()
+        self.addCleanup(root.destroy)
+        q = TranslationQueue.__new__(TranslationQueue)
+        q.tree = ttk.Treeview(root)
+        q.search_after = None
+        q.selection_details = tk.StringVar(root)
+        first = Job(Path('Manga/Chapter 1'), 'translate', start_page=3, end_page=7)
+        second = Job(Path('Manga/Chapter 2'), 'translate', status='done')
+        q.jobs = [first, second]
+        q.count_cache = {(first.path, 3, 7): 5, (second.path, 1, None): 12}
+        group = q.tree.insert('', 'end', iid='series:Manga')
+        for job in q.jobs:
+            q.tree.insert(group, 'end', iid=str(id(job)))
+        q.tree.selection_set(group, str(id(first)))
+        q.update_selection_details()
+        text = q.selection_details.get()
+        self.assertIn('已選取 2 個佇列項目', text)
+        self.assertIn('翻譯頁數：17 頁', text)
+        self.assertIn('等待執行頁數：5 頁', text)
+        q.tree.selection_set(str(id(first)))
+        q.update_selection_details()
+        self.assertIn('第 3–7 頁', q.selection_details.get())
+        q.count_cache.clear()
+        q.update_selection_details()
+        self.assertIn('1 項計算中', q.selection_details.get())
+        q.count_cache[first.path, 3, 7] = None
+        q.update_selection_details()
+        self.assertIn('1 項無法計數', q.selection_details.get())
+        q.tree.selection_remove(*q.tree.selection())
+        q.update_selection_details()
+        self.assertEqual(q.selection_details.get(), '')
+
     def test_runtime_selection_after_installation_moves(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp).resolve()
