@@ -21,6 +21,7 @@ from queue_history import HistoryWindow, elapsed_text, save_run, usage_text, usa
 from queue_errors import error_details, error_info
 from ntfy_notifications import NtfyNotifications
 from queue_start_dialog import QueueStartDialog
+from queue_schedule import QueueSchedule
 
 
 ACTIONS = {"translate": "翻譯", "export": "匯出", "cleanup": "清理"}
@@ -84,6 +85,8 @@ class TranslationQueue:
         self.button(settings_actions, tr("開啟原生設定介面"), self.open_settings)
         self.button(settings_actions, tr("開啟紀錄資料夾"), self.open_logs)
         self.notifications = NtfyNotifications(app, settings)
+        self.scheduler = QueueSchedule(self)
+        ttk.Button(settings_actions, text=tr("排程啟動"), command=self.scheduler.show).pack(side="left")
         row = ttk.Frame(box)
         row.pack(fill="x", pady=(0, 4))
         self.action_choice = ttk.Combobox(row, textvariable=self.action,
@@ -1043,7 +1046,7 @@ class TranslationQueue:
                 return tuple(job for job in jobs if job.path not in excluded)
         return jobs
 
-    def start(self, cleanup_confirmed=False):
+    def start(self, cleanup_confirmed=False, *, scheduled_jobs=None):
         if self.running and self.pause_requested.is_set() and not self.stop.is_set():
             self.pause_requested.clear()
             self.label.set(tr("佇列繼續處理"))
@@ -1054,8 +1057,8 @@ class TranslationQueue:
         if self.history_save_failed and not self.save_history(refresh=False):
             return
         self.render()
-        self.active_jobs = self.start_targets()
-        self.active_jobs = self.configure_start(self.active_jobs)
+        self.active_jobs = (self.configure_start(self.start_targets()) if scheduled_jobs is None
+                            else tuple(scheduled_jobs))
         if not self.active_jobs or not self.validate(jobs=self.active_jobs):
             return
         if not cleanup_confirmed and not self.confirm_cleanup():

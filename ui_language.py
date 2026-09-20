@@ -9,6 +9,21 @@ def tr(text):
     return TRANSLATIONS.get(text, {}).get(_language, text)
 
 TRANSLATIONS = {
+    '排程啟動': {'en': 'Scheduled start', 'ja': '予約開始'},
+    '請在佇列閒置時新增排程。': {'en': 'Add schedules while the queue is idle.', 'ja': 'キューの待機中に予約を追加してください。'},
+    '倒數分鐘須大於 0 且不超過 525600。': {'en': 'Minutes must be above 0 and at most 525600.', 'ja': '分数は 0 より大きく 525600 以下にしてください。'},
+    '請設定未來的日期時間。': {'en': 'Choose a future date and time.', 'ja': '未来の日時を指定してください。'},
+    '設定已變更，請重新排程': {'en': 'Settings changed; reschedule', 'ja': '設定変更のため再予約してください'},
+    '啟動失敗': {'en': 'Start failed', 'ja': '開始失敗'},
+    '已啟動': {'en': 'Started', 'ja': '開始済み'},
+    '一次性排程；需保持程式開啟。忙碌時等待，關閉程式即取消。': {'en': 'One-shot schedules require the app to stay open. Waits while busy; closing cancels schedules.', 'ja': '一回限りの予約です。処理中は待機し、アプリ終了で予約は消えます。'},
+    '倒數分鐘': {'en': 'Countdown minutes', 'ja': 'カウントダウン（分）'},
+    '指定日期時間': {'en': 'Date and time', 'ja': '日時指定'},
+    '固定時間格式：YYYY-MM-DD HH:MM；使用本機時間。': {'en': 'Date format: YYYY-MM-DD HH:MM; local time.', 'ja': '日時形式：YYYY-MM-DD HH:MM（ローカル時間）'},
+    '請檢查時間格式、範圍，並在佇列閒置時新增。': {'en': 'Check the time format/range and add while the queue is idle.', 'ja': '日時の形式・範囲を確認し、待機中に追加してください。'},
+    '新增排程': {'en': 'Add schedule', 'ja': '予約追加'},
+    '啟動時間': {'en': 'Start time', 'ja': '開始日時'},
+    '刪除選取排程': {'en': 'Delete selected schedules', 'ja': '選択した予約を削除'},
     '漫畫優先順序': {'en': 'Manga priority', 'ja': '漫画の優先順位'},
     '翻譯章節範圍': {'en': 'Translation chapter range', 'ja': '翻訳する章の範囲'},
     '拖曳調整漫畫順序；取消不會開始。': {'en': 'Drag to reorder manga. Cancel leaves the batch unstarted.', 'ja': 'ドラッグで漫画を並べ替えます。キャンセルすると開始しません。'},
