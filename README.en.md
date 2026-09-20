@@ -41,7 +41,7 @@ The EXE includes this tool's dependencies; no separate Python or archive utility
 
 ### Translation, export, and records
 
-- Settings → Scheduled start supports multiple one-shot countdowns or fixed local dates/times. Confirm scope, chapters, and order when adding. Only unchanged, still-pending selected jobs run; busy or paused queues wait until idle. Changes to translation/cleanup/output settings require rescheduling. Keep the app open: closing cancels schedules; schedules do not wake or boot the computer.
+- Main queue → Scheduled start supports multiple one-shot countdowns or fixed local dates/times. Confirm scope, chapters, and order when adding. Only unchanged, still-pending selected jobs run; busy or paused queues wait until idle. Changes to translation/cleanup/output settings require rescheduling. Keep the app open: closing cancels schedules; schedules do not wake or boot the computer.
 - Multi-chapter translation reuses one BallonsTranslator process. Each chapter finishes result checks, export, cleanup, and saving before the next is submitted. Pausing retains models and GPU memory; stopping or finishing the batch closes the process. After a translation failure, the next chapter gets a new process. BallonsTranslator source files are unchanged; its per-request Codex connection behavior is unchanged.
 - The settings editor exposes run options, current module parameters, and translation fonts. Hidden fields are preserved; saving validates, backs up, and checks for external changes.
 - Page ranges require BallonsTranslator support for native page selection. Completing a range does not mean the whole chapter is complete; incomplete chapter results skip automatic export and cleanup. Range jobs require a separate export opt-in.

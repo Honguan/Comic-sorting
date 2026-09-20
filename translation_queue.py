@@ -86,7 +86,6 @@ class TranslationQueue:
         self.button(settings_actions, tr("開啟紀錄資料夾"), self.open_logs)
         self.notifications = NtfyNotifications(app, settings)
         self.scheduler = QueueSchedule(self)
-        ttk.Button(settings_actions, text=tr("排程啟動"), command=self.scheduler.show).pack(side="left")
         row = ttk.Frame(box)
         row.pack(fill="x", pady=(0, 4))
         self.action_choice = ttk.Combobox(row, textvariable=self.action,
@@ -181,8 +180,10 @@ class TranslationQueue:
         self.pause_button.pack(side="left", padx=2)
         self.stop_button = ttk.Button(row, text=tr("停止"), command=self.request_stop, width=0)
         self.stop_button.pack(side="left", padx=2)
+        self.schedule_button = ttk.Button(row, text=tr("排程啟動"), command=self.scheduler.show, width=0)
+        self.schedule_button.pack(side="left", padx=2)
         # Reserve execution controls before less urgent actions in narrow windows.
-        for button in (self.stop_button, self.pause_button, self.start_button):
+        for button in (self.stop_button, self.pause_button, self.start_button, self.schedule_button):
             button.pack_configure(side="right", before=self.selection_buttons["移除選取"])
         self.context_menu.add_command(label=tr("清除已完成"), command=self.clear_completed)
         self.clear_completed_menu_index = self.context_menu.index("end")
