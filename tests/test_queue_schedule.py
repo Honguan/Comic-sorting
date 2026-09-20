@@ -64,6 +64,23 @@ class ScheduleTests(unittest.TestCase):
         self.s.close(SimpleNamespace(widget=self.q.app.root))
         self.q.app.root.after_cancel.assert_called_once()
 
+    def test_confirmation_time_does_not_consume_countdown(self):
+        start = datetime(2030, 1, 1, 12, 0)
+        clock = [start, 100.0]
+        def confirm():
+            clock[:] = [start + timedelta(minutes=2), 220.0]
+            return True
+        self.q.confirm_cleanup.side_effect = confirm
+        with patch('queue_schedule.datetime', wraps=datetime) as dates, patch('queue_schedule.time.monotonic', side_effect=lambda: clock[1]):
+            dates.now.side_effect = lambda: clock[0]
+            self.s.add(True, '1')
+            self.assertEqual(self.s.entries[0]['due'], start + timedelta(minutes=3))
+            self.assertEqual(self.s.entries[0]['deadline'], 280.0)
+            clock[:] = [start, 100.0]
+            with self.assertRaises(ValueError):
+                self.s.add(False, '2030-01-01 12:01')
+            self.assertEqual(len(self.s.entries), 1)
+
     def test_form_modes_preserve_independent_values_and_validate(self):
         root = tk.Tk()
         root.withdraw()

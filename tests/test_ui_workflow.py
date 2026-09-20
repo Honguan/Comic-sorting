@@ -609,7 +609,9 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn('LLM_CAPACITY', q.selection_details.get())
         q.tree.selection_set(q.tree.parent(item))
         q.update_controls()
-        self.assertEqual(q.selection_details.get(), str(path.parent))
+        self.assertEqual(q.selection_details.get().splitlines()[0], str(path.parent))
+        self.assertIn('翻譯頁數：', q.selection_details.get())
+        self.assertIn('0 單一｜1 整合', q.selection_details.get())
 
     def test_queue_groups_paths_series_and_chapters_without_reordering_jobs(self):
         q = self.app.translation_queue

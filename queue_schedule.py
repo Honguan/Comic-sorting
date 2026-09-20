@@ -37,8 +37,6 @@ class QueueSchedule:
             minutes = float(value)
             if not math.isfinite(minutes) or minutes <= 0 or minutes > 525600:
                 raise ValueError(tr('倒數分鐘須大於 0 且不超過 525600。'))
-            due = datetime.now() + timedelta(minutes=minutes)
-            deadline = time.monotonic() + minutes * 60
         else:
             due = datetime.strptime(value.strip(), '%Y-%m-%d %H:%M')
             if due <= datetime.now():
@@ -54,6 +52,11 @@ class QueueSchedule:
                 return
         finally:
             q.active_jobs = previous
+        if countdown:
+            due = datetime.now() + timedelta(minutes=minutes)
+            deadline = time.monotonic() + minutes * 60
+        elif due <= datetime.now():
+            raise ValueError(tr('請設定未來的日期時間。'))
         self.entries.append(dict(due=due, deadline=deadline, jobs=[(job, self.signature(job)) for job in jobs],
                                  options=self.options(), status='等待'))
         self.refresh()
