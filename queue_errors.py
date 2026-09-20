@@ -8,7 +8,7 @@ from ui_language import TRANSLATIONS, tr
 # Specific causes precede wrapper errors and generic HTTP/exit codes.
 ERRORS = (
     ('LLM_CAPACITY', '模型服務暫時滿載', r'at capacity|server_is_overloaded|model.{0,40}(?:overloaded|over capacity)'),
-    ('LLM_QUOTA', '帳號額度、餘額或支出上限不足', r'insufficient_quota|credit_balance_exhausted|(?:spend|usage)_limit_exceeded|UsageLimitExceeded|(?:exceeded|reached|hit).{0,30}(?:quota|usage limit)|insufficient credits|credit balance.{0,20}(?:low|exhausted|insufficient)'),
+    ('LLM_QUOTA', '帳號額度、餘額或支出上限不足', r'insufficient_quota|credit_balance_exhausted|(?:spend|usage)_limit_exceeded|UsageLimitExceeded|(?:exceeded|reached|hit).{0,30}(?:quota|usage limit)|out of credits|insufficient credits|credit balance.{0,20}(?:low|exhausted|insufficient)'),
     ('LLM_AUTH', '登入已失效或 API 金鑰無效／未設定', r'LLMApiKeyRequiredError|API key is required|AuthenticationError|invalid_api_key|incorrect api key|unauthorized|Codex ChatGPT login is required|not authenticated|token.{0,20}(?:expired|revoked)'),
     ('LLM_MODEL', '模型未設定、不存在或不可用', r'LLMModelRequiredError|model_not_found|(?:vision |image )?model is required for LLM|model.{0,60}(?:does not exist|not found|not supported)'),
     ('LLM_CONFIG', '服務網址或請求設定無效', r'LLMBaseURLRequiredError|base URL is required|Codex Timeout must be|Save Codex Sessions must|unsupported codex message|Codex requires (?:text or image|a final user)|does not have text translation enabled'),

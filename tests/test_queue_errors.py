@@ -15,6 +15,8 @@ class QueueErrorTests(unittest.TestCase):
             ('RateLimitError: Error code: 429 - {"code":"insufficient_quota"}', 'LLM_QUOTA'),
             ('RateLimitError: Error code: 429 - {"code":"credit_balance_exhausted"}', 'LLM_QUOTA'),
             ('Codex turn failed: You have hit your usage limit', 'LLM_QUOTA'),
+            ('Codex turn failed: Your workspace is out of credits. Ask your workspace owner to refill in order to continue.\n'
+             '[INFO] module_manager:_imgtrans_pipeline:1142 - Image translation pipeline stopped by user', 'LLM_QUOTA'),
             ('Error code: 429 - {"code":"rate_limit_exceeded"}', 'LLM_RATE_LIMIT'),
             ('Error code: 429', 'HTTP_429'),
             ('HTTP 503: server_is_overloaded', 'LLM_CAPACITY'),

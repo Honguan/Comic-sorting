@@ -437,6 +437,10 @@ def run_jobs(jobs, settings, output, skip, stop, emit, *, pause=None, checkpoint
                                  status, action, path, code, reason)
                 failed_paths.add(path)
                 emit(("status", index, status, redact(str(error))))
+                if code == "LLM_QUOTA":
+                    # Preserve the failed job's quota diagnostic; leave later jobs pending.
+                    stop.set()
+                    logger.error("[%s] queue_stopped error_code=%s reason=%s", run_id, code, reason)
             emit(("job_time", index, job_timestamp, datetime.now().astimezone().isoformat(timespec='seconds'),
                   time.monotonic() - job_started))
             emit(("total", index + 1))

@@ -12,6 +12,23 @@ from queue_worker import BT_STAGES, Job, parse_bt_progress, run_jobs, run_transl
 
 
 class QueueWorkerTests(unittest.TestCase):
+    def test_quota_stops_queue_without_retry_or_export(self):
+        first, second = self.chapter(), self.chapter('Chapter 2')
+        stop, events = threading.Event(), []
+        message = 'Codex turn failed: Your workspace is out of credits. Ask your workspace owner to refill in order to continue.'
+        with mock.patch('queue_worker.translator_command', return_value=([], self.root, None)), \
+                mock.patch('queue_worker.run_translation', side_effect=RuntimeError(message)) as translate, \
+                mock.patch('queue_worker.export_chapter') as export:
+            run_jobs([Job(first, 'translate'), Job(second, 'translate')],
+                     dict(bt_path='installed', bt_config='', bt_export=True),
+                     str(self.root / 'output'), False, stop, events.append)
+        translate.assert_called_once()
+        export.assert_not_called()
+        self.assertTrue(stop.is_set())
+        self.assertEqual([e for e in events if e[0] == 'status'],
+                         [('status', 0, 'running', ''), ('status', 0, 'failed', message)])
+        self.assertIn(('done',), events)
+
     def test_pipeline_stop_terminates_process_without_user_stop(self):
         import time
         stop = threading.Event()
