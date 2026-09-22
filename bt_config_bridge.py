@@ -135,7 +135,8 @@ def metadata():
                           ("texture", text_effects.TexturePaint))
     }
     return {"defaults": defaults, "schema": schema, "templates": templates,
-            "translator_languages": translator_languages}
+            "translator_languages": translator_languages,
+            "codex_reasoning_efforts": llm_profiles.CODEX_MODEL_REASONING_EFFORTS}
 
 
 def prepare(data):

@@ -149,6 +149,18 @@ class ConfigDocument:
         if key in ("translator_llm_id", "ocr_llm_id", "inpaint_llm_id"):
             support = {"translator_llm_id": "support_text", "ocr_llm_id": "support_vision", "inpaint_llm_id": "support_image"}[key]
             return [p["id"] for p in self.data["module"]["llm_profiles"] if isinstance(p, dict) and p.get(support)]
+        if len(path) == 4 and path[:2] == ("module", "llm_profiles") and key in ("thinking_level", "vision_thinking_level") and parent.get("transport") == "Codex App Server":
+            model = parent.get("vision_model" if key == "vision_thinking_level" else "model")
+            efforts = self.metadata.get("codex_reasoning_efforts", {}).get(model)
+            if efforts is not None:
+                return efforts
+        if len(path) == 4 and path[:2] == ("module", "llm_profiles") and key in ("model", "vision_model", "image_model") and parent.get("built_in"):
+            for native in self.metadata["defaults"]["module"]["llm_profiles"]:
+                if native.get("built_in") and (native.get("id"), native.get("transport")) == (parent.get("id"), parent.get("transport")):
+                    saved = parent.get(key + "_options")
+                    selected = parent.get(key)
+                    return list(dict.fromkeys(native.get(key + "_options", []) + (saved if isinstance(saved, list) else [])
+                                              + ([selected] if isinstance(selected, str) and selected else [])))
         if isinstance(parent, dict) and isinstance(parent.get(key + "_options"), list):
             return parent[key + "_options"]
         return self.schema(path).get("choices", [])
@@ -356,7 +368,8 @@ class ConfigEditor(tk.Toplevel):
         for index, profile in enumerate(module.get("llm_profiles", [])):
             if profile.get("id") in selected:
                 for key in ("model", "vision_model", "image_model", "base_url", "api_key", "max_tokens", "temperature", "thinking_level", "prompt", "vision_prompt"):
-                    self.field(params, ("module", "llm_profiles", index, key), str(profile.get("name", "LLM")) + " / " + field_name(key))
+                    self.field(params, ("module", "llm_profiles", index, key), str(profile.get("name", "LLM")) + " / " + field_name(key),
+                               refresh=key in ("model", "vision_model"))
         font = self.section("翻譯字體")
         for key, label in (("let_family_flag", "字體來源"), ("let_fntsize_flag", "字號來源"), ("let_alignment_flag", "對齊來源"), ("let_writing_mode_flag", "書寫方向來源")):
             self.field(font, (key,), label, {"依原文 / 自動": 0, "使用下方全域設定": 1})

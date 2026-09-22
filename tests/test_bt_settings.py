@@ -43,6 +43,35 @@ class ConfigFixture:
 
 class ConfigDocumentTests(ConfigFixture, unittest.TestCase):
 
+    def test_builtin_model_choices_follow_native_defaults_without_rewriting_saved_config(self):
+        saved = self.raw["module"]["llm_profiles"][0]
+        saved.update(id="codex", transport="Codex App Server", built_in=True,
+                     model="old-model", model_options=["old-model", "custom-model"],
+                     vision_model="old-vision", vision_model_options=["old-vision"])
+        native = self.meta["defaults"]["module"]["llm_profiles"][0]
+        native.update(id="codex", transport="Codex App Server", built_in=True,
+                      model_options=["gpt-6-sol", "gpt-6-luna"], vision_model_options=["gpt-6-sol", "gpt-6-luna"])
+        self.meta["codex_reasoning_efforts"] = {"gpt-6-sol": ["none", "low", "max"],
+                                                "gpt-6-luna": ["none", "low", "max"]}
+        self.path.write_text(json.dumps(self.raw, ensure_ascii=False), encoding="utf-8")
+        before = self.path.read_bytes()
+        doc = self.document()
+        self.assertEqual(doc.choices(("module", "llm_profiles", 0, "model")),
+                         ["gpt-6-sol", "gpt-6-luna", "old-model", "custom-model"])
+        self.assertEqual(doc.choices(("module", "llm_profiles", 0, "vision_model")),
+                         ["gpt-6-sol", "gpt-6-luna", "old-vision"])
+        self.assertFalse(doc.dirty)
+        self.assertEqual(self.path.read_bytes(), before)
+        doc.set(("module", "llm_profiles", 0, "model"), "gpt-6-sol")
+        self.assertIn("gpt-6-sol", doc.get(("module", "llm_profiles", 0, "model_options")))
+        self.assertEqual(doc.choices(("module", "llm_profiles", 0, "thinking_level")),
+                         ["none", "low", "max"])
+        saved["built_in"] = False
+        self.path.write_text(json.dumps(self.raw, ensure_ascii=False), encoding="utf-8")
+        self.assertEqual(self.document().choices(("module", "llm_profiles", 0, "model")),
+                         ["old-model", "custom-model"])
+
+
     def test_bridge_does_not_import_modules_from_exe_bundle(self):
         with tempfile.TemporaryDirectory() as bundle:
             folder = Path(bundle)
@@ -158,6 +187,26 @@ class ConfigEditorTests(ConfigFixture, unittest.TestCase):
             time.sleep(.01)
         self.root.update()
         self.assertFalse(self.editor.working)
+
+    def test_codex_model_switch_updates_reasoning_choices(self):
+        profile = self.raw["module"]["llm_profiles"][0]
+        profile.update(id="codex", transport="Codex App Server", built_in=True,
+                       model="old-model", model_options=["old-model"], thinking_level="none")
+        self.raw["module"].update(translator_llm_id="codex", ocr_llm_id="codex")
+        native = self.meta["defaults"]["module"]["llm_profiles"][0]
+        native.update(id="codex", transport="Codex App Server", built_in=True,
+                      model_options=["gpt-6-sol", "gpt-6-luna"])
+        self.meta["codex_reasoning_efforts"] = {"gpt-6-sol": ["none", "low", "max"],
+                                                "gpt-6-luna": ["none", "low", "max"]}
+        self.path.write_text(json.dumps(self.raw, ensure_ascii=False), encoding="utf-8")
+        self.editor.loaded(self.document())
+        model = ("module", "llm_profiles", 0, "model")
+        thinking = ("module", "llm_profiles", 0, "thinking_level")
+        self.assertIn("gpt-6-sol", self.editor.document.choices(model))
+        self.editor.fields[model][0].set("gpt-6-sol")
+        self.editor.rebuild()
+        self.assertEqual(self.editor.fields[thinking][0].get(), "none")
+        self.assertEqual(self.editor.document.choices(thinking), ["none", "low", "max"])
 
     def test_focused_form_preserves_hidden_settings_and_saves_active_profile(self):
         paths = self.editor.fields
