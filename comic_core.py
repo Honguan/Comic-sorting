@@ -92,7 +92,7 @@ def translation_status(chapter_folder, *, source_images=None):
     result = Path(chapter_folder) / "result"
     if not result.is_dir():
         result = next((child for child in Path(chapter_folder).iterdir()
-                       if child.is_dir() and child.name.casefold() == "result"), result)
+                       if child.name.casefold() == "result" and child.is_dir()), result)
     if not result.is_dir() or is_link_or_junction(result):
         return tr("未翻譯"), []
     images = image_files(result)
@@ -102,7 +102,20 @@ def translation_status(chapter_folder, *, source_images=None):
 
 
 def updated_at(folder, images):
-    return max([Path(folder).stat().st_mtime, *(image.stat().st_mtime for image in images)])
+    latest = Path(folder).stat().st_mtime
+    groups = {}
+    for image in images:
+        groups.setdefault(image.parent, set()).add(image.name)
+    for parent, names in groups.items():
+        # DirEntry reuses enumeration metadata on Windows, avoiding per-image I/O.
+        with os.scandir(parent) as entries:
+            for entry in entries:
+                if entry.name in names:
+                    latest = max(latest, entry.stat().st_mtime)
+                    names.remove(entry.name)
+        for name in names:
+            latest = max(latest, (parent / name).stat().st_mtime)
+    return latest
 
 
 def folder_size(folder):

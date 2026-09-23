@@ -366,6 +366,24 @@ class ComicSortingTests(unittest.TestCase):
             (result / "1.png").write_bytes(b"image")
             self.assertEqual(comic.translation_status(chapter)[0], "可匯出")
 
+    def test_scan_does_not_stat_each_source_image(self):
+        with tempfile.TemporaryDirectory() as temp:
+            chapter = Path(temp) / 'Series' / 'Chapter 1'
+            chapter.mkdir(parents=True)
+            image = chapter / '1.png'
+            image.touch()
+            os.utime(image, (200, 200))
+            os.utime(chapter, (100, 100))
+            original_stat = Path.stat
+            def checked_stat(path, *args, **kwargs):
+                if path == image:
+                    self.fail('scan must reuse directory metadata instead of stat per image')
+                return original_stat(path, *args, **kwargs)
+            with mock.patch.object(Path, 'stat', checked_stat):
+                data = comic.FileAggregatorApp.scan_folder_data(Path(temp))
+            self.assertEqual(data[2][chapter], 200)
+            self.assertEqual(data[6][chapter], 1)
+
     def test_aggregate_direct_copy(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -477,6 +495,17 @@ class ComicSortingTests(unittest.TestCase):
             os.utime(folder, (50, 50))
 
             self.assertEqual(comic.updated_at(folder, [older, newer]), 200)
+            self.assertEqual(comic.updated_at(folder, [older]), 100)
+            result = folder / 'result'
+            result.mkdir()
+            translated = result / '1.png'
+            translated.touch()
+            os.utime(translated, (300, 300))
+            os.utime(folder, (50, 50))
+            self.assertEqual(comic.updated_at(folder, [older, translated]), 300)
+            newer.unlink()
+            with self.assertRaises(FileNotFoundError):
+                comic.updated_at(folder, [newer])
 
     def test_folder_size_and_format(self):
         with tempfile.TemporaryDirectory() as temp:
