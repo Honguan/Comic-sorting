@@ -761,6 +761,7 @@ class TranslationQueue:
             self.count_cache = {key: value for key, value in self.count_cache.items() if key[0] != path}
             existing = next((job for job in self.jobs if job.path == path and job.action == action), None)
             if existing:
+                self.app.chapter_page_counts.pop(path, None)
                 existing.status, existing.error = "pending", ""
             else:
                 self.jobs.append(Job(path, action))

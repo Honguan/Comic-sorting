@@ -232,6 +232,20 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(q.count_cache[path, 1, None], 3)
         self.assertEqual(q.count_cache[path, 2, 3], 2)
 
+    def test_readding_scanned_chapter_refreshes_its_page_index(self):
+        q = self.app.translation_queue
+        path = self.chapter('Chapter 1')
+        (path / '1.png').touch()
+        base = path.parent.parent
+        self.app.apply_scan_data(base, self.app.scan_folder_data(base))
+        q.add_paths([path], 'translate')
+        self.wait_counts(q)
+        self.assertEqual(q.count_cache[path, 1, None], 1)
+        (path / '2.png').touch()
+        q.add_paths([path], 'translate')
+        self.wait_counts(q)
+        self.assertEqual(q.count_cache[path, 1, None], 2)
+
     def chapter(self, name):
         path = self.folder / "Comics" / "Series" / name
         (path / "result").mkdir(parents=True)
