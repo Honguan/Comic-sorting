@@ -518,6 +518,7 @@ TRANSLATIONS = {
     '開始主佇列': {'en': 'Start main queue', 'ja': 'メインキューを開始'},
     '繼續佇列': {'en': 'Resume queue', 'ja': 'キューを再開'},
     '已選取 {0} 個佇列項目': {'en': '{0} queue items selected', 'ja': '{0} 件のキュー項目を選択中'},
+    '已選取 {0} 部漫畫': {'en': '{0} manga selected', 'ja': '{0} 作品を選択中'},
     '複製完整路徑': {'en': 'Copy full paths', 'ja': 'フルパスをコピー'},
     '佇列已暫停，按「繼續佇列」繼續': {'en': 'Queue paused; click Resume queue to continue', 'ja': 'キューは一時停止中です。「キューを再開」で続行します'},
     '佇列暫停': {'en': 'Pause queue', 'ja': 'キューを一時停止'},

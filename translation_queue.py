@@ -469,6 +469,7 @@ class TranslationQueue:
         paths = {job.path for job in jobs}
         merged = sum(folder_kind(path.name) == "merged" for path in paths)
         summary = " | ".join((
+            tr("已選取 {0} 部漫畫").format(len({path.parent for path in paths})),
             tr("已選取 {0} 個佇列項目").format(len(jobs)),
             tr("{0} 單一｜{1} 整合").format(len(paths) - merged, merged),
             tr("翻譯頁數：{0}").format(self.selection_page_count(jobs)),
