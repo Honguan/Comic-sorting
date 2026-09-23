@@ -208,6 +208,25 @@ class ConfigEditorTests(ConfigFixture, unittest.TestCase):
         self.assertEqual(self.editor.fields[thinking][0].get(), "none")
         self.assertEqual(self.editor.document.choices(thinking), ["none", "low", "max"])
 
+    def test_codex_execution_switch_round_trip_and_invalid_value(self):
+        self.raw["module"]["llm_profiles"][0]["transport"] = "Codex App Server"
+        self.path.write_text(json.dumps(self.raw, ensure_ascii=False), encoding="utf-8")
+        self.meta["templates"]["llm_profiles"]["LLM"]["codex_execution"] = "Python SDK"
+        self.meta["schema"]["children"]["module"]["children"]["llm_profiles"]["item"]["children"]["codex_execution"] = {
+            "type": "string", "choices": ["Python SDK", "CLI"], "strict_choices": True}
+        self.editor.loaded(self.document())
+        path = ("module", "llm_profiles", 0, "codex_execution")
+        self.assertEqual(self.editor.fields[path][0].get(), "Python SDK")
+        self.assertFalse(self.editor.document.dirty)
+        for value in ("CLI", "Python SDK"):
+            self.editor.fields[path][0].set(value)
+            self.editor.save()
+            self.wait_idle()
+            saved = json.loads(self.path.read_text(encoding="utf-8"))
+            self.assertEqual(saved["module"]["llm_profiles"][0]["codex_execution"], value)
+        with self.assertRaises(ValueError):
+            self.editor.document.set(path, "invalid")
+
     def test_focused_form_preserves_hidden_settings_and_saves_active_profile(self):
         paths = self.editor.fields
         self.assertNotIn(("imgsave_quality",), paths)

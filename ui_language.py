@@ -97,6 +97,8 @@ TRANSLATIONS = {
     '輸入超過模型上下文上限': {'en': 'Input exceeds the model context limit', 'ja': '入力がモデルのコンテキスト上限を超えています'},
     '模型輸出達到 Token 上限': {'en': 'Model output reached the token limit', 'ja': 'モデル出力がトークン上限に達しました'},
     '服務拒絕處理此內容': {'en': 'Service refused to process this content', 'ja': 'サービスがこの内容の処理を拒否しました'},
+    'Codex 執行方式': {'en': 'Codex execution mode', 'ja': 'Codex 実行方式'},
+    'Codex 執行檔': {'en': 'Codex executable', 'ja': 'Codex 実行ファイル'},
     'Codex 執行檔不存在或無法啟動': {'en': 'Codex executable missing or failed to start', 'ja': 'Codex 実行ファイルが見つからないか、起動できません'},
     'Codex 要求互動操作，無法自動繼續': {'en': 'Codex requires interaction and cannot continue automatically', 'ja': 'Codex が対話操作を要求したため、自動で続行できません'},
     'Codex 回應格式或通訊協定異常': {'en': 'Invalid Codex response format or protocol', 'ja': 'Codex の応答形式または通信プロトコルに異常があります'},

@@ -20,6 +20,8 @@ from ui_language import tr
 
 
 LABELS = {
+    "codex_execution": "Codex 執行方式",
+    "codex_executable": "Codex 執行檔",
     "module": "自動化模組", "llm_profiles": "LLM 配置卡", "global_fontformat": "字體與排版",
     "drawpanel": "繪圖工具", "package_manager": "套件管理", "mirrors": "下載鏡像",
     "auto_tate_chu_yoko": "自動縱中橫", "textdetector": "文字偵測器", "ocr": "OCR",
@@ -367,6 +369,9 @@ class ConfigEditor(tk.Toplevel):
             selected.add(module.get(key))
         for index, profile in enumerate(module.get("llm_profiles", [])):
             if profile.get("id") in selected:
+                if profile.get("transport") == "Codex App Server":
+                    for key in ("codex_execution", "codex_executable"):
+                        self.field(params, ("module", "llm_profiles", index, key), str(profile.get("name", "LLM")) + " / " + field_name(key))
                 for key in ("model", "vision_model", "image_model", "base_url", "api_key", "max_tokens", "temperature", "thinking_level", "prompt", "vision_prompt"):
                     self.field(params, ("module", "llm_profiles", index, key), str(profile.get("name", "LLM")) + " / " + field_name(key),
                                refresh=key in ("model", "vision_model"))
