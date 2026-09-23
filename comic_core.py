@@ -78,7 +78,17 @@ def translations_complete(sources, translated, selected=None):
                for path in (sources if selected is None else selected))
 
 
-def translation_status(chapter_folder):
+def image_count(folder):
+    folder = Path(folder)
+    if not folder.is_dir():
+        return 0
+    with os.scandir(folder) as entries:
+        return sum(entry.is_file(follow_symlinks=False)
+                   and os.path.splitext(entry.name)[1].casefold() in IMAGE_EXTENSIONS
+                   for entry in entries)
+
+
+def translation_status(chapter_folder, *, source_images=None):
     result = Path(chapter_folder) / "result"
     if not result.is_dir():
         result = next((child for child in Path(chapter_folder).iterdir()
@@ -86,7 +96,7 @@ def translation_status(chapter_folder):
     if not result.is_dir() or is_link_or_junction(result):
         return tr("未翻譯"), []
     images = image_files(result)
-    if images and not translations_complete(image_files(chapter_folder), images):
+    if images and not translations_complete(image_files(chapter_folder) if source_images is None else source_images, images):
         return tr("部分翻譯"), images
     return (tr("可匯出") if images else tr("結果為空")), images
 

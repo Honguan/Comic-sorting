@@ -10,6 +10,7 @@
 
 1. Download the Windows x64 EXE from [GitHub Releases](https://github.com/Honguan/Comic-sorting/releases/latest), place it in a writable folder, and launch it.
 2. Choose your manga root folder and rescan to load series and chapters.
+   Scanning builds an in-memory page-count index shared with the queue. Rescanning or restarting rebuilds it; rescan after adding or removing images externally.
 3. For translation, configure a separately installed BallonsTranslator and its `config/config.json` in Settings. Leave Python blank to use that installation's bundled environment or `.venv`.
 4. For CBZ export, set the output folder in the Komga export tab.
 5. Select chapters and an action, add them to the queue, then start.

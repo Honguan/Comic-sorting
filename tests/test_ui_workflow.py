@@ -195,7 +195,7 @@ class WorkflowTests(unittest.TestCase):
         q.add_paths(paths)
         self.wait_counts(q)
         q.tree.selection_set(str(id(q.jobs[1])))
-        with mock.patch('translation_queue.image_files', side_effect=AssertionError('must not read disk')):
+        with mock.patch('translation_queue.image_count', side_effect=AssertionError('must not read disk')):
             q.move(-1)
             q.render()
             self.assertFalse(q.counting)
@@ -203,6 +203,34 @@ class WorkflowTests(unittest.TestCase):
         q.render(refresh_counts=True)
         self.wait_counts(q)
         self.assertEqual(sum(q.pending_file_counts.values()), 3)
+
+    def test_scan_page_index_shared_with_queue_and_rebuilt(self):
+        q = self.app.translation_queue
+        path = self.chapter('Chapter 1')
+        for name in ('1.png', '2.jpg', '3.webp'):
+            (path / name).touch()
+        base = path.parent.parent
+        self.app.apply_scan_data(base, self.app.scan_folder_data(base))
+        self.assertEqual(self.app.chapter_page_counts[path], 3)
+        q.jobs = [Job(path, 'translate'), Job(path, 'translate', start_page=2, end_page=3)]
+        with mock.patch('translation_queue.image_count', side_effect=AssertionError('index must avoid disk reads')):
+            q.render(refresh_counts=True)
+            self.wait_counts(q)
+            self.assertEqual(q.count_cache[path, 1, None], 3)
+            self.assertEqual(q.count_cache[path, 2, 3], 2)
+        (path / '3.webp').unlink()
+        self.app.scan_events.put(('done', base, self.app.scan_folder_data(base)))
+        self.app.poll_scan_events()
+        self.wait_counts(q)
+        self.assertEqual(q.count_cache[path, 1, None], 2)
+        self.assertIsNone(q.count_cache[path, 2, 3])
+        (path / '3.webp').touch()
+        q.jobs[1].status = 'failed'
+        q.tree.selection_set(str(id(q.jobs[1])))
+        q.retry()
+        self.wait_counts(q)
+        self.assertEqual(q.count_cache[path, 1, None], 3)
+        self.assertEqual(q.count_cache[path, 2, 3], 2)
 
     def chapter(self, name):
         path = self.folder / "Comics" / "Series" / name
@@ -1496,7 +1524,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("待翻譯檔案 5 張", q.summary.get())
         q.active_jobs = tuple(q.jobs)
         q.events.put(("status", 0, "running", ""))
-        with mock.patch("translation_queue.image_files", side_effect=AssertionError("status must not rescan")):
+        with mock.patch("translation_queue.image_count", side_effect=AssertionError("status must not rescan")):
             q.poll()
         self.wait_counts(q)
         self.assertIn("待翻譯檔案 2 張", q.summary.get())
@@ -1513,7 +1541,7 @@ class WorkflowTests(unittest.TestCase):
         q.add_paths([self.folder / "missing"], "translate")
         self.wait_counts(q)
         self.assertIn("待翻譯檔案 3 張（1 項無法計數）", q.summary.get())
-        with mock.patch("translation_queue.image_files", side_effect=PermissionError("synthetic denied")):
+        with mock.patch("translation_queue.image_count", side_effect=PermissionError("synthetic denied")):
             q.render(refresh_counts=True)
             self.wait_counts(q)
         self.assertIn("2 項無法計數", q.summary.get())

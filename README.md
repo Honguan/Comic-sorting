@@ -10,6 +10,7 @@
 
 1. 從 [GitHub Releases](https://github.com/Honguan/Comic-sorting/releases/latest) 下載 Windows x64 EXE，放在可寫入的資料夾後啟動。
 2. 選擇漫畫根目錄，按「重新掃描」載入系列與章節。
+   掃描建立記憶體頁數索引，供佇列共用；重新掃描或重開程式時重建。外部增刪圖片後請重新掃描。
 3. 要翻譯，在「設定」指定另行安裝的 BallonsTranslator 及其 `config/config.json`。Python 留白會尋找該安裝的內附環境或 `.venv`。
 4. 要匯出 CBZ，在「Komga 匯出」設定輸出目錄。
 5. 選擇章節與動作，加入主佇列，再按開始。

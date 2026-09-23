@@ -16,7 +16,7 @@ from queue_worker import BT_STAGES, Job, run_jobs, translator_command
 from app_logging import logger, log_path
 from ui_language import tr
 from bt_settings import ConfigEditor
-from comic_core import FOLDER_KINDS, folder_kind, image_files
+from comic_core import FOLDER_KINDS, folder_kind, image_files, image_count
 from queue_history import HistoryWindow, elapsed_text, save_run, usage_text, usage_columns
 from queue_errors import error_details, error_info
 from ntfy_notifications import NtfyNotifications
@@ -563,6 +563,7 @@ class TranslationQueue:
         self.tree.delete(*self.tree.get_children())
         self.pending_file_counts = {}
         keys = {(j.path, j.start_page, j.end_page) for j in self.jobs}
+        keys.update((j.path, 1, None) for j in self.jobs)
         self.count_cache = {key: value for key, value in self.count_cache.items() if key in keys}
         single_root = len({job.path.parent.parent for job in self.jobs}) == 1
         query = self.search.get().strip().replace("\\", "/").casefold()
@@ -610,11 +611,18 @@ class TranslationQueue:
             return
         self.counting = True
         generation = self.count_generation
+        totals = dict(getattr(self.app, 'chapter_page_counts', {}))
+        totals.update({path: count for (path, first, last), count in self.count_cache.items()
+                       if first == 1 and last is None and count is not None})
         def work():
             results = {}
             for path, first, last in missing:
                 try:
-                    results[path, first, last] = len(Job(path, "translate", start_page=first, end_page=last).select_pages(image_files(path)))
+                    if path not in totals:
+                        totals[path] = image_count(path)
+                    pages = range(totals[path])
+                    results[path, 1, None] = len(Job(path, "translate").select_pages(pages))
+                    results[path, first, last] = len(Job(path, "translate", start_page=first, end_page=last).select_pages(pages))
                 except (OSError, ValueError, TypeError):
                     results[path, first, last] = None
             self.count_results.put((generation, results))
@@ -883,9 +891,11 @@ class TranslationQueue:
             self.search.set("")
             self.apply_queue_filter()
         self.count_generation += 1
+        paths = {job.path for job in targets}
+        self.count_cache = {key: value for key, value in self.count_cache.items() if key[0] not in paths}
         for job in targets:
             job.status, job.error = "pending", ""
-            self.count_cache.pop((job.path, job.start_page, job.end_page), None)
+            self.app.chapter_page_counts.pop(job.path, None)
         self.tree.selection_set(items)
         for item in items:
             parent = self.tree.parent(item)

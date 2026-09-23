@@ -64,6 +64,7 @@ class FileAggregatorApp:
         self.tree_items = {}
         self.chapter_updates = {}
         self.chapter_sizes = {}
+        self.chapter_page_counts = {}
         self.ready_chapters = set()
         self.events = queue.Queue()
         self.scan_events = queue.Queue()
@@ -446,9 +447,12 @@ class FileAggregatorApp:
         chapter_sizes = {}
         ready_chapters = set()
         details = {}
+        page_counts = {}
         for folder_path, folder_name, number in folders:
             chapter = Path(folder_path)
-            status, translated = translation_status(folder_path)
+            sources = image_files(folder_path)
+            page_counts[chapter] = len(sources)
+            status, translated = translation_status(folder_path, source_images=sources)
             if status == tr("可匯出"):
                 detail = tr("{0} 張翻譯圖片｜可匯出").format(len(translated))
                 images = translated
@@ -460,7 +464,7 @@ class FileAggregatorApp:
                 detail = tr("{0} 張翻譯圖片｜部分翻譯").format(len(translated))
                 images = translated
             else:
-                images = image_files(folder_path)
+                images = sources
                 detail = tr("{0} 張圖片｜未翻譯").format(len(images))
             chapter_updates[chapter] = updated_at(chapter, images)
             chapter_sizes[chapter] = folder_size(chapter)
@@ -470,7 +474,7 @@ class FileAggregatorApp:
         for chapters in series_groups.values():
             chapters.sort(key=lambda item: (item[2], natural_sort_key(item[1])))
         return (folders, series_groups, chapter_updates, chapter_sizes,
-                ready_chapters, details)
+                ready_chapters, details, page_counts)
 
     def sorted_series(self, base):
         def sort_key(series):
@@ -493,7 +497,7 @@ class FileAggregatorApp:
                           if self.folder_tree.item(item, "open")}
         query = self.search_text.get().strip().casefold()
         (self.folders, self.series_groups, self.chapter_updates,
-         self.chapter_sizes, self.ready_chapters, details) = data
+         self.chapter_sizes, self.ready_chapters, details, self.chapter_page_counts) = data
         existing_items = self.folder_tree.get_children()
         if existing_items:
             self.folder_tree.delete(*existing_items)
