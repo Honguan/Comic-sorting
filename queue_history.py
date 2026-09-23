@@ -102,13 +102,17 @@ def scope_records(record, scope):
     return [job['usage'][scope] for job in record['jobs'] if scope in job.get('usage', {})]
 
 
+def completed_jobs(record):
+    return sum(job.get('status') in ('done', 'done_warning') for job in record['jobs'])
+
+
 def history_totals(path):
     counts = dict(runs=0, jobs=0, elapsed_seconds=0)
     usage = {scope: [] for scope in ('OCR', 'translation', 'total')}
     # ponytail: scan stored runs on refresh; persist aggregates if history scanning becomes slow.
     for record in iter_runs(path):
         counts['runs'] += 1
-        counts['jobs'] += len(record['jobs'])
+        counts['jobs'] += completed_jobs(record)
         counts['elapsed_seconds'] += record.get('elapsed_seconds') or 0
         for scope, values in usage.items():
             values.extend(scope_records(record, scope))
@@ -156,7 +160,7 @@ class HistoryWindow(tk.Toplevel):
         summary = ttk.Frame(totals)
         summary.pack(fill='x', pady=(0, 6))
         self.total_counts = {}
-        for index, (key, label) in enumerate((('runs', '佇列批數'), ('jobs', '工作數'), ('elapsed', '累計耗時'))):
+        for index, (key, label) in enumerate((('runs', '佇列批數'), ('jobs', '完成數'), ('elapsed', '累計耗時'))):
             ttk.Label(summary, text=tr(label)).grid(row=0, column=index * 2, padx=(0, 6))
             variable = tk.StringVar()
             self.total_counts[key] = variable
@@ -180,7 +184,7 @@ class HistoryWindow(tk.Toplevel):
         self.tree = ttk.Treeview(listing, columns=columns, show='tree headings', selectmode='browse', height=8)
         self.tree.heading('#0', text=tr("開始時間／資料夾"))
         self.tree.column('#0', width=320, minwidth=160)
-        for key, title, width in zip(columns, (tr("完成時間"), tr("狀態"), tr("工作數"), tr("耗時"),
+        for key, title, width in zip(columns, (tr("完成時間"), tr("狀態"), tr("完成數"), tr("耗時"),
                                                tr("Token 數"), tr("預估金額（USD）"), tr("請求數"), tr("金額完整性"), tr("Token 完整性"), tr("錯誤原因")), (160, 100, 65, 90, 130, 130, 80, 130, 130, 220)):
             self.tree.heading(key, text=title)
             self.tree.column(key, width=width, minwidth=40, stretch=False)
@@ -258,7 +262,7 @@ class HistoryWindow(tk.Toplevel):
                              text=record['started_at'][:19].replace('T', ' '), values=(
                 (record.get('finished_at') or '—')[:19].replace('T', ' '),
                 tr("未結束") if record['status'] == 'running' else tr(self.statuses[record['status']]),
-                len(record['jobs']), elapsed_text(record.get('elapsed_seconds')),
+                completed_jobs(record), elapsed_text(record.get('elapsed_seconds')),
                 *usage_columns(scope_records(record, 'total')), ''))
             self.records[record['id']] = record, None
             for index, job in enumerate(record['jobs'], 1):
@@ -303,7 +307,7 @@ class HistoryWindow(tk.Toplevel):
                   (tr("累計耗時"), elapsed_text(source.get('elapsed_seconds')))]
         jobs = record['jobs'] if job is None else [job]
         if job is None:
-            fields.append((tr("工作數"), len(jobs)))
+            fields.append((tr("完成數"), completed_jobs(record)))
         else:
             fields.append((tr("動作"), tr(self.actions[job['action']])))
             if job['action'] == 'translate':

@@ -1991,6 +1991,25 @@ class WorkflowTests(unittest.TestCase):
         window.refresh()
         self.assertEqual(window.total_counts['runs'].get(), '3')
 
+    def test_history_counts_only_completed_jobs_in_stopped_batch(self):
+        from queue_history import save_run
+        statuses = ('done', 'done_warning', 'pending', 'running', 'failed', 'blocked', 'cancelled')
+        record = dict(id='stopped', started_at='2026-09-23', status='cancelled', jobs=[
+            dict(path=f'Chapter {index}', action='translate', status=status)
+            for index, status in enumerate(statuses)])
+        save_run(self.app.history_path, record)
+        original = self.app.history_path.read_bytes()
+        self.app.translation_queue.open_history()
+        window = self.app.translation_queue.history_window
+        self.assertEqual(window.tree.heading('jobs', 'text'), '完成數')
+        self.assertEqual(window.tree.set('stopped', 'jobs'), '2')
+        self.assertEqual(window.total_counts['jobs'].get(), '2')
+        fields = dict(window.detail_tables['basic'].item(row, 'values')
+                      for row in window.detail_tables['basic'].get_children())
+        self.assertEqual(fields['完成數'], '2')
+        self.assertEqual(len(window.tree.get_children('stopped')), len(statuses))
+        self.assertEqual(self.app.history_path.read_bytes(), original)
+
     def test_queue_totals_match_collapsed_history_and_folder_breakdown(self):
         from queue_history import find_runs
         from queue_worker import parse_bt_usage

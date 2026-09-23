@@ -158,6 +158,7 @@ TRANSLATIONS = {
     '完成時間': {'en': 'Finished at', 'ja': '終了日時'},
     '最後儲存時間': {'en': 'Last saved', 'ja': '最終保存日時'},
     '工作數': {'en': 'Jobs', 'ja': '件数'},
+    '完成數': {'en': 'Completed jobs', 'ja': '完了件数'},
     '耗時': {'en': 'Duration', 'ja': '所要時間'},
     '合計用量／預估金額': {'en': 'Total usage / estimated cost', 'ja': '合計使用量／推定金額'},
     '未結束': {'en': 'Not finished', 'ja': '未終了'},
