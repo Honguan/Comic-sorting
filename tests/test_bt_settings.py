@@ -227,6 +227,28 @@ class ConfigEditorTests(ConfigFixture, unittest.TestCase):
         with self.assertRaises(ValueError):
             self.editor.document.set(path, "invalid")
 
+    def test_jev_settings_preserve_secret_and_save_provider_and_toggle(self):
+        secret = {"storage": "portable_obfuscated", "version": 1, "value": "opaque"}
+        self.raw["module"].update(ocr_jev_filter=False, ocr_jev_provider="typesafe", ocr_jev_typesafe_api_key=secret)
+        fields = self.meta["schema"]["children"]["module"]["children"]
+        fields.update(ocr_jev_filter={"type": "boolean"},
+                      ocr_jev_provider={"type": "string", "choices": ["typesafe", "openrouter"], "strict_choices": True},
+                      ocr_jev_typesafe_api_key={"type": "secret"})
+        self.path.write_text(json.dumps(self.raw), encoding="utf-8")
+        self.editor.loaded(self.document())
+        key = ("module", "ocr_jev_typesafe_api_key")
+        self.assertEqual(self.editor.fields[key][0].get(), "")
+        self.editor.fields[("module", "ocr_jev_filter")][0].set(True)
+        self.editor.fields[("module", "ocr_jev_provider")][0].set("openrouter")
+        self.editor.save()
+        self.wait_idle()
+        saved = json.loads(self.path.read_text(encoding="utf-8"))["module"]
+        self.assertTrue(saved["ocr_jev_filter"])
+        self.assertEqual(saved["ocr_jev_provider"], "openrouter")
+        self.assertEqual(saved["ocr_jev_typesafe_api_key"], secret)
+        with self.assertRaises(ValueError):
+            self.editor.document.set(("module", "ocr_jev_provider"), "invalid")
+
     def test_focused_form_preserves_hidden_settings_and_saves_active_profile(self):
         paths = self.editor.fields
         self.assertNotIn(("imgsave_quality",), paths)

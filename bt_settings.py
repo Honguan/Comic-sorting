@@ -353,6 +353,13 @@ class ConfigEditor(tk.Toplevel):
         self.field(run, ("restore_ocr_empty",), "移除空文本塊")
         self.field(run, ("render_without_text_style_update",), "原生渲染時保留文本樣式")
         params = self.section("目前模組參數")
+        if "ocr_jev_filter" in module:
+            jev = self.section("Jev OCR 清理")
+            for key, label in (("ocr_jev_filter", "啟用 Jev OCR 清理"), ("ocr_jev_provider", "Jev 服務商"),
+                               ("ocr_jev_typesafe_api_key", "TypeSafe API 金鑰")):
+                self.field(jev, ("module", key), label)
+            ttk.Label(jev, text=tr("金鑰留白保留原值。TypeSafe 亦可使用 TYPESAFE_API_KEY；OpenRouter 使用 OPENROUTER_API_KEY 環境變數。"),
+                      wraplength=560).grid(row=jev.grid_size()[1], column=0, columnspan=2, sticky='w', pady=8)
         for key in ("textdetector", "ocr", "inpainter", "translator"):
             name = module.get(key)
             for param in module.get(key + "_params", {}).get(name, {}):
