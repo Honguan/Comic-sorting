@@ -61,11 +61,15 @@ def parse_jev_stats(line):
                       trimmed_blocks=sum(b['action'] == 'trimmed' for b in blocks),
                       kept_blocks=sum(b['action'] == 'kept' for b in blocks),
                       removed_characters=sum(b['removed_characters'] for b in blocks),
-                      requests=usage['requests'], reported_requests=usage['reported_requests'],
-                      total_tokens=usage['total_tokens'])
+                      requests=usage['requests'])
+        if 'input_tokens' in usage:
+            counts.update(input_tokens=usage['input_tokens'], reported_input_requests=usage['reported_input_requests'],
+                          missing_input_usage_requests=usage['requests'] - usage['reported_input_requests'])
+        else:
+            counts.update(reported_requests=usage['reported_requests'], total_tokens=usage['total_tokens'])
         seconds = data.get('elapsed_seconds')
         if (any(type(v) is not int or v < 0 for v in counts.values())
-                or counts['reported_requests'] > counts['requests']
+                or counts.get('reported_requests', counts.get('reported_input_requests', 0)) > counts['requests']
                 or any(b['action'] not in ('cleared', 'trimmed', 'kept') for b in blocks)
                 or (seconds is not None and (type(seconds) not in (int, float) or not math.isfinite(seconds) or seconds < 0))):
             return None
@@ -281,7 +285,7 @@ def run_translation(command, root, env, stop, progress, log_context="", usage=No
                         jev_totals[key] = jev_totals.get(key, 0) + value
                 if jev is not None:
                     jev(dict(jev_totals))
-                if usage is not None:
+                if usage is not None and 'total_tokens' in jev_totals:
                     usage(dict(scope='Jev', cost=None, requests=jev_totals['requests'],
                                total_tokens=jev_totals['total_tokens'],
                                missing_usage_requests=jev_totals['requests'] - jev_totals['reported_requests'],

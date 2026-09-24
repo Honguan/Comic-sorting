@@ -12,7 +12,8 @@ from queue_worker import BT_STAGES, parse_bt_usage
 from queue_errors import error_details, error_info
 from ui_language import tr
 
-JEV_FIELDS = {'calls': '處理次數', 'changed_calls': '變更次數', 'cleared_blocks': '清空文字塊',
+JEV_FIELDS = {'requests': '請求數', 'input_tokens': '輸入 Token', 'missing_input_usage_requests': '未回報請求數',
+              'calls': '處理次數', 'changed_calls': '變更次數', 'cleared_blocks': '清空文字塊',
               'trimmed_blocks': '修剪文字塊', 'kept_blocks': '保留文字塊',
               'removed_characters': '移除字元', 'elapsed_seconds': 'Jev 耗時'}
 
@@ -28,6 +29,7 @@ def jev_totals(jobs):
 
 def jev_columns(stats):
     return tuple(elapsed_text(stats.get(key)) if key == 'elapsed_seconds'
+                 else format_tokens(stats[key]) if key == 'input_tokens' and key in stats
                  else f'{stats[key]:,}' if key in stats else '—' for key in JEV_FIELDS)
 
 
@@ -196,7 +198,7 @@ class HistoryWindow(tk.Toplevel):
         self.jev_totals_table = ttk.Treeview(totals, columns=tuple(JEV_FIELDS), show='headings', height=1)
         for key, title in JEV_FIELDS.items():
             self.jev_totals_table.heading(key, text=tr(title))
-            self.jev_totals_table.column(key, width=100, minwidth=40, anchor='e')
+            self.jev_totals_table.column(key, width=70, minwidth=40, anchor='e')
         self.jev_totals_table.pack(fill='x', pady=(4, 0))
         note = ttk.Label(totals, text=tr("全部歷史，含失敗／停止已回報用量，不受查詢條件影響；耗時為各批次加總，可能重疊。"), wraplength=780)
         note.pack(fill='x', pady=(4, 0))
@@ -303,6 +305,8 @@ class HistoryWindow(tk.Toplevel):
                 self.records[item] = record, job
                 for scope, title, stage in (('OCR', 'OCR', 'OCR'), ('Jev', 'Jev', 'Jev'), ('translation', tr("翻譯"), 'Translation'),
                                             ('total', tr("合計"), None)):
+                    if scope == 'Jev' and scope not in usage:
+                        continue
                     seconds = job.get('elapsed_seconds') if stage is None else job.get('stage_seconds', {}).get(stage)
                     if stage == 'Jev':
                         seconds = job.get('jev_stats', {}).get('elapsed_seconds')
@@ -319,6 +323,8 @@ class HistoryWindow(tk.Toplevel):
     def fill_usage(self, table, usage):
         table.delete(*table.get_children())
         for scope, label in (('OCR', 'OCR'), ('Jev', 'Jev'), ('translation', tr("翻譯")), ('total', tr("合計"))):
+            if scope == 'Jev' and not usage[scope]:
+                continue
             table.insert('', 'end', iid=scope, values=(label, *usage_columns(usage[scope])))
 
     def show_details(self):

@@ -31,7 +31,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(q.jev_elapsed_label.get(), '00:00:12')
         self.assertEqual(q.usage_table.item('Jev', 'values')[1], '1.50K')
         q.open_jev_stats()
-        self.assertEqual(len(q.jev_table.get_children()), 7)
+        self.assertEqual(len(q.jev_table.get_children()), 10)
         self.assertEqual(q.jev_table.item(q.jev_table.get_children()[-1], 'values')[1], '00:00:12')
         q.jev_window.destroy()
         record = dict(id='jev', started_at='2026-09-24', status='cancelled', elapsed_seconds=20,
@@ -645,7 +645,7 @@ class WorkflowTests(unittest.TestCase):
         q.show_usage()
         self.assertEqual(q.usage_table.item('total', 'values'), ('合計', '12.35K', 'US$0.13', '4', '僅含已知金額', '回報不完整'))
         q.show_usage()
-        self.assertEqual(len(q.usage_table.get_children()), 4)
+        self.assertEqual(len(q.usage_table.get_children()), 3)
         self.assertEqual(q.elapsed_label.get(), '00:00:00')
 
     def test_manga_columns_fit_and_selection_shows_complete_details(self):
@@ -2133,7 +2133,7 @@ class WorkflowTests(unittest.TestCase):
             self.assertEqual(tokens, window.tree.set(folder, 'tokens'))
             self.assertIn(cost, window.tree.set(folder, 'cost'))
         scopes = window.tree.get_children(folders[0])
-        self.assertEqual([window.tree.item(item, 'text') for item in scopes], ['OCR', 'Jev', '翻譯', '合計'])
+        self.assertEqual([window.tree.item(item, 'text') for item in scopes], ['OCR', '翻譯', '合計'])
         self.assertFalse(window.tree.bbox(scopes[0]))
         window.tree.item(folders[0], open=True)
         self.root.update_idletasks()

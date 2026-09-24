@@ -333,8 +333,8 @@ class TranslationQueue:
         if self.jev_window is None or not self.jev_window.winfo_exists():
             self.jev_window = tk.Toplevel(self.app.root)
             self.jev_window.title(tr('Jev 統計'))
-            self.jev_window.geometry('480x300')
-            self.jev_table = ttk.Treeview(self.jev_window, columns=('field', 'value'), show='headings', height=7)
+            self.jev_window.geometry('480x380')
+            self.jev_table = ttk.Treeview(self.jev_window, columns=('field', 'value'), show='headings', height=len(JEV_FIELDS))
             for key, title in (('field', '欄位'), ('value', '資料')):
                 self.jev_table.heading(key, text=tr(title))
                 self.jev_table.column(key, width=200, minwidth=80)
@@ -352,6 +352,10 @@ class TranslationQueue:
         for scope, label in self.usage_labels.items():
             records = [value for (_, kind), value in self.usage_records.items() if kind == scope]
             label.set(usage_text(records))
+            if scope == 'Jev' and not records:
+                if self.usage_table.exists(scope):
+                    self.usage_table.delete(scope)
+                continue
             title = {'OCR': 'OCR', 'Jev': 'Jev', 'translation': '翻譯', 'total': '合計'}[scope]
             values = (tr(title), *usage_columns(records))
             if self.usage_table.exists(scope):

@@ -99,6 +99,8 @@ TRANSLATIONS = {
     '服務拒絕處理此內容': {'en': 'Service refused to process this content', 'ja': 'サービスがこの内容の処理を拒否しました'},
     'Codex 執行方式': {'en': 'Codex execution mode', 'ja': 'Codex 実行方式'},
     'Jev 統計': {'en': 'Jev statistics', 'ja': 'Jev 統計'},
+    '輸入 Token': {'en': 'Input tokens', 'ja': '入力 Token'},
+    '未回報請求數': {'en': 'Requests without input usage', 'ja': '入力使用量未報告リクエスト数'},
     'Jev OCR 清理': {'en': 'Jev OCR cleanup', 'ja': 'Jev OCR クリーニング'},
     '啟用 Jev OCR 清理': {'en': 'Enable Jev OCR cleanup', 'ja': 'Jev OCR クリーニングを有効化'},
     'Jev 服務商': {'en': 'Jev provider', 'ja': 'Jev プロバイダー'},

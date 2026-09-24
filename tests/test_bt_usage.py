@@ -16,6 +16,23 @@ def usage_line(scope='', tokens=1274185, cost='2.483284', subtotal=None, unprice
 
 
 class UsageTests(unittest.TestCase):
+    def test_jev_input_tokens_do_not_enter_llm_usage(self):
+        data = dict(event='finished', audit_id='new-page', elapsed_seconds=2,
+                    blocks=[dict(action='kept', removed_characters=0)],
+                    usage=dict(requests=3, reported_input_requests=2, input_tokens=1500))
+        line = '[INFO ] jev_filter:record:205 - Jev OCR filter audit: ' + json.dumps(data)
+        stats, usage = [], []
+        with self.assertRaises(RuntimeError):
+            run_translation([sys.executable, '-c', f'print({line!r}); raise SystemExit(1)'],
+                            Path.cwd(), None, threading.Event(), lambda *args: None,
+                            usage=usage.append, jev=stats.append)
+        self.assertEqual(usage, [])
+        self.assertEqual(stats[0]['input_tokens'], 1500)
+        self.assertEqual(stats[0]['missing_input_usage_requests'], 1)
+        self.assertNotIn('total_tokens', stats[0])
+        from queue_history import jev_columns, jev_totals
+        self.assertEqual(jev_columns(jev_totals([{'jev_stats': stats[0]}]))[:3], ('3', '1.50K', '1'))
+
     def test_jev_audit_deduplicates_and_survives_failed_process(self):
         data = dict(event='finished', audit_id='page1', status='completed', elapsed_seconds=1.25,
                     blocks=[dict(action='trimmed', removed_characters=4), dict(action='kept', removed_characters=0)],
