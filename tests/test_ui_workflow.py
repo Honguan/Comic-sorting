@@ -17,6 +17,38 @@ def detail_values(window):
 
 
 class WorkflowTests(unittest.TestCase):
+    def test_jev_current_and_history_statistics_preserve_totals(self):
+        from queue_history import HistoryWindow, history_totals
+        from translation_queue import ACTIONS, STATUSES
+        q = self.app.translation_queue
+        stats = dict(calls=2, changed_calls=1, cleared_blocks=1, trimmed_blocks=2,
+                     kept_blocks=3, removed_characters=9, elapsed_seconds=12.5)
+        usage = dict(requests=4, total_tokens=1500, missing_usage_requests=0, unpriced_requests=4, cost=None)
+        q.jev_records[0] = stats
+        q.usage_records[0, 'Jev'] = usage
+        q.usage_records[0, 'total'] = usage
+        q.show_usage()
+        self.assertEqual(q.jev_elapsed_label.get(), '00:00:12')
+        self.assertEqual(q.usage_table.item('Jev', 'values')[1], '1.50K')
+        q.open_jev_stats()
+        self.assertEqual(len(q.jev_table.get_children()), 7)
+        self.assertEqual(q.jev_table.item(q.jev_table.get_children()[-1], 'values')[1], '00:00:12')
+        q.jev_window.destroy()
+        record = dict(id='jev', started_at='2026-09-24', status='cancelled', elapsed_seconds=20,
+                      jobs=[dict(path='Chapter', action='translate', status='failed', error='',
+                                 jev_stats=stats, usage={'Jev': usage, 'total': usage})])
+        q.active_jobs = [Job(Path('Chapter'), 'translate', 'failed')]
+        q.history_run = record
+        self.assertTrue(q.save_history())
+        totals = history_totals(self.app.history_path)
+        self.assertEqual(totals['elapsed_seconds'], 20)
+        self.assertEqual(totals['jev_stats']['elapsed_seconds'], 12.5)
+        self.assertEqual(totals['usage_records']['total'], [usage])
+        window = HistoryWindow(self.root, self.app.history_path, ACTIONS, STATUSES)
+        self.assertEqual(window.totals.item('Jev', 'values')[1], '1.50K')
+        self.assertIn('00:00:12', detail_values(window))
+        window.destroy()
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.folder = Path(self.temp.name).resolve()
@@ -613,7 +645,7 @@ class WorkflowTests(unittest.TestCase):
         q.show_usage()
         self.assertEqual(q.usage_table.item('total', 'values'), ('合計', '12.35K', 'US$0.13', '4', '僅含已知金額', '回報不完整'))
         q.show_usage()
-        self.assertEqual(len(q.usage_table.get_children()), 3)
+        self.assertEqual(len(q.usage_table.get_children()), 4)
         self.assertEqual(q.elapsed_label.get(), '00:00:00')
 
     def test_manga_columns_fit_and_selection_shows_complete_details(self):
@@ -2101,7 +2133,7 @@ class WorkflowTests(unittest.TestCase):
             self.assertEqual(tokens, window.tree.set(folder, 'tokens'))
             self.assertIn(cost, window.tree.set(folder, 'cost'))
         scopes = window.tree.get_children(folders[0])
-        self.assertEqual([window.tree.item(item, 'text') for item in scopes], ['OCR', '翻譯', '合計'])
+        self.assertEqual([window.tree.item(item, 'text') for item in scopes], ['OCR', 'Jev', '翻譯', '合計'])
         self.assertFalse(window.tree.bbox(scopes[0]))
         window.tree.item(folders[0], open=True)
         self.root.update_idletasks()

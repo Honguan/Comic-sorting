@@ -1,10 +1,11 @@
 from decimal import Decimal
 from pathlib import Path
 import sys
+import json
 import threading
 import unittest
 
-from queue_worker import parse_bt_usage, run_translation
+from queue_worker import parse_bt_usage, parse_jev_stats, run_translation
 
 
 def usage_line(scope='', tokens=1274185, cost='2.483284', subtotal=None, unpriced=0):
@@ -15,6 +16,24 @@ def usage_line(scope='', tokens=1274185, cost='2.483284', subtotal=None, unprice
 
 
 class UsageTests(unittest.TestCase):
+    def test_jev_audit_deduplicates_and_survives_failed_process(self):
+        data = dict(event='finished', audit_id='page1', status='completed', elapsed_seconds=1.25,
+                    blocks=[dict(action='trimmed', removed_characters=4), dict(action='kept', removed_characters=0)],
+                    usage=dict(requests=3, reported_requests=2, total_tokens=1500))
+        line = '[INFO ] jev_filter:record:205 - Jev OCR filter audit: ' + json.dumps(data)
+        stats, usage = [], []
+        script = f'print({line!r}); print({line!r}); print({usage_line("Jev ", 1500, "0.01")!r}); raise SystemExit(1)'
+        with self.assertRaises(RuntimeError):
+            run_translation([sys.executable, '-c', script], Path.cwd(), None, threading.Event(),
+                            lambda *args: None, usage=usage.append, jev=stats.append)
+        self.assertEqual(len(stats), 1)
+        self.assertEqual((stats[0]['calls'], stats[0]['trimmed_blocks'], stats[0]['elapsed_seconds']), (1, 1, 1.25))
+        self.assertEqual(len(usage), 2)
+        self.assertEqual(usage[0]['missing_usage_requests'], 1)
+        self.assertEqual(usage[-1]['cost'], Decimal('0.01'))
+        for bad in ('{}', '{invalid', json.dumps(dict(data, elapsed_seconds=-1))):
+            self.assertIsNone(parse_jev_stats('[INFO ] jev_filter:record:205 - Jev OCR filter audit: ' + bad))
+
     def test_stage_elapsed_time_comes_from_progress_not_eta(self):
         lines = ['OCR: 50%|#####     | 1/2 [01:02<00:04, 1.0s/it]',
                  'Translation: 100%|##########| 2/2 [1:02:03<00:00, 1.0s/it]',

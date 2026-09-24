@@ -12,6 +12,24 @@ from queue_worker import BT_STAGES, parse_bt_usage
 from queue_errors import error_details, error_info
 from ui_language import tr
 
+JEV_FIELDS = {'calls': '處理次數', 'changed_calls': '變更次數', 'cleared_blocks': '清空文字塊',
+              'trimmed_blocks': '修剪文字塊', 'kept_blocks': '保留文字塊',
+              'removed_characters': '移除字元', 'elapsed_seconds': 'Jev 耗時'}
+
+
+def jev_totals(jobs):
+    result = {}
+    for job in jobs:
+        for key, value in job.get('jev_stats', {}).items():
+            if value is not None:
+                result[key] = result.get(key, 0) + value
+    return result
+
+
+def jev_columns(stats):
+    return tuple(elapsed_text(stats.get(key)) if key == 'elapsed_seconds'
+                 else f'{stats[key]:,}' if key in stats else '—' for key in JEV_FIELDS)
+
 
 def elapsed_text(seconds):
     if seconds is None:
@@ -108,15 +126,18 @@ def completed_jobs(record):
 
 def history_totals(path):
     counts = dict(runs=0, jobs=0, elapsed_seconds=0)
-    usage = {scope: [] for scope in ('OCR', 'translation', 'total')}
+    jev = {}
+    usage = {scope: [] for scope in ('OCR', 'Jev', 'translation', 'total')}
     # ponytail: scan stored runs on refresh; persist aggregates if history scanning becomes slow.
     for record in iter_runs(path):
         counts['runs'] += 1
         counts['jobs'] += completed_jobs(record)
         counts['elapsed_seconds'] += record.get('elapsed_seconds') or 0
+        for key, value in jev_totals(record['jobs']).items():
+            jev[key] = jev.get(key, 0) + value
         for scope, values in usage.items():
             values.extend(scope_records(record, scope))
-    return dict(counts, usage={scope: usage_text(values) for scope, values in usage.items()}, usage_records=usage)
+    return dict(counts, usage={scope: usage_text(values) for scope, values in usage.items()}, usage_records=usage, jev_stats=jev)
 
 
 def usage_columns(records):
@@ -167,11 +188,16 @@ class HistoryWindow(tk.Toplevel):
             ttk.Entry(summary, textvariable=variable, state='readonly', width=14).grid(row=0, column=index * 2 + 1, sticky='ew', padx=(0, 12))
             summary.columnconfigure(index * 2 + 1, weight=1)
         columns = ('scope', 'tokens', 'cost', 'requests', 'pricing', 'reporting')
-        self.totals = ttk.Treeview(totals, columns=columns, show='headings', height=3, selectmode='browse')
+        self.totals = ttk.Treeview(totals, columns=columns, show='headings', height=4, selectmode='browse')
         for key, title, width in zip(columns, ('項目', 'Token 數', '預估金額（USD）', '請求數', '金額完整性', 'Token 完整性'), (70, 130, 130, 80, 145, 145)):
             self.totals.heading(key, text=tr(title))
             self.totals.column(key, width=width, minwidth=40, anchor='w' if key in ('scope', 'pricing', 'reporting') else 'e')
         self.totals.pack(fill='x')
+        self.jev_totals_table = ttk.Treeview(totals, columns=tuple(JEV_FIELDS), show='headings', height=1)
+        for key, title in JEV_FIELDS.items():
+            self.jev_totals_table.heading(key, text=tr(title))
+            self.jev_totals_table.column(key, width=100, minwidth=40, anchor='e')
+        self.jev_totals_table.pack(fill='x', pady=(4, 0))
         note = ttk.Label(totals, text=tr("全部歷史，含失敗／停止已回報用量，不受查詢條件影響；耗時為各批次加總，可能重疊。"), wraplength=780)
         note.pack(fill='x', pady=(4, 0))
         note.bind('<Configure>', lambda event: note.configure(wraplength=max(100, event.width)))
@@ -198,7 +224,7 @@ class HistoryWindow(tk.Toplevel):
         self.details = ttk.Notebook(detail)
         self.details.pack(fill='both', expand=True)
         self.detail_tables = {}
-        for key, title in (('basic', '基本資料'), ('usage', '用量與金額'), ('stages', '各階段耗時')):
+        for key, title in (('basic', '基本資料'), ('usage', '用量與金額'), ('stages', '各階段耗時'), ('jev', 'Jev 統計')):
             frame = ttk.Frame(self.details)
             self.details.add(frame, text=tr(title))
             columns = self.totals['columns'] if key == 'usage' else ('field', 'value')
@@ -255,6 +281,8 @@ class HistoryWindow(tk.Toplevel):
             self.total_counts[key].set(f"{totals[key]:,}")
         self.total_counts['elapsed'].set(elapsed_text(totals['elapsed_seconds']))
         self.fill_usage(self.totals, totals['usage_records'])
+        self.jev_totals_table.delete(*self.jev_totals_table.get_children())
+        self.jev_totals_table.insert('', 'end', values=jev_columns(totals['jev_stats']))
         self.tree.delete(*self.tree.get_children())
         self.records = {}
         for record in rows:
@@ -273,9 +301,11 @@ class HistoryWindow(tk.Toplevel):
                     *usage_columns([usage['total']] if 'total' in usage else []),
                     error_info(job['status'], job.get('error', ''))[1]))
                 self.records[item] = record, job
-                for scope, title, stage in (('OCR', 'OCR', 'OCR'), ('translation', tr("翻譯"), 'Translation'),
+                for scope, title, stage in (('OCR', 'OCR', 'OCR'), ('Jev', 'Jev', 'Jev'), ('translation', tr("翻譯"), 'Translation'),
                                             ('total', tr("合計"), None)):
                     seconds = job.get('elapsed_seconds') if stage is None else job.get('stage_seconds', {}).get(stage)
+                    if stage == 'Jev':
+                        seconds = job.get('jev_stats', {}).get('elapsed_seconds')
                     child = self.tree.insert(item, 'end', text=title, values=(
                         '', '', '', elapsed_text(seconds),
                         *usage_columns([usage[scope]] if scope in usage else []), ''))
@@ -288,7 +318,7 @@ class HistoryWindow(tk.Toplevel):
 
     def fill_usage(self, table, usage):
         table.delete(*table.get_children())
-        for scope, label in (('OCR', 'OCR'), ('translation', tr("翻譯")), ('total', tr("合計"))):
+        for scope, label in (('OCR', 'OCR'), ('Jev', 'Jev'), ('translation', tr("翻譯")), ('total', tr("合計"))):
             table.insert('', 'end', iid=scope, values=(label, *usage_columns(usage[scope])))
 
     def show_details(self):
@@ -316,7 +346,7 @@ class HistoryWindow(tk.Toplevel):
             diagnostic = error_details(job['status'], job.get('error', ''))
             if diagnostic:
                 fields.append((tr("錯誤原因"), diagnostic))
-            for scope, label in (('OCR', 'OCR'), ('translation', tr("翻譯")), ('total', tr("合計"))):
+            for scope, label in (('OCR', 'OCR'), ('Jev', 'Jev'), ('translation', tr("翻譯")), ('total', tr("合計"))):
                 value = job.get('usage', {}).get(scope, {})
                 if value.get('price_basis'):
                     fields.append((label + ' / ' + tr("估價依據"), value['price_basis']))
@@ -325,7 +355,11 @@ class HistoryWindow(tk.Toplevel):
             self.detail_tables['basic'].insert('', 'end', values=(label, value))
         self.fill_usage(self.detail_tables['usage'], {
             scope: [item['usage'][scope] for item in jobs if scope in item.get('usage', {})]
-            for scope in ('OCR', 'translation', 'total')})
+            for scope in ('OCR', 'Jev', 'translation', 'total')})
         for stage in BT_STAGES:
             values = [item['stage_seconds'][stage] for item in jobs if stage in item.get('stage_seconds', {})]
             self.detail_tables['stages'].insert('', 'end', values=(tr(stage), elapsed_text(sum(values) if values else None)))
+        stats = jev_totals(jobs)
+        for label, value in zip(JEV_FIELDS.values(), jev_columns(stats)):
+            self.detail_tables['jev'].insert('', 'end', values=(tr(label), value))
+        self.detail_tables['stages'].insert('', 'end', values=(tr('Jev 耗時'), elapsed_text(stats.get('elapsed_seconds'))))

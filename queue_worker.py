@@ -5,6 +5,7 @@ from decimal import Decimal, InvalidOperation
 from datetime import datetime
 import os
 import json
+import math
 from pathlib import Path
 import re
 import subprocess
@@ -27,7 +28,7 @@ BT_STAGES = {"Text Detection": "enable_detect", "OCR": "enable_ocr",
 
 
 def parse_bt_usage(line):
-    match = re.search(r"\[INFO\s*\]\s+module_manager:_finish_llm_usage_run:\d+ - LLM (?:(OCR|translation) )?run usage: (.*)", line)
+    match = re.search(r"\[INFO\s*\]\s+module_manager:_finish_llm_usage_run:\d+ - LLM (?:(OCR|translation|Jev) )?run usage: (.*)", line)
     if not match:
         return None
     fields = dict(part.split('=', 1) for part in match[2].split(', ') if '=' in part)
@@ -44,6 +45,33 @@ def parse_bt_usage(line):
         return None
     return dict(scope=match[1] or 'total', cost=cost, price_basis=fields.get('price_basis'),
                 rates_date=fields.get('rates_date'), **counts)
+
+
+def parse_jev_stats(line):
+    marker = ' - Jev OCR filter audit: '
+    if marker not in line:
+        return None
+    try:
+        data = json.loads(line.split(marker, 1)[1])
+        if data.get('event') != 'finished' or not isinstance(data.get('audit_id'), str):
+            return None
+        blocks, usage = data['blocks'], data['usage']
+        counts = dict(calls=1, changed_calls=int(any(b['action'] != 'kept' for b in blocks)),
+                      cleared_blocks=sum(b['action'] == 'cleared' for b in blocks),
+                      trimmed_blocks=sum(b['action'] == 'trimmed' for b in blocks),
+                      kept_blocks=sum(b['action'] == 'kept' for b in blocks),
+                      removed_characters=sum(b['removed_characters'] for b in blocks),
+                      requests=usage['requests'], reported_requests=usage['reported_requests'],
+                      total_tokens=usage['total_tokens'])
+        seconds = data.get('elapsed_seconds')
+        if (any(type(v) is not int or v < 0 for v in counts.values())
+                or counts['reported_requests'] > counts['requests']
+                or any(b['action'] not in ('cleared', 'trimmed', 'kept') for b in blocks)
+                or (seconds is not None and (type(seconds) not in (int, float) or not math.isfinite(seconds) or seconds < 0))):
+            return None
+        return dict(audit_id=data['audit_id'], elapsed_seconds=seconds, **counts)
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return None
 
 
 def parse_bt_progress(line):
@@ -214,13 +242,14 @@ class TranslationSession:
             self.process = None
 
 
-def run_translation(command, root, env, stop, progress, log_context="", usage=None, timing=None, *, session=None, request=None):
+def run_translation(command, root, env, stop, progress, log_context="", usage=None, timing=None, *, session=None, request=None, jev=None):
     completed = False
     failures = deque(maxlen=5)
     fatal_count = 0
     retries = 0
     recent = deque(maxlen=20)
     stages = {}
+    jev_seen, jev_totals = set(), {}
     ansi = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\))")
     owned = session is None
     session = session or TranslationSession(stop)
@@ -244,6 +273,19 @@ def run_translation(command, root, env, stop, progress, log_context="", usage=No
             consumption = parse_bt_usage(line)
             if consumption is not None and usage is not None:
                 usage(consumption)
+            stats = parse_jev_stats(line)
+            if stats is not None and stats['audit_id'] not in jev_seen:
+                jev_seen.add(stats.pop('audit_id'))
+                for key, value in stats.items():
+                    if value is not None:
+                        jev_totals[key] = jev_totals.get(key, 0) + value
+                if jev is not None:
+                    jev(dict(jev_totals))
+                if usage is not None:
+                    usage(dict(scope='Jev', cost=None, requests=jev_totals['requests'],
+                               total_tokens=jev_totals['total_tokens'],
+                               missing_usage_requests=jev_totals['requests'] - jev_totals['reported_requests'],
+                               unpriced_requests=jev_totals['requests']))
             completed |= "finished translating all dirs" in line
             record = re.search(r"\[(?:ERROR|WARNING|INFO|DEBUG)\s*\]\s+\w+:\w+:\d+ - ", line)
             diagnostic = line[record.start():] if record else line
@@ -386,6 +428,7 @@ def run_jobs(jobs, settings, output, skip, stop, emit, *, pause=None, checkpoint
                                                             settings.get("bt_python", ""), path, **command_options), stop,
                                         lambda *values: emit(("bt_progress", *values)), log_context=job_id,
                                         usage=lambda values: emit(("usage", index, values)),
+                                        jev=lambda values: emit(("jev_stats", index, values)),
                                         timing=lambda name, seconds: emit(("stage_time", index, name, seconds)), **session_options)
                         if isinstance(diagnostic, str):
                             completion_note = diagnostic

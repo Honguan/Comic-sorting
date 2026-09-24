@@ -17,7 +17,7 @@ from app_logging import logger, log_path
 from ui_language import tr
 from bt_settings import ConfigEditor
 from comic_core import FOLDER_KINDS, folder_kind, image_files, image_count
-from queue_history import HistoryWindow, elapsed_text, save_run, usage_text, usage_columns
+from queue_history import HistoryWindow, elapsed_text, save_run, usage_text, usage_columns, JEV_FIELDS, jev_totals, jev_columns
 from queue_errors import error_details, error_info
 from ntfy_notifications import NtfyNotifications
 from queue_start_dialog import QueueStartDialog
@@ -211,6 +211,8 @@ class TranslationQueue:
             ttk.Label(progress_grid, textvariable=self.time_labels[name]).grid(row=row, column=3, sticky="w", padx=(8, 0))
         self.reset_bt_progress()
         self.usage_records = {}
+        self.jev_records = {}
+        self.jev_window = None
         self.usage_labels = {}
         self.usage_frame, usage_grid, self.usage_toggle = self.collapsible_frame(
             footer, tr("本次佇列 LLM 消耗（非實際帳單）"))
@@ -221,14 +223,21 @@ class TranslationQueue:
         elapsed_row.pack(side='right')
         ttk.Label(elapsed_row, text=tr("累計耗時")).pack(side='left', padx=(4, 4))
         ttk.Entry(elapsed_row, textvariable=self.elapsed_label, state='readonly', width=10).pack(side='left')
+        self.jev_elapsed_label = tk.StringVar(value='—')
+        ttk.Label(elapsed_row, text=tr('Jev 耗時')).pack(side='left', padx=(8, 4))
+        ttk.Entry(elapsed_row, textvariable=self.jev_elapsed_label, state='readonly', width=10).pack(side='left')
+        ttk.Button(elapsed_row, text=tr('Jev 統計'), command=self.open_jev_stats).pack(side='left', padx=(4, 0))
         columns = ('scope', 'tokens', 'cost', 'requests', 'pricing', 'reporting')
         self.usage_table = ttk.Treeview(usage_grid, columns=columns, show='headings', height=3)
         for key, title, width in zip(columns, ('項目', 'Token 數', '預估金額（USD）', '請求數', '金額完整性', 'Token 完整性'), (70, 130, 130, 80, 145, 145)):
             self.usage_table.heading(key, text=tr(title))
             self.usage_table.column(key, width=width, minwidth=40, anchor='w' if key in ('scope', 'pricing', 'reporting') else 'e')
         self.usage_table.grid(row=1, column=0, columnspan=2, sticky='ew')
+        usage_scroll = ttk.Scrollbar(usage_grid, command=self.usage_table.yview)
+        self.usage_table.configure(yscrollcommand=usage_scroll.set)
+        usage_scroll.grid(row=1, column=2, sticky='ns')
         usage_grid.columnconfigure(1, weight=1)
-        for scope in ('OCR', 'translation', 'total'):
+        for scope in ('OCR', 'Jev', 'translation', 'total'):
             self.usage_labels[scope] = tk.StringVar()
         self.show_usage()
         records = settings.get("bt_jobs", [])
@@ -320,11 +329,30 @@ class TranslationQueue:
         button.pack(side="left")
         return frame, content, button
 
+    def open_jev_stats(self):
+        if self.jev_window is None or not self.jev_window.winfo_exists():
+            self.jev_window = tk.Toplevel(self.app.root)
+            self.jev_window.title(tr('Jev 統計'))
+            self.jev_window.geometry('480x300')
+            self.jev_table = ttk.Treeview(self.jev_window, columns=('field', 'value'), show='headings', height=7)
+            for key, title in (('field', '欄位'), ('value', '資料')):
+                self.jev_table.heading(key, text=tr(title))
+                self.jev_table.column(key, width=200, minwidth=80)
+            self.jev_table.pack(fill='both', expand=True, padx=8, pady=8)
+        self.show_usage()
+        self.jev_window.lift()
+
     def show_usage(self):
+        stats = jev_totals([{'jev_stats': value} for value in self.jev_records.values()])
+        self.jev_elapsed_label.set(elapsed_text(stats.get('elapsed_seconds')))
+        if self.jev_window is not None and self.jev_window.winfo_exists():
+            self.jev_table.delete(*self.jev_table.get_children())
+            for label, value in zip(JEV_FIELDS.values(), jev_columns(stats)):
+                self.jev_table.insert('', 'end', values=(tr(label), value))
         for scope, label in self.usage_labels.items():
             records = [value for (_, kind), value in self.usage_records.items() if kind == scope]
             label.set(usage_text(records))
-            title = {'OCR': 'OCR', 'translation': '翻譯', 'total': '合計'}[scope]
+            title = {'OCR': 'OCR', 'Jev': 'Jev', 'translation': '翻譯', 'total': '合計'}[scope]
             values = (tr(title), *usage_columns(records))
             if self.usage_table.exists(scope):
                 self.usage_table.item(scope, values=values)
@@ -346,6 +374,7 @@ class TranslationQueue:
         if refresh:
             for index, (job, saved) in enumerate(zip(self.active_jobs, record['jobs'])):
                 saved.update(status=job.status, error=job.error,
+                             jev_stats=self.jev_records.get(index, {}),
                              stage_seconds={stage: value for (item, stage), value in self.stage_times.items() if item == index},
                              usage={scope: dict(value, cost=str(value['cost']) if value['cost'] is not None else None)
                                     for (item, scope), value in self.usage_records.items() if item == index})
@@ -389,7 +418,7 @@ class TranslationQueue:
         code, reason = error_info(job.status, job.error)
         if code:
             lines.append(reason)
-        for scope, title in (('OCR', 'OCR'), ('translation', '翻譯'), ('total', '合計')):
+        for scope, title in (('OCR', 'OCR'), ('Jev', 'Jev'), ('translation', '翻譯'), ('total', '合計')):
             usage = self.usage_records.get((index, scope))
             lines.append(f'{tr(title)}: {usage_text([usage] if usage else [])}')
         lines.append(tr('預估金額非實際帳單；僅含已回報用量。'))
@@ -409,7 +438,7 @@ class TranslationQueue:
                  tr('開始時間：{0}').format(record['started_at']),
                  tr('完成時間：{0}').format(record.get('finished_at') or '—'),
                  tr('總耗時：{0}').format(elapsed_text(record.get('elapsed_seconds')))]
-        for scope, title in (('OCR', 'OCR'), ('translation', '翻譯'), ('total', '合計')):
+        for scope, title in (('OCR', 'OCR'), ('Jev', 'Jev'), ('translation', '翻譯'), ('total', '合計')):
             lines.append(f'{tr(title)}: {usage_text([value for (_, kind), value in self.usage_records.items() if kind == scope])}')
         lines.append(tr('預估金額非實際帳單；僅含已回報用量。'))
         if self.history_save_failed:
@@ -1098,6 +1127,7 @@ class TranslationQueue:
             return
         self.stage_times.clear()
         self.usage_records.clear()
+        self.jev_records.clear()
         self.notified_jobs.clear()
         self.history_run = dict(id=uuid.uuid4().hex, started_at=datetime.now().astimezone().isoformat(timespec='seconds'),
                                 finished_at=None, elapsed_seconds=None, status='running',
@@ -1211,6 +1241,9 @@ class TranslationQueue:
                 self.show_bt_progress(name)
             elif event[0] == "usage":
                 self.usage_records[event[1], event[2]['scope']] = event[2]
+                self.show_usage()
+            elif event[0] == "jev_stats":
+                self.jev_records[event[1]] = event[2]
                 self.show_usage()
             elif event[0] == "job_time" and self.history_run is not None:
                 self.history_run['jobs'][event[1]].update(started_at=event[2], finished_at=event[3], elapsed_seconds=event[4])
