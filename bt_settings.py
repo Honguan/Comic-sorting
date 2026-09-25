@@ -365,9 +365,11 @@ class ConfigEditor(tk.Toplevel):
                 ttk.Label(jev, text=tr("僅在整頁 Codex 翻譯首次逾時後使用 Jev 清理，再以相同模型重試一次；保留已儲存 OCR。"),
                           wraplength=560).grid(row=jev.grid_size()[1], column=0, columnspan=2, sticky='w', pady=8)
             for key, label in (("ocr_jev_provider", "Jev 服務商"),
-                               ("ocr_jev_typesafe_api_key", "TypeSafe API 金鑰")):
-                self.field(jev, ("module", key), label)
-            ttk.Label(jev, text=tr("金鑰留白保留原值。TypeSafe 亦可使用 TYPESAFE_API_KEY；OpenRouter 使用 OPENROUTER_API_KEY 環境變數。"),
+                               ("ocr_jev_typesafe_api_key", "TypeSafe API 金鑰"),
+                               ("ocr_jev_openrouter_api_key", "OpenRouter API 金鑰")):
+                if key in module:
+                    self.field(jev, ("module", key), label)
+            ttk.Label(jev, text=tr("金鑰留白保留原值。TypeSafe 亦可使用 TYPESAFE_API_KEY；OpenRouter 亦可使用 OPENROUTER_API_KEY 環境變數。"),
                       wraplength=560).grid(row=jev.grid_size()[1], column=0, columnspan=2, sticky='w', pady=8)
         for key in ("textdetector", "ocr", "inpainter", "translator"):
             name = module.get(key)

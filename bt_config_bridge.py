@@ -52,8 +52,10 @@ def metadata():
     fields = schema["children"]["module"]["children"]
     if "ocr_jev_provider" in fields:
         fields["ocr_jev_provider"].update(choices=["typesafe", "openrouter"], strict_choices=True)
-    if "ocr_jev_typesafe_api_key" in fields:
-        fields["ocr_jev_typesafe_api_key"] = {"type": "secret"}
+    for provider in ("typesafe", "openrouter"):
+        key = f"ocr_jev_{provider}_api_key"
+        if key in fields:
+            fields[key] = {"type": "secret"}
     catalogs = {name: [] for name in ("translator", "ocr", "textdetector", "inpainter")}
     languages = set()
     translator_languages = {}
@@ -154,9 +156,10 @@ def prepare(data):
     from ballontranslator.utils.secret_store import SecretStore
 
     module = data.get("module", {})
-    if "ocr_jev_typesafe_api_key" in module:
-        module["ocr_jev_typesafe_api_key"] = SecretStore().prepare_for_save(
-            "jev-typesafe", module["ocr_jev_typesafe_api_key"])
+    for provider in ("typesafe", "openrouter"):
+        key = f"ocr_jev_{provider}_api_key"
+        if key in module:
+            module[key] = SecretStore().prepare_for_save(f"jev-{provider}", module[key])
     for transform in data.get("global_fontformat", {}).get("text_transform", []):
         coerce_text_transform(transform)
     for profile in module.get("llm_profiles", []):
