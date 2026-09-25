@@ -357,11 +357,11 @@ class ConfigEditor(tk.Toplevel):
         native_module = self.document.metadata['defaults'].get('module', {})
         legacy_jev = 'ocr_jev_filter' in native_module
         if "ocr_jev_provider" in module:
-            jev = self.section("Jev OCR 清理" if legacy_jev else "Jev 逾時救援")
+            jev = self.section("Jev OCR 清理" if legacy_jev else "Jev 處理異常字元 (Experimental)")
             if legacy_jev:
                 self.field(jev, ("module", "ocr_jev_filter"), "啟用 Jev OCR 清理")
             else:
-                self.field(jev, ("module", "translator_params", "LLMTranslator", "timeout rescue"), "啟用實驗性 Codex 逾時救援")
+                self.field(jev, ("module", "translator_params", "LLMTranslator", "timeout rescue"), "啟用 Jev 處理異常字元 (Experimental)")
                 ttk.Label(jev, text=tr("僅在整頁 Codex 翻譯首次逾時後使用 Jev 清理，再以相同模型重試一次；保留已儲存 OCR。"),
                           wraplength=560).grid(row=jev.grid_size()[1], column=0, columnspan=2, sticky='w', pady=8)
             for key, label in (("ocr_jev_provider", "Jev 服務商"),
