@@ -12,6 +12,41 @@ from queue_worker import BT_STAGES, Job, parse_bt_progress, run_jobs, run_transl
 
 
 class QueueWorkerTests(unittest.TestCase):
+    def test_native_completion_overrides_stale_progress_for_matching_job_only(self):
+        import io
+        from contextlib import redirect_stdout
+        from types import SimpleNamespace
+        from bt_run_bridge import install_session
+        for finished in (True, False):
+            for matching in (True, False):
+                with self.subTest(finished=finished, matching=matching):
+                    class Window:
+                        def on_run_imgtrans(self): pass
+                        def run_next_dir(self): pass
+                    request = dict(token='job', pages=None)
+                    install_session(Window, SimpleNamespace(pbar={}), request)
+                    window = Window()
+                    window.exec_dirs = []
+                    window.imsave_thread = SimpleNamespace(isRunning=lambda: False)
+                    window.module_manager = SimpleNamespace(proj_finished=lambda: finished)
+                    window.app = mock.Mock()
+                    output = io.StringIO()
+                    with redirect_stdout(output), mock.patch('sys.stdin', io.StringIO('exit\n')):
+                        window.run_next_dir()
+                    progress = '94%| | 16/17' if finished else '100%| | 17/17'
+                    transcript = 'Translation: ' + progress + '\n' + output.getvalue()
+                    if not matching:
+                        transcript = transcript.replace('FINISHED:job:', 'FINISHED:previous:')
+                    process = mock.Mock(stdout=io.StringIO(transcript))
+                    session = mock.Mock(fatal=threading.Event())
+                    session.open.return_value = process
+                    args = ([], self.root, None, threading.Event(), lambda *values: None)
+                    if (finished and matching) or (not finished and not matching):
+                        self.assertIsNone(run_translation(*args, session=session, request=request))
+                    else:
+                        with self.assertRaises(RuntimeError):
+                            run_translation(*args, session=session, request=request)
+
     def test_stale_progress_uses_completion_and_still_checks_results(self):
         script = "print('Text Detection: 94%| | 17/18'); print('Translation: 100%| | 18/18'); print('finished translating all dirs')"
         config = self.root / 'config.json'

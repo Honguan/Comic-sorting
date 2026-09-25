@@ -252,6 +252,7 @@ class TranslationSession:
 
 def run_translation(command, root, env, stop, progress, log_context="", usage=None, timing=None, *, session=None, request=None, jev=None):
     completed = False
+    native_completed = None
     failures = deque(maxlen=5)
     fatal_count = 0
     retries = 0
@@ -272,6 +273,10 @@ def run_translation(command, root, env, stop, progress, log_context="", usage=No
         boundary = False
         for line in process.stdout:
             line = redact(ansi.sub("", line).rstrip())
+            if request is not None:
+                for state in (0, 1):
+                    if line == f"COMIC_SORTING_FINISHED:{request['token']}:{state}":
+                        native_completed = bool(state)
             if request is not None and line == "COMIC_SORTING_DONE:" + request["token"]:
                 boundary = True
                 break
@@ -326,10 +331,11 @@ def run_translation(command, root, env, stop, progress, log_context="", usage=No
             raise RuntimeError(tr("已停止；未執行此項目的後續動作"))
         if session.fatal.is_set():
             raise RuntimeError("\n".join(failures) + tr("；紀錄：{0}").format(log_path()))
-        # Earlier stages may omit their final refresh while translation completes.
-        # Keep the translation guard: existing result files alone may be stale.
-        if code or not completed or (request is not None and not boundary) or failures or stages.get("Translation", 100) < 100:
-            finished_with_anomalies = (completed and stages and stages.get("Translation", 100) == 100
+        # Native counters are authoritative; tqdm can omit even its final translation refresh.
+        # Keep the progress fallback for older bridges without a native completion record.
+        pipeline_complete = native_completed if native_completed is not None else stages.get("Translation", 100) == 100
+        if code or not completed or (request is not None and not boundary) or failures or not pipeline_complete:
+            finished_with_anomalies = (completed and (native_completed is True or stages) and pipeline_complete
                                        and (request is None or boundary))
             detail = (tr("流程已完成但發現異常（exit={0}）") if finished_with_anomalies else
                       tr("BallonsTranslator 未成功完成（exit={0}）；請查看其 logs")).format(code)

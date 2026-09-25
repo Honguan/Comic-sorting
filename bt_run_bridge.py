@@ -48,6 +48,8 @@ def install_session(window_class, shared, request):
             return original_next(window)
         while window.imsave_thread.isRunning():
             time.sleep(.1)
+        print('COMIC_SORTING_FINISHED:' + request['token'] + ':' +
+              str(int(window.module_manager.proj_finished())), flush=True)
         print('finished translating all dirs', flush=True)
         print('COMIC_SORTING_DONE:' + request['token'], flush=True)
         line = sys.stdin.readline()
