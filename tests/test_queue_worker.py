@@ -12,6 +12,25 @@ from queue_worker import BT_STAGES, Job, parse_bt_progress, run_jobs, run_transl
 
 
 class QueueWorkerTests(unittest.TestCase):
+    def test_stale_progress_uses_completion_and_still_checks_results(self):
+        script = "print('Text Detection: 94%| | 17/18'); print('Translation: 100%| | 18/18'); print('finished translating all dirs')"
+        config = self.root / 'config.json'
+        config.write_text('{}')
+        for complete in (True, False):
+            with self.subTest(complete=complete):
+                chapter = self.chapter(str(complete))
+                if not complete:
+                    (chapter / 'result/0.png').unlink()
+                events = []
+                with mock.patch('queue_worker.translator_command', return_value=(
+                        [sys.executable, '-u', '-c', script], self.root, None)):
+                    run_jobs([Job(chapter, 'translate')],
+                             dict(bt_path='installed', bt_config=str(config), bt_cleanup=True),
+                             '', True, threading.Event(), events.append)
+                statuses = [event[2] for event in events if event[0] == 'status']
+                self.assertEqual(statuses, ['running', 'done' if complete else 'failed'])
+                self.assertEqual((chapter / 'mask/keep.png').exists(), not complete)
+
     def test_quota_stops_queue_without_retry_or_export(self):
         first, second = self.chapter(), self.chapter('Chapter 2')
         stop, events = threading.Event(), []

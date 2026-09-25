@@ -326,8 +326,10 @@ def run_translation(command, root, env, stop, progress, log_context="", usage=No
             raise RuntimeError(tr("已停止；未執行此項目的後續動作"))
         if session.fatal.is_set():
             raise RuntimeError("\n".join(failures) + tr("；紀錄：{0}").format(log_path()))
-        if code or not completed or (request is not None and not boundary) or failures or any(value < 100 for value in stages.values()):
-            finished_with_anomalies = (completed and stages and all(value == 100 for value in stages.values())
+        # Earlier stages may omit their final refresh while translation completes.
+        # Keep the translation guard: existing result files alone may be stale.
+        if code or not completed or (request is not None and not boundary) or failures or stages.get("Translation", 100) < 100:
+            finished_with_anomalies = (completed and stages and stages.get("Translation", 100) == 100
                                        and (request is None or boundary))
             detail = (tr("流程已完成但發現異常（exit={0}）") if finished_with_anomalies else
                       tr("BallonsTranslator 未成功完成（exit={0}）；請查看其 logs")).format(code)
