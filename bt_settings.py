@@ -22,6 +22,7 @@ from ui_language import tr
 LABELS = {
     "codex_execution": "Codex 執行方式",
     "codex_executable": "Codex 執行檔",
+    "codex_timeout": "Codex 逾時秒數",
     "module": "自動化模組", "llm_profiles": "LLM 配置卡", "global_fontformat": "字體與排版",
     "drawpanel": "繪圖工具", "package_manager": "套件管理", "mirrors": "下載鏡像",
     "auto_tate_chu_yoko": "自動縱中橫", "textdetector": "文字偵測器", "ocr": "OCR",
@@ -353,9 +354,17 @@ class ConfigEditor(tk.Toplevel):
         self.field(run, ("restore_ocr_empty",), "移除空文本塊")
         self.field(run, ("render_without_text_style_update",), "原生渲染時保留文本樣式")
         params = self.section("目前模組參數")
-        if "ocr_jev_filter" in module:
-            jev = self.section("Jev OCR 清理")
-            for key, label in (("ocr_jev_filter", "啟用 Jev OCR 清理"), ("ocr_jev_provider", "Jev 服務商"),
+        native_module = self.document.metadata['defaults'].get('module', {})
+        legacy_jev = 'ocr_jev_filter' in native_module
+        if "ocr_jev_provider" in module:
+            jev = self.section("Jev OCR 清理" if legacy_jev else "Jev 逾時救援")
+            if legacy_jev:
+                self.field(jev, ("module", "ocr_jev_filter"), "啟用 Jev OCR 清理")
+            else:
+                self.field(jev, ("module", "translator_params", "LLMTranslator", "timeout rescue"), "啟用實驗性 Codex 逾時救援")
+                ttk.Label(jev, text=tr("僅在整頁 Codex 翻譯首次逾時後使用 Jev 清理，再以相同模型重試一次；保留已儲存 OCR。"),
+                          wraplength=560).grid(row=jev.grid_size()[1], column=0, columnspan=2, sticky='w', pady=8)
+            for key, label in (("ocr_jev_provider", "Jev 服務商"),
                                ("ocr_jev_typesafe_api_key", "TypeSafe API 金鑰")):
                 self.field(jev, ("module", key), label)
             ttk.Label(jev, text=tr("金鑰留白保留原值。TypeSafe 亦可使用 TYPESAFE_API_KEY；OpenRouter 使用 OPENROUTER_API_KEY 環境變數。"),
@@ -363,6 +372,8 @@ class ConfigEditor(tk.Toplevel):
         for key in ("textdetector", "ocr", "inpainter", "translator"):
             name = module.get(key)
             for param in module.get(key + "_params", {}).get(name, {}):
+                if key == 'translator' and name == 'LLMTranslator' and param == 'timeout rescue' and not legacy_jev and 'ocr_jev_provider' in module:
+                    continue
                 self.field(params, ("module", key + "_params", name, param), str(name) + " / " + field_name(param))
         selected = set()
         for key, capability in (("translator_llm_id", "support_text"), ("ocr_llm_id", "support_vision"), ("inpaint_llm_id", "support_image")):
@@ -377,7 +388,7 @@ class ConfigEditor(tk.Toplevel):
         for index, profile in enumerate(module.get("llm_profiles", [])):
             if profile.get("id") in selected:
                 if profile.get("transport") == "Codex App Server":
-                    for key in ("codex_execution", "codex_executable"):
+                    for key in ("codex_execution", "codex_executable", "codex_timeout"):
                         self.field(params, ("module", "llm_profiles", index, key), str(profile.get("name", "LLM")) + " / " + field_name(key))
                 for key in ("model", "vision_model", "image_model", "base_url", "api_key", "max_tokens", "temperature", "thinking_level", "prompt", "vision_prompt"):
                     self.field(params, ("module", "llm_profiles", index, key), str(profile.get("name", "LLM")) + " / " + field_name(key),

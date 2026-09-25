@@ -13,6 +13,7 @@ from queue_errors import error_details, error_info
 from ui_language import tr
 
 JEV_FIELDS = {'requests': '請求數', 'input_tokens': '輸入 Token', 'missing_input_usage_requests': '未回報請求數',
+              'cost_nano_usd': '已知金額（USD）', 'cost_source': '金額來源', 'unpriced_requests': '未計價請求數',
               'calls': '處理次數', 'changed_calls': '變更次數', 'cleared_blocks': '清空文字塊',
               'trimmed_blocks': '修剪文字塊', 'kept_blocks': '保留文字塊',
               'removed_characters': '移除字元', 'elapsed_seconds': 'Jev 耗時'}
@@ -28,7 +29,11 @@ def jev_totals(jobs):
 
 
 def jev_columns(stats):
+    reported, estimated = stats.get('reported_cost_requests', 0), stats.get('estimated_cost_requests', 0)
+    source = tr('回報及估算') if reported and estimated else tr('服務回報') if reported else tr('估算') if estimated else '—'
     return tuple(elapsed_text(stats.get(key)) if key == 'elapsed_seconds'
+                 else source if key == 'cost_source'
+                 else f"US${Decimal(stats[key]) / 1_000_000_000:.9f}" if key == 'cost_nano_usd' and key in stats
                  else format_tokens(stats[key]) if key == 'input_tokens' and key in stats
                  else f'{stats[key]:,}' if key in stats else '—' for key in JEV_FIELDS)
 
@@ -195,10 +200,12 @@ class HistoryWindow(tk.Toplevel):
             self.totals.heading(key, text=tr(title))
             self.totals.column(key, width=width, minwidth=40, anchor='w' if key in ('scope', 'pricing', 'reporting') else 'e')
         self.totals.pack(fill='x')
-        self.jev_totals_table = ttk.Treeview(totals, columns=tuple(JEV_FIELDS), show='headings', height=1)
+        self.jev_totals_table = ttk.Treeview(totals, columns=tuple(JEV_FIELDS),
+                                           displaycolumns=('requests', 'input_tokens', 'cost_nano_usd', 'cost_source', 'unpriced_requests', 'elapsed_seconds'),
+                                           show='headings', height=1)
         for key, title in JEV_FIELDS.items():
             self.jev_totals_table.heading(key, text=tr(title))
-            self.jev_totals_table.column(key, width=70, minwidth=40, anchor='e')
+            self.jev_totals_table.column(key, width=110, minwidth=40, anchor='e')
         self.jev_totals_table.pack(fill='x', pady=(4, 0))
         note = ttk.Label(totals, text=tr("全部歷史，含失敗／停止已回報用量，不受查詢條件影響；耗時為各批次加總，可能重疊。"), wraplength=780)
         note.pack(fill='x', pady=(4, 0))

@@ -19,7 +19,7 @@ ERRORS = (
     ('CODEX_INTERACTIVE', 'Codex 要求互動操作，無法自動繼續', r'Codex requested an interactive tool'),
     ('CODEX_PROTOCOL', 'Codex 回應格式或通訊協定異常', r'Invalid Codex protocol response|Expected a JSON-RPC object'),
     ('CODEX_EXIT', 'Codex 子程序提前結束', r'Codex App Server exited before completion'),
-    ('REQUEST_TIMEOUT', '等待服務回應逾時', r'APITimeoutError|TimeoutError|ReadTimeout|ConnectTimeout|request timed out|read timed out|connect timeout'),
+    ('REQUEST_TIMEOUT', '等待服務回應逾時', r'APITimeoutError|TimeoutError|ReadTimeout|ConnectTimeout|request timed out|read timed out|connect timeout|Codex translation timed out again after Jev cleanup'),
     ('NETWORK_ERROR', '網路、代理伺服器或 TLS 連線失敗', r'APIConnectionError|ConnectionError|ConnectionResetError|ConnectError|ProxyError|SSLError|CERTIFICATE_VERIFY_FAILED|NameResolutionError|getaddrinfo failed|ResponseStreamDisconnected|ResponseStreamConnectionFailed|stream disconnected'),
     ('LLM_RATE_LIMIT', '請求頻率過高，服務已限流', r'rate_limit_exceeded|rate_limit_error|slow_down|too many requests|rate limit reached'),
     ('LLM_PERMISSION', '服務拒絕存取，帳號或地區權限不足', r'PermissionDeniedError|unsupported_country_region_territory|IP not authorized|country.{0,30}not supported'),

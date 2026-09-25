@@ -22,7 +22,8 @@ class WorkflowTests(unittest.TestCase):
         from translation_queue import ACTIONS, STATUSES
         q = self.app.translation_queue
         stats = dict(calls=2, changed_calls=1, cleared_blocks=1, trimmed_blocks=2,
-                     kept_blocks=3, removed_characters=9, elapsed_seconds=12.5)
+                     kept_blocks=3, removed_characters=9, elapsed_seconds=12.5,
+                     cost_nano_usd=187950, estimated_cost_requests=4, unpriced_requests=0)
         usage = dict(requests=4, total_tokens=1500, missing_usage_requests=0, unpriced_requests=4, cost=None)
         q.jev_records[0] = stats
         q.usage_records[0, 'Jev'] = usage
@@ -31,7 +32,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(q.jev_elapsed_label.get(), '00:00:12')
         self.assertEqual(q.usage_table.item('Jev', 'values')[1], '1.50K')
         q.open_jev_stats()
-        self.assertEqual(len(q.jev_table.get_children()), 10)
+        self.assertEqual(len(q.jev_table.get_children()), 13)
         self.assertEqual(q.jev_table.item(q.jev_table.get_children()[-1], 'values')[1], '00:00:12')
         q.jev_window.destroy()
         record = dict(id='jev', started_at='2026-09-24', status='cancelled', elapsed_seconds=20,
@@ -47,6 +48,7 @@ class WorkflowTests(unittest.TestCase):
         window = HistoryWindow(self.root, self.app.history_path, ACTIONS, STATUSES)
         self.assertEqual(window.totals.item('Jev', 'values')[1], '1.50K')
         self.assertIn('00:00:12', detail_values(window))
+        self.assertIn('US$0.000187950', detail_values(window))
         window.destroy()
 
     def setUp(self):

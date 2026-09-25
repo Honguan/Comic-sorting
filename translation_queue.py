@@ -333,7 +333,7 @@ class TranslationQueue:
         if self.jev_window is None or not self.jev_window.winfo_exists():
             self.jev_window = tk.Toplevel(self.app.root)
             self.jev_window.title(tr('Jev 統計'))
-            self.jev_window.geometry('480x380')
+            self.jev_window.geometry('560x480')
             self.jev_table = ttk.Treeview(self.jev_window, columns=('field', 'value'), show='headings', height=len(JEV_FIELDS))
             for key, title in (('field', '欄位'), ('value', '資料')):
                 self.jev_table.heading(key, text=tr(title))

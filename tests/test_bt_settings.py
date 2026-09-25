@@ -228,6 +228,7 @@ class ConfigEditorTests(ConfigFixture, unittest.TestCase):
             self.editor.document.set(path, "invalid")
 
     def test_jev_settings_preserve_secret_and_save_provider_and_toggle(self):
+        self.meta['defaults']['module']['ocr_jev_filter'] = False
         secret = {"storage": "portable_obfuscated", "version": 1, "value": "opaque"}
         self.raw["module"].update(ocr_jev_filter=False, ocr_jev_provider="typesafe", ocr_jev_typesafe_api_key=secret)
         fields = self.meta["schema"]["children"]["module"]["children"]
@@ -248,6 +249,26 @@ class ConfigEditorTests(ConfigFixture, unittest.TestCase):
         self.assertEqual(saved["ocr_jev_typesafe_api_key"], secret)
         with self.assertRaises(ValueError):
             self.editor.document.set(("module", "ocr_jev_provider"), "invalid")
+
+    def test_new_jev_rescue_does_not_enable_from_obsolete_ocr_flag(self):
+        module = self.meta['defaults']['module']
+        module.update(ocr_jev_provider='typesafe', ocr_jev_typesafe_api_key='')
+        module['translator_params']['LLMTranslator'] = {'timeout rescue': False}
+        self.meta['schema'] = describe(self.meta['defaults'])
+        self.meta['schema']['children']['module']['children']['llm_profiles']['item']['children']['api_key'] = {'type': 'secret'}
+        self.raw['module']['ocr_jev_filter'] = True
+        self.path.write_text(json.dumps(self.raw), encoding='utf-8')
+        self.editor.loaded(self.document())
+        old = ('module', 'ocr_jev_filter')
+        rescue = ('module', 'translator_params', 'LLMTranslator', 'timeout rescue')
+        self.assertNotIn(old, self.editor.fields)
+        self.assertFalse(self.editor.fields[rescue][0].get())
+        self.editor.fields[rescue][0].set(True)
+        self.editor.save()
+        self.wait_idle()
+        saved = json.loads(self.path.read_text(encoding='utf-8'))['module']
+        self.assertTrue(saved['translator_params']['LLMTranslator']['timeout rescue'])
+        self.assertTrue(saved['ocr_jev_filter'])  # Preserve unknown data without using it.
 
     def test_focused_form_preserves_hidden_settings_and_saves_active_profile(self):
         paths = self.editor.fields

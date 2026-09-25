@@ -67,6 +67,10 @@ def parse_jev_stats(line):
                           missing_input_usage_requests=usage['requests'] - usage['reported_input_requests'])
         else:
             counts.update(reported_requests=usage['reported_requests'], total_tokens=usage['total_tokens'])
+        if any(key in usage for key in ('cost_nano_usd', 'reported_cost_requests', 'estimated_cost_requests')):
+            for key in ('cost_nano_usd', 'reported_cost_requests', 'estimated_cost_requests'):
+                counts[key] = usage.get(key, 0)
+            counts['unpriced_requests'] = counts['requests'] - counts['reported_cost_requests'] - counts['estimated_cost_requests']
         seconds = data.get('elapsed_seconds')
         if (any(type(v) is not int or v < 0 for v in counts.values())
                 or counts.get('reported_requests', counts.get('reported_input_requests', 0)) > counts['requests']

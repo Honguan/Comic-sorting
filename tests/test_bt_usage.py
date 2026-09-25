@@ -32,6 +32,12 @@ class UsageTests(unittest.TestCase):
         self.assertNotIn('total_tokens', stats[0])
         from queue_history import jev_columns, jev_totals
         self.assertEqual(jev_columns(jev_totals([{'jev_stats': stats[0]}]))[:3], ('3', '1.50K', '1'))
+        data['usage'].update(cost_nano_usd=187950, reported_cost_requests=1, estimated_cost_requests=1)
+        priced = parse_jev_stats('[INFO ] jev_filter:record:205 - Jev OCR filter audit: ' + json.dumps(data))
+        self.assertEqual(priced['unpriced_requests'], 1)
+        self.assertEqual(jev_columns(priced)[3:6], ('US$0.000187950', '回報及估算', '1'))
+        from queue_errors import error_info
+        self.assertEqual(error_info('failed', 'RuntimeError: Codex translation timed out again after Jev cleanup; original page retained.')[0], 'REQUEST_TIMEOUT')
 
     def test_jev_audit_deduplicates_and_survives_failed_process(self):
         data = dict(event='finished', audit_id='page1', status='completed', elapsed_seconds=1.25,

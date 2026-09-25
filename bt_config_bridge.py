@@ -109,6 +109,8 @@ def metadata():
     if "codex_execution" in profile:
         fields["llm_profiles"]["item"]["children"]["codex_execution"].update(
             choices=list(llm_profiles.CODEX_EXECUTION_OPTIONS), strict_choices=True)
+    if "codex_timeout" in profile:
+        fields["llm_profiles"]["item"]["children"]["codex_timeout"].update(minimum=1, maximum=86400)
     templates = {"llm_profiles": {"LLM": profile}}
     replacement = {"keyword": "", "sub": "", "use_reg": False, "case_sens": True}
     for key in ("ocr_sublist", "pre_mt_sublist", "mt_sublist"):
