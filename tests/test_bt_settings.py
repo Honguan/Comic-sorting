@@ -229,6 +229,7 @@ class ConfigEditorTests(ConfigFixture, unittest.TestCase):
 
     def test_jev_settings_preserve_secret_and_save_provider_and_toggle(self):
         self.meta['defaults']['module']['ocr_jev_filter'] = False
+        self.meta['defaults']['module']['ocr_jev_openrouter_api_key'] = ''
         secret = {"storage": "portable_obfuscated", "version": 1, "value": "opaque"}
         self.raw["module"].update(ocr_jev_filter=False, ocr_jev_provider="typesafe", ocr_jev_typesafe_api_key=secret, ocr_jev_openrouter_api_key=secret)
         fields = self.meta["schema"]["children"]["module"]["children"]
@@ -278,6 +279,26 @@ class ConfigEditorTests(ConfigFixture, unittest.TestCase):
         saved = json.loads(self.path.read_text(encoding='utf-8'))['module']
         self.assertTrue(saved['translator_params']['LLMTranslator']['timeout rescue'])
         self.assertTrue(saved['ocr_jev_filter'])  # Preserve unknown data without using it.
+
+    def test_jev_openrouter_reuses_profile_key_and_ignores_obsolete_field(self):
+        self.meta['defaults']['module'].update(ocr_jev_provider='openrouter', ocr_jev_typesafe_api_key='')
+        self.meta['schema']['children']['module']['children'].update(ocr_jev_provider={'type': 'string'}, ocr_jev_typesafe_api_key={'type': 'secret'})
+        profile = self.raw['module']['llm_profiles'][0]
+        profile.update(id='openrouter', name='Renamed provider')
+        self.raw['module']['translator_llm_id'] = 'openrouter'
+        self.raw['module']['ocr_llm_id'] = 'openrouter'
+        self.raw['module']['ocr_jev_openrouter_api_key'] = 'obsolete'
+        self.path.write_text(json.dumps(self.raw), encoding='utf-8')
+        self.editor.loaded(self.document())
+        self.assertNotIn(('module', 'ocr_jev_openrouter_api_key'), self.editor.fields)
+        key = ('module', 'llm_profiles', 0, 'api_key')
+        self.assertEqual(self.editor.fields[key][0].get(), '')
+        self.editor.fields[key][0].set('replacement')
+        self.editor.save()
+        self.wait_idle()
+        saved = json.loads(self.path.read_text(encoding='utf-8'))['module']
+        self.assertEqual(saved['llm_profiles'][0]['api_key'], 'replacement')
+        self.assertEqual(saved['ocr_jev_openrouter_api_key'], 'obsolete')
 
     def test_focused_form_preserves_hidden_settings_and_saves_active_profile(self):
         paths = self.editor.fields

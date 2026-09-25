@@ -115,6 +115,7 @@ TRANSLATIONS = {
     '啟用 Jev OCR 清理': {'en': 'Enable Jev OCR cleanup', 'ja': 'Jev OCR クリーニングを有効化'},
     'Jev 服務商': {'en': 'Jev provider', 'ja': 'Jev プロバイダー'},
     'TypeSafe API 金鑰': {'en': 'TypeSafe API key', 'ja': 'TypeSafe API キー'},
+    'OpenRouter API 金鑰（共用配置卡）': {'en': 'OpenRouter API key (shared profile)', 'ja': 'OpenRouter API キー（共有プロファイル）'},
     'OpenRouter API 金鑰': {'en': 'OpenRouter API key', 'ja': 'OpenRouter API キー'},
     '金鑰留白保留原值。TypeSafe 亦可使用 TYPESAFE_API_KEY；OpenRouter 亦可使用 OPENROUTER_API_KEY 環境變數。': {'en': 'Leave the key blank to keep it. TypeSafe also accepts TYPESAFE_API_KEY; OpenRouter also accepts the OPENROUTER_API_KEY environment variable.', 'ja': 'キーを空欄にすると既存値を保持します。TypeSafe は TYPESAFE_API_KEY、OpenRouter は OPENROUTER_API_KEY 環境変数も使用します。'},
     'Jev 耗時': {'en': 'Jev elapsed', 'ja': 'Jev 所要時間'},

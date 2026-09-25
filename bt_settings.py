@@ -365,10 +365,16 @@ class ConfigEditor(tk.Toplevel):
                 ttk.Label(jev, text=tr("僅在整頁 Codex 翻譯首次逾時後使用 Jev 清理，再以相同模型重試一次；保留已儲存 OCR。"),
                           wraplength=560).grid(row=jev.grid_size()[1], column=0, columnspan=2, sticky='w', pady=8)
             for key, label in (("ocr_jev_provider", "Jev 服務商"),
-                               ("ocr_jev_typesafe_api_key", "TypeSafe API 金鑰"),
-                               ("ocr_jev_openrouter_api_key", "OpenRouter API 金鑰")):
+                               ("ocr_jev_typesafe_api_key", "TypeSafe API 金鑰")):
                 if key in module:
                     self.field(jev, ("module", key), label)
+            if "ocr_jev_openrouter_api_key" in native_module:
+                self.field(jev, ("module", "ocr_jev_openrouter_api_key"), "OpenRouter API 金鑰")
+            else:
+                for index, profile in enumerate(module.get("llm_profiles", [])):
+                    if profile.get("id") == "openrouter":
+                        self.field(jev, ("module", "llm_profiles", index, "api_key"), "OpenRouter API 金鑰（共用配置卡）")
+                        break
             ttk.Label(jev, text=tr("金鑰留白保留原值。TypeSafe 亦可使用 TYPESAFE_API_KEY；OpenRouter 亦可使用 OPENROUTER_API_KEY 環境變數。"),
                       wraplength=560).grid(row=jev.grid_size()[1], column=0, columnspan=2, sticky='w', pady=8)
         for key in ("textdetector", "ocr", "inpainter", "translator"):
@@ -393,6 +399,8 @@ class ConfigEditor(tk.Toplevel):
                     for key in ("codex_execution", "codex_executable", "codex_timeout"):
                         self.field(params, ("module", "llm_profiles", index, key), str(profile.get("name", "LLM")) + " / " + field_name(key))
                 for key in ("model", "vision_model", "image_model", "base_url", "api_key", "max_tokens", "temperature", "thinking_level", "prompt", "vision_prompt"):
+                    if ("module", "llm_profiles", index, key) in self.fields:
+                        continue
                     self.field(params, ("module", "llm_profiles", index, key), str(profile.get("name", "LLM")) + " / " + field_name(key),
                                refresh=key in ("model", "vision_model"))
         font = self.section("翻譯字體")
