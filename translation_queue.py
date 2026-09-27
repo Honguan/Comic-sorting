@@ -22,10 +22,12 @@ from queue_errors import error_details, error_info
 from ntfy_notifications import NtfyNotifications
 from queue_start_dialog import QueueStartDialog
 from queue_schedule import QueueSchedule
+from queue_phases import MODES, READY
 
 
 ACTIONS = {"translate": "翻譯", "export": "匯出", "cleanup": "清理"}
 STATUSES = {"pending": "等待", "running": "執行中", "done": "完成",
+            "prepared": "前處理完成／待翻譯", "skipped": "已略過",
             "done_warning": "完成（有異常）",
             "failed": "失敗", "cancelled": "已停止", "blocked": "前置工作失敗"}
 
@@ -61,6 +63,7 @@ class TranslationQueue:
         self.config = tk.StringVar(value=settings.get("bt_config", str(Path(default) / "config" / "config.json") if default else ""))
         self.python = tk.StringVar(value=settings.get("bt_python", ""))
         self.action = tk.StringVar(value=tr("翻譯"))
+        self.workflow = tk.StringVar(value=tr(MODES.get(settings.get("bt_workflow"), MODES["normal"])))
         self.export = tk.BooleanVar(value=settings.get("bt_export", False))
         self.cleanup = tk.BooleanVar(value=settings.get("bt_cleanup", False))
         self.open_after_completion = tk.BooleanVar(value=settings.get("bt_open_after_completion") is True)
@@ -97,6 +100,10 @@ class TranslationQueue:
         self.button(row, tr("加入指定路徑"), self.add_directory)
         self.button(row, tr("整合＋加入佇列"), self.integrate)
         self.range_button = self.button(row, tr("翻譯頁數"), self.edit_page_range)
+        self.workflow_choice = ttk.Combobox(row, textvariable=self.workflow, state="readonly", width=15,
+                                            values=tuple(tr(value) for value in MODES.values()))
+        self.workflow_choice.pack(side="left", padx=4)
+        self.workflow_choice.bind("<<ComboboxSelected>>", lambda _event: self.workflow_changed())
         row = ttk.Frame(box)
         row.pack(fill="x")
         for text, variable in ((tr("翻譯成功後匯出 CBZ"), self.export),
@@ -403,11 +410,19 @@ class TranslationQueue:
 
     def settings(self):
         return dict(bt_path=self.installation.get(), bt_config=self.config.get(),
+                    bt_workflow=self.workflow_mode(),
                     bt_python=self.python.get(), bt_export=self.export.get(), bt_cleanup=self.cleanup.get(),
                     bt_open_after_completion=self.open_after_completion.get(),
                     bt_jobs=[dict(path=str(job.path), action=job.action, status=job.status, error=job.error,
                                   start_page=job.start_page, end_page=job.end_page, range_export=job.range_export)
                              for job in self.jobs], **self.notifications.settings())
+
+    def workflow_mode(self):
+        return next((key for key, value in MODES.items() if tr(value) == self.workflow.get()), "normal")
+
+    def workflow_changed(self):
+        self.update_controls()
+        self.app.save_settings()
 
     def notify_job(self, index):
         job = self.active_jobs[index]
@@ -506,7 +521,7 @@ class TranslationQueue:
             tr("已選取 {0} 個佇列項目").format(len(jobs)),
             tr("{0} 單一｜{1} 整合").format(len(paths) - merged, merged),
             tr("翻譯頁數：{0}").format(self.selection_page_count(jobs)),
-            tr("等待執行頁數：{0}").format(self.selection_page_count([j for j in jobs if j.status == "pending"]))))
+            tr("等待執行頁數：{0}").format(self.selection_page_count([j for j in jobs if j.status in READY]))))
         item = selection[0]
         job = next((job for job in jobs if len(selection) == 1 and str(id(job)) == item), None)
         if job:
@@ -535,6 +550,7 @@ class TranslationQueue:
         for control in self.controls:
             control.configure(state="disabled" if busy else "normal")
         self.action_choice.configure(state="disabled" if busy else "readonly")
+        self.workflow_choice.configure(state="disabled" if busy else "readonly")
         resumable = self.running and self.pause_requested.is_set() and not self.stop.is_set()
         self.start_button.configure(text=tr("繼續佇列") if resumable else
                                     tr("執行選取項目") if self.tree.selection() else tr("開始主佇列"),
@@ -542,7 +558,7 @@ class TranslationQueue:
         self.clear_selection_button.configure(state="normal" if self.tree.selection() else "disabled")
         self.pause_button.configure(
             state="normal" if self.running and not self.stop.is_set() and not self.pause_requested.is_set()
-            and any(j.status == "pending" for j in self.active_jobs) else "disabled",
+            and any(j.status in READY for j in self.active_jobs) else "disabled",
             text=tr("已暫停") if self.paused_at is not None else
             tr("等待暫停") if self.pause_requested.is_set() else tr("佇列暫停"))
         self.stop_button.configure(state="normal" if self.running else "disabled")
@@ -603,7 +619,7 @@ class TranslationQueue:
         visible = 0
         for index, job in enumerate(self.jobs, 1):
             item = str(id(job))
-            if job.action == "translate" and job.status == "pending":
+            if job.action == "translate" and job.status in READY:
                 key = (job.path, job.start_page, job.end_page)
                 self.pending_file_counts[item] = self.count_cache.get(key)
             if query and query not in str(job.path).replace("\\", "/").casefold():
@@ -681,7 +697,7 @@ class TranslationQueue:
         if generation == self.count_generation:
             self.count_cache.update(results)
         self.pending_file_counts = {str(id(j)): self.count_cache.get((j.path, j.start_page, j.end_page))
-                                    for j in self.jobs if j.action == "translate" and j.status == "pending"}
+                                    for j in self.jobs if j.action == "translate" and j.status in READY}
         self.update_group_counts()
         self.update_summary()
         self.update_selection_details()
@@ -719,17 +735,17 @@ class TranslationQueue:
 
     def update_summary(self):
         counts = [self.pending_file_counts.get(str(id(job))) for job in self.jobs
-                  if job.action == "translate" and job.status == "pending"]
+                  if job.action == "translate" and job.status in READY]
         files = tr("｜待翻譯檔案 {0} 張").format(f"{sum(count for count in counts if count is not None):,}")
         unknown = counts.count(None)
         calculating = sum((j.path, j.start_page, j.end_page) not in self.count_cache for j in self.jobs
-                          if j.action == "translate" and j.status == "pending")
+                          if j.action == "translate" and j.status in READY)
         if calculating:
             files += tr("（{0} 項計算中）").format(calculating)
         if unknown > calculating:
             files += tr("（{0} 項無法計數）").format(unknown - calculating)
         self.summary.set(tr("佇列 {0} 項｜等待 {1}｜完成 {2}｜需處理 {3}").format(
-            len(self.jobs), sum(j.status == "pending" for j in self.jobs),
+            len(self.jobs), sum(j.status in READY for j in self.jobs),
             sum(j.status in ("done", "done_warning") for j in self.jobs),
             sum(j.status in ("failed", "cancelled", "blocked") for j in self.jobs)) + files)
 
@@ -1036,6 +1052,8 @@ class TranslationQueue:
         return dialog
 
     def confirm_cleanup(self):
+        if self.workflow_mode() == "prepare":
+            return True
         needs_cleanup = self.cleanup.get() or any(j.action == "cleanup" for j in self.active_jobs)
         return not needs_cleanup or messagebox.askyesno(
             tr("確認清理"), tr("佇列將清空指定路徑的 mask / inpainted 內容，無法復原。繼續？"))
@@ -1045,7 +1063,7 @@ class TranslationQueue:
             self.app.confirm_aggregate(translate_after=True)
 
     def validate(self, translate=False, jobs=None):
-        pending = [job for job in (self.jobs if jobs is None else jobs) if job.status == "pending"]
+        pending = [job for job in (self.jobs if jobs is None else jobs) if job.status in READY]
         error_tab = self.app.queue_tab
         try:
             translating = translate or any(job.action == "translate" for job in pending)
@@ -1058,6 +1076,8 @@ class TranslationQueue:
                 self.command()
                 error_tab = self.app.queue_tab
             exporting = (translate and self.export.get()) or any(job.should_export(self.export.get()) for job in pending)
+            if self.workflow_mode() == "prepare":
+                exporting = False
             if exporting and not self.app.komga_path.get().strip():
                 error_tab = self.app.export_tab
                 raise ValueError(tr("請設定 Komga 輸出路徑"))
@@ -1085,8 +1105,9 @@ class TranslationQueue:
     def start_targets(self):
         selected = self.selected_job_ids()
         has_selection = bool(self.tree.selection())
-        return tuple(job for job in self.jobs if job.status == "pending"
-                     and (not has_selection or str(id(job)) in selected))
+        return tuple(job for job in self.jobs if job.status in READY
+                     and (not has_selection or str(id(job)) in selected)
+                     and (self.workflow_mode() == "normal" or job.action == "translate"))
 
     def configure_start(self, jobs):
         if not self.tree.selection():
@@ -1291,7 +1312,7 @@ class TranslationQueue:
             elif event[0] == "done":
                 if self.history_run is not None:
                     self.history_run['status'] = ('cancelled' if self.stop.is_set() else 'done'
-                                                  if all(job.status == 'done' for job in self.active_jobs) else 'done_warning')
+                                                  if all(job.status in ('done', 'prepared', 'skipped') for job in self.active_jobs) else 'done_warning')
                     self.save_history()
                     self.notify_run()
                 self.running = False

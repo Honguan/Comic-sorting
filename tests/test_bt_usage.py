@@ -60,8 +60,7 @@ class UsageTests(unittest.TestCase):
     def test_stage_elapsed_time_comes_from_progress_not_eta(self):
         lines = ['OCR: 50%|#####     | 1/2 [01:02<00:04, 1.0s/it]',
                  'Translation: 100%|##########| 2/2 [1:02:03<00:00, 1.0s/it]',
-                 'Inpaint: 50%|#####     | 1/2 [00:99<00:04, 1.0s/it]',
-                 'finished translating all dirs']
+                 'Inpaint: 50%|#####     | 1/2 [00:99<00:04, 1.0s/it]']
         times = []
         with self.assertRaises(RuntimeError):  # Timing must survive an incomplete run.
             run_translation([sys.executable, '-c', f'print({chr(10).join(lines)!r})'], Path.cwd(), None,

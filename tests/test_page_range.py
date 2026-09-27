@@ -38,6 +38,7 @@ class PageRangeTests(unittest.TestCase):
         assert isinstance(paths, list)
         self.exec_dirs = list(paths)
         self.imsave_thread = SimpleNamespace(isRunning=lambda: False)
+        self.module_manager = SimpleNamespace(proj_finished=lambda: True)
         self.app = SimpleNamespace(quit=lambda: None)
         self.run_next_dir()
     def run_next_dir(self):

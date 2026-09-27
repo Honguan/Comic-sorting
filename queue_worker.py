@@ -334,6 +334,8 @@ def run_translation(command, root, env, stop, progress, log_context="", usage=No
         # Native counters are authoritative; tqdm can omit even its final translation refresh.
         # Keep the progress fallback for older bridges without a native completion record.
         pipeline_complete = native_completed if native_completed is not None else stages.get("Translation", 100) == 100
+        if request is not None and request.get("phase") and native_completed is not True:
+            pipeline_complete = False
         if code or not completed or (request is not None and not boundary) or failures or not pipeline_complete:
             finished_with_anomalies = (completed and (native_completed is True or stages) and pipeline_complete
                                        and (request is None or boundary))
@@ -359,6 +361,11 @@ def run_translation(command, root, env, stop, progress, log_context="", usage=No
 
 def run_jobs(jobs, settings, output, skip, stop, emit, *, pause=None, checkpoint=None, blocked_jobs=()):
     """Run a pending-job snapshot; only the event consumer mutates Job state."""
+    from queue_phases import run_phased_jobs, prepared, mark_prepared, invalidate_prepared, signature
+    if settings.get("bt_workflow", "normal") != "normal":
+        return run_phased_jobs(jobs, settings, output, skip, stop, emit,
+                               pause=pause, checkpoint=checkpoint, blocked_jobs=blocked_jobs)
+    phase = settings.get("bt_phase")
     run_started = time.monotonic()
     paused_seconds = 0
     run_timestamp = datetime.now().astimezone().isoformat(timespec='seconds')
@@ -367,7 +374,7 @@ def run_jobs(jobs, settings, output, skip, stop, emit, *, pause=None, checkpoint
             raise RuntimeError(tr("已停止；未執行此項目的後續動作"))
         emit(("stage", "匯出", int(count * 100 / total)))
 
-    session = TranslationSession(stop) if sum(job.action == "translate" for job in jobs) > 1 else None
+    session = TranslationSession(stop) if phase or sum(job.action == "translate" for job in jobs) > 1 else None
     failed_paths = set()
     run_id = uuid.uuid4().hex[:10]
     logger.info("[%s] queue_start jobs=%s export=%s cleanup=%s", run_id, len(jobs),
@@ -420,11 +427,24 @@ def run_jobs(jobs, settings, output, skip, stop, emit, *, pause=None, checkpoint
                     if not sources:
                         raise ValueError(tr("指定路徑沒有圖片，請選擇章節或整合輸出"))
                     selected = job.select_pages(sources)
+                    ready = prepared(path, selected) if phase else False
+                    if (phase == "prepare" and ready) or (phase == "translate" and not ready):
+                        note = "" if ready else tr("尚未完成前處理，或來源／前處理成果已變更；請先跑前處理")
+                        emit(("status", index, "prepared" if ready else "skipped", note))
+                        emit(("job_time", index, job_timestamp, datetime.now().astimezone().isoformat(timespec='seconds'),
+                              time.monotonic() - job_started))
+                        emit(("total", index + 1))
+                        if checkpoint is not None and not checkpoint():
+                            break
+                        continue
                     module = load_json(settings["bt_config"], {}, strict=True).get("module", {})
                     enabled = {name: module.get(flag, True) is not False for name, flag in BT_STAGES.items()}
                     if not any(enabled.values()):
                         raise ValueError(tr("請至少啟用一個 BallonsTranslator 處理階段"))
                     emit(("bt_reset", len(selected), enabled))
+                    if any(enabled[name] for name in ("Text Detection", "OCR", "Inpaint")):
+                        invalidate_prepared(path, selected)
+                    source_versions = [signature(p) for p in selected] if phase == "prepare" else None
                     logger.info("[%s] translation_pages start=%s end=%s selected=%s total=%s", job_id,
                                 job.start_page, job.end_page or len(sources), len(selected), len(sources))
                     with tempfile.TemporaryDirectory(prefix="comic-sorting-pages-") as temporary:
@@ -436,6 +456,8 @@ def run_jobs(jobs, settings, output, skip, stop, emit, *, pause=None, checkpoint
                         if session is not None:
                             request = dict(path=str(path), pages=[p.name for p in selected] if len(selected) != len(sources) else None,
                                            token=uuid.uuid4().hex)
+                            if phase:
+                                request["phase"] = phase
                             page_manifest = Path(temporary) / "session.json"
                             save_json(page_manifest, request)
                         command_options = {"page_manifest": page_manifest} if page_manifest else {}
@@ -448,6 +470,19 @@ def run_jobs(jobs, settings, output, skip, stop, emit, *, pause=None, checkpoint
                                         timing=lambda name, seconds: emit(("stage_time", index, name, seconds)), **session_options)
                         if isinstance(diagnostic, str):
                             completion_note = diagnostic
+                    if phase == "prepare":
+                        if completion_note or stop.is_set():
+                            raise RuntimeError(completion_note or tr("已停止"))
+                        if source_versions != [signature(p) for p in selected]:
+                            raise RuntimeError(tr("前處理期間來源圖片已變更，請重新執行"))
+                        mark_prepared(path, selected)
+                        emit(("status", index, "prepared", ""))
+                        emit(("job_time", index, job_timestamp, datetime.now().astimezone().isoformat(timespec='seconds'),
+                              time.monotonic() - job_started))
+                        emit(("total", index + 1))
+                        if checkpoint is not None and not checkpoint():
+                            break
+                        continue
                     status, translated = translation_status(path)
                     if not translations_complete(sources, translated, selected):
                         raise RuntimeError(tr("翻譯結果不完整，未執行後續動作"))

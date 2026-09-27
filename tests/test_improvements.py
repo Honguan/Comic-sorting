@@ -448,7 +448,8 @@ class UIImprovementsTests(unittest.TestCase):
                     details = [widget for widget in next(iter(app.translation_queue.bt_bars.values())).master.winfo_children()
                                if isinstance(widget, tk.ttk.Label)]
                     for tab, controls in (
-                            (app.queue_tab, (app.translation_queue.start_button, app.translation_queue.pause_button,
+                            (app.queue_tab, (app.translation_queue.workflow_choice,
+                                             app.translation_queue.start_button, app.translation_queue.pause_button,
                                              app.translation_queue.stop_button, app.translation_queue.range_button,
                                              app.translation_queue.total, app.translation_queue.stage,
                                              app.translation_queue.history_button,

@@ -5,6 +5,7 @@ import time
 import tkinter as tk
 from tkinter import ttk, messagebox
 from ui_language import tr
+from queue_phases import READY
 
 
 class QueueSchedule:
@@ -23,7 +24,7 @@ class QueueSchedule:
     def options(self):
         q = self.queue
         return (q.installation.get(), q.config.get(), q.python.get(), q.export.get(),
-                q.cleanup.get(), q.app.komga_path.get(), q.app.skip_unchanged.get())
+                q.cleanup.get(), q.app.komga_path.get(), q.app.skip_unchanged.get(), q.workflow_mode())
 
     @staticmethod
     def signature(job):
@@ -77,7 +78,7 @@ class QueueSchedule:
                     entry['status'] = '設定已變更，請重新排程'
                     continue
                 jobs = tuple(job for job, signature in entry['jobs']
-                             if any(job is current for current in q.jobs) and job.status == 'pending'
+                             if any(job is current for current in q.jobs) and job.status in READY
                              and self.signature(job) == signature)
                 if jobs:
                     entry['status'] = '啟動失敗'

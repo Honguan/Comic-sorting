@@ -565,6 +565,18 @@ TRANSLATIONS = {
 }
 
 TRANSLATIONS.update({
+    '翻譯流程': {'en': 'Translation workflow', 'ja': '翻訳フロー'},
+    '原本流程': {'en': 'Standard', 'ja': '通常のフロー'},
+    '只跑前處理': {'en': 'Preprocess only', 'ja': '前処理のみ'},
+    '只翻譯已前處理': {'en': 'Translate only', 'ja': '前処理済み翻訳'},
+    '先全部前處理再翻譯': {'en': 'Two passes', 'ja': '全前処理→翻訳'},
+    '前處理完成／待翻譯': {'en': 'Preprocessed / awaiting translation', 'ja': '前処理完了／翻訳待ち'},
+    '尚未完成前處理，或來源／前處理成果已變更；請先跑前處理': {'en': 'Preprocessing is missing or its source/artifacts changed; preprocess first.', 'ja': '前処理が未完了、または元画像・処理結果が変更されています。先に前処理してください。'},
+    '前處理期間來源圖片已變更，請重新執行': {'en': 'Source images changed during preprocessing; run it again.', 'ja': '前処理中に元画像が変更されました。再実行してください。'},
+    '兩階段模式只處理翻譯項目': {'en': 'Phased workflows only process translation jobs.', 'ja': '二段階フローは翻訳項目のみ処理します。'},
+})
+
+TRANSLATIONS.update({
     "搜尋系列／章節": {"en": "Search series / chapters", "ja": "シリーズ／章を検索"},
     "已選取 {0} 個章節": {"en": "{0} chapters selected", "ja": "{0} 章を選択中"},
     "主佇列": {"en": "Queue", "ja": "キュー"},

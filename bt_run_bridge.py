@@ -27,6 +27,12 @@ def install_session(window_class, shared, request):
     """Keep native models alive, accepting one JSON job after saved output."""
     original_run = window_class.on_run_imgtrans
     original_next = window_class.run_next_dir
+    if request.get('phase') == 'prepare':
+        # Preprocessing must not render untranslated pages over existing results.
+        # Keep native per-page OCR/font formatting and project saves intact.
+        def save_preprocessing(window, *args, **kwargs):
+            return None
+        window_class.saveCurrentPage = save_preprocessing
 
     def run_selected(window, *args, **kwargs):
         pages = request['pages']
@@ -48,6 +54,8 @@ def install_session(window_class, shared, request):
             return original_next(window)
         while window.imsave_thread.isRunning():
             time.sleep(.1)
+        if request.get('phase') == 'prepare':
+            window.imgtrans_proj.save()
         print('COMIC_SORTING_FINISHED:' + request['token'] + ':' +
               str(int(window.module_manager.proj_finished())), flush=True)
         print('finished translating all dirs', flush=True)

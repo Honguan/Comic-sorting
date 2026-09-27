@@ -74,6 +74,8 @@ _RULES = [(code, re.compile(pattern, re.I)) for code, _, pattern in ERRORS]
 
 def error_info(status: str, error: str) -> tuple[str, str]:
     """Classify terminal diagnostics, never progress text or a successful job's notes."""
+    if status == 'skipped':
+        return '', redact(error)
     if status not in ('failed', 'cancelled', 'blocked', 'done_warning'):
         return '', ''
     if status == 'blocked':

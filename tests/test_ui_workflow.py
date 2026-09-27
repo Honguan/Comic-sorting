@@ -17,6 +17,33 @@ def detail_values(window):
 
 
 class WorkflowTests(unittest.TestCase):
+    def test_phase_modes_restore_prepared_jobs_and_scope_schedules(self):
+        from queue_phases import MODES
+        from ui_language import tr
+        q = self.app.translation_queue
+        q.jobs = [Job(self.folder / 'Manga/Chapter 1', 'translate', 'prepared'),
+                  Job(self.folder / 'Manga/Chapter 2', 'translate', 'skipped'),
+                  Job(self.folder / 'Manga/Chapter 3', 'translate', 'done'),
+                  Job(self.folder / 'Manga/Chapter 4', 'export')]
+        q.workflow.set(tr(MODES['translate']))
+        q.render()
+        q.update_controls()
+        self.assertEqual(q.start_targets(), tuple(q.jobs[:2]))
+        self.assertEqual(str(q.start_button['state']), 'normal')
+        self.assertEqual(q.settings()['bt_workflow'], 'translate')
+        before = q.scheduler.options()
+        q.workflow.set(tr(MODES['prepare']))
+        self.assertNotEqual(q.scheduler.options(), before)
+        q.cleanup.set(True)
+        with mock.patch('translation_queue.messagebox.askyesno') as confirm:
+            self.assertTrue(q.confirm_cleanup())
+            confirm.assert_not_called()
+        self.assertTrue(self.app.save_settings())
+        from comic_core import load_json
+        settings = load_json(self.settings, {})
+        self.assertEqual(settings['bt_workflow'], 'prepare')
+        self.assertEqual(settings['bt_jobs'][0]['status'], 'prepared')
+
     def test_jev_current_and_history_statistics_preserve_totals(self):
         from queue_history import HistoryWindow, history_totals
         from translation_queue import ACTIONS, STATUSES
