@@ -22,7 +22,7 @@ from queue_errors import error_details, error_info
 from ntfy_notifications import NtfyNotifications
 from queue_start_dialog import QueueStartDialog
 from queue_schedule import QueueSchedule
-from queue_phases import MODES, READY
+from queue_phases import MODES, READY, MARKER, prepared
 
 
 ACTIONS = {"translate": "翻譯", "export": "匯出", "cleanup": "清理"}
@@ -955,6 +955,12 @@ class TranslationQueue:
         self.count_cache = {key: value for key, value in self.count_cache.items() if key[0] not in paths}
         for job in targets:
             job.status, job.error = "pending", ""
+            if job.action == "translate" and (job.path / MARKER).is_file():
+                try:
+                    if prepared(job.path, job.select_pages(image_files(job.path))):
+                        job.status = "prepared"
+                except (OSError, ValueError):
+                    pass  # Missing sources or an invalid range remain pending for normal validation.
             self.app.chapter_page_counts.pop(job.path, None)
         self.tree.selection_set(items)
         for item in items:

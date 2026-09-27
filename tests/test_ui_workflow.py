@@ -17,6 +17,33 @@ def detail_values(window):
 
 
 class WorkflowTests(unittest.TestCase):
+    def test_retry_restores_valid_preprocessing_for_selected_page_range(self):
+        from comic_core import save_json, load_json
+        from queue_phases import mark_prepared
+        q = self.app.translation_queue
+        path = self.folder / 'Prepared/Chapter 1'
+        path.mkdir(parents=True)
+        for name in ('1.png', '2.png'):
+            (path / name).write_bytes(b'source')
+        save_json(path / 'imgtrans_Chapter 1.json', {'pages': {'1.png': [], '2.png': []}})
+        mark_prepared(path, [path / '1.png'])
+        q.jobs = [Job(path, 'translate', 'failed', 'timeout', start_page=1, end_page=1),
+                  Job(path, 'translate', 'failed', 'timeout'),
+                  Job(path, 'cleanup', 'failed', 'error'),
+                  Job(path, 'translate', 'failed', 'range', start_page=3)]
+        q.render()
+        q.retry()
+        self.assertEqual([j.status for j in q.jobs], ['prepared', 'pending', 'pending', 'pending'])
+        self.assertTrue(all(j.error == '' for j in q.jobs))
+        self.assertEqual(load_json(self.settings, {})['bt_jobs'][0]['status'], 'prepared')
+        self.assertIn('前處理完成', str(q.tree.item(str(id(q.jobs[0])), 'values')))
+        self.assertFalse(q.running)
+        (path / '1.png').write_bytes(b'changed source')
+        q.jobs[0].status = 'failed'
+        q.tree.selection_set(str(id(q.jobs[0])))
+        q.retry()
+        self.assertEqual(q.jobs[0].status, 'pending')
+
     def test_phase_modes_restore_prepared_jobs_and_scope_schedules(self):
         from queue_phases import MODES
         from ui_language import tr
