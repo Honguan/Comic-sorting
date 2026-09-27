@@ -100,10 +100,6 @@ class TranslationQueue:
         self.button(row, tr("加入指定路徑"), self.add_directory)
         self.button(row, tr("整合＋加入佇列"), self.integrate)
         self.range_button = self.button(row, tr("翻譯頁數"), self.edit_page_range)
-        self.workflow_choice = ttk.Combobox(row, textvariable=self.workflow, state="readonly", width=15,
-                                            values=tuple(tr(value) for value in MODES.values()))
-        self.workflow_choice.pack(side="left", padx=4)
-        self.workflow_choice.bind("<<ComboboxSelected>>", lambda _event: self.workflow_changed())
         row = ttk.Frame(box)
         row.pack(fill="x")
         for text, variable in ((tr("翻譯成功後匯出 CBZ"), self.export),
@@ -176,8 +172,19 @@ class TranslationQueue:
         self.context_menu.add_command(label=tr("翻譯頁數"), command=self.edit_page_range)
         self.context_menu.add_separator()
         self.context_menu.add_command(label=tr("複製完整路徑"), accelerator="Ctrl+C", command=copy_paths)
-        self.start_button = self.button(row, tr("開始主佇列"), self.start)
+        self.start_button = self.button(row, tr("開始執行"), self.start)
         self.start_button.configure(style="Accent.TButton")
+        style = ttk.Style(row)
+        style.layout("Accent.TMenubutton", style.layout("Accent.TButton"))
+        style.configure("Accent.TMenubutton", **style.configure("Accent.TButton"), padding=(3, 1))
+        style.map("Accent.TMenubutton", **style.map("Accent.TButton"))
+        self.workflow_choice = ttk.Menubutton(row, text="▼", width=2, style="Accent.TMenubutton")
+        self.workflow_menu = tk.Menu(self.workflow_choice, tearoff=False)
+        for value in MODES.values():
+            self.workflow_menu.add_radiobutton(label=tr(value), value=tr(value), variable=self.workflow,
+                                               command=self.workflow_changed)
+        self.workflow_choice.configure(menu=self.workflow_menu)
+        self.workflow_choice.pack(side="left")
         self.context_menu.add_command(label=tr("執行選取項目"), command=self.start)
         self.run_menu_index = self.context_menu.index("end")
         self.context_menu.add_command(label=tr("取消選取"), command=self.clear_selection)
@@ -190,7 +197,7 @@ class TranslationQueue:
         self.schedule_button = ttk.Button(row, text=tr("排程啟動"), command=self.scheduler.show, width=0)
         self.schedule_button.pack(side="left", padx=2)
         # Reserve execution controls before less urgent actions in narrow windows.
-        for button in (self.stop_button, self.pause_button, self.start_button, self.schedule_button):
+        for button in (self.stop_button, self.pause_button, self.workflow_choice, self.start_button, self.schedule_button):
             button.pack_configure(side="right", before=self.selection_buttons["移除選取"])
         self.context_menu.add_command(label=tr("清除已完成"), command=self.clear_completed)
         self.clear_completed_menu_index = self.context_menu.index("end")
@@ -550,10 +557,13 @@ class TranslationQueue:
         for control in self.controls:
             control.configure(state="disabled" if busy else "normal")
         self.action_choice.configure(state="disabled" if busy else "readonly")
-        self.workflow_choice.configure(state="disabled" if busy else "readonly")
+        self.workflow_choice.configure(state="disabled" if busy else "normal")
+        for index in range(len(MODES)):
+            self.workflow_menu.entryconfigure(index, state="disabled" if busy else "normal")
         resumable = self.running and self.pause_requested.is_set() and not self.stop.is_set()
+        start_text = {"normal": "開始執行", "prepare": "開始前處理", "translate": "開始翻譯", "two_pass": "開始兩輪"}
         self.start_button.configure(text=tr("繼續佇列") if resumable else
-                                    tr("執行選取項目") if self.tree.selection() else tr("開始主佇列"),
+                                    tr(start_text[self.workflow_mode()]),
                                     state="normal" if resumable or (not busy and self.start_targets()) else "disabled")
         self.clear_selection_button.configure(state="normal" if self.tree.selection() else "disabled")
         self.pause_button.configure(

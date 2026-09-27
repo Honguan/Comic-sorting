@@ -696,3 +696,10 @@ TRANSLATIONS.update({
     '估價依據': {'en': 'Pricing basis', 'ja': '見積根拠'},
     '費率日期': {'en': 'Rates date', 'ja': '料金基準日'},
 })
+
+TRANSLATIONS.update({
+    '開始執行': {'en': 'Start', 'ja': '実行開始'},
+    '開始前處理': {'en': 'Preprocess', 'ja': '前処理開始'},
+    '開始翻譯': {'en': 'Translate', 'ja': '翻訳開始'},
+    '開始兩輪': {'en': 'Run two passes', 'ja': '二段階開始'},
+})

@@ -43,6 +43,18 @@ class WorkflowTests(unittest.TestCase):
         settings = load_json(self.settings, {})
         self.assertEqual(settings['bt_workflow'], 'prepare')
         self.assertEqual(settings['bt_jobs'][0]['status'], 'prepared')
+        with mock.patch('translation_queue.threading.Thread') as worker:
+            for index, (mode, label) in enumerate(zip(MODES, ('開始執行', '開始前處理', '開始翻譯', '開始兩輪'))):
+                q.workflow_menu.invoke(index)
+                self.assertEqual(q.workflow_mode(), mode)
+                self.assertEqual(q.start_button['text'], tr(label))
+                self.assertEqual(q.settings()['bt_workflow'], mode)
+            worker.assert_not_called()
+        q.running = True
+        q.update_controls()
+        self.assertEqual(str(q.workflow_choice['state']), 'disabled')
+        self.assertTrue(all(q.workflow_menu.entrycget(i, 'state') == 'disabled' for i in range(len(MODES))))
+        q.running = False
 
     def test_jev_current_and_history_statistics_preserve_totals(self):
         from queue_history import HistoryWindow, history_totals
@@ -591,7 +603,7 @@ class WorkflowTests(unittest.TestCase):
         q.render()
         q.tree.selection_set(str(id(jobs[0])))
         q.update_controls()
-        self.assertEqual(q.start_button['text'], '執行選取項目')
+        self.assertEqual(q.start_button['text'], '開始執行')
         self.assertEqual(q.start_targets(), (jobs[0],))
         q.tree.selection_set('series:' + str(paths[0].parent))
         self.assertEqual(q.start_targets(), tuple(jobs[:2]))
@@ -616,7 +628,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertTrue(q.start_button.instate(['disabled']))
         q.clear_selection_button.invoke()
         self.assertEqual(q.tree.selection(), ())
-        self.assertEqual(q.start_button['text'], '開始主佇列')
+        self.assertEqual(q.start_button['text'], '開始執行')
         self.assertEqual(q.start_targets(), (jobs[0], jobs[1], jobs[4]))
 
     def test_queue_actions_follow_selection_and_running_state(self):
