@@ -77,6 +77,28 @@ class PhaseTests(unittest.TestCase):
         self.assertEqual(events.count(('done',)), 1)
         self.assertEqual(load_json(self.config, {}), {'module': {'enable_translate': True}, 'other': 'preserve'})
 
+    def test_usage_snapshots_replace_within_phase_and_sum_only_matching_job_scope(self):
+        from queue_phases import run_phased_jobs
+        events = []
+        def worker(jobs, settings, output, skip, stop, emit, **kw):
+            for index in range(len(jobs)):
+                for count in (1, 3):
+                    for scope in ('OCR', 'translation'):
+                        emit(('usage', index, dict(scope=scope, requests=count + index,
+                                                  cost=None if scope == 'OCR' else '0.25')))
+                    emit(('jev_stats', index, dict(calls=count + index, elapsed_seconds=0.5)))
+        with patch('queue_worker.run_jobs', side_effect=worker):
+            run_phased_jobs(self.jobs, dict(bt_config=str(self.config), bt_workflow='two_pass'),
+                            '', True, threading.Event(), events.append)
+        for index in range(2):
+            for scope in ('OCR', 'translation'):
+                snapshots = [e[2] for e in events if e[:2] == ('usage', index) and e[2]['scope'] == scope]
+                self.assertEqual([s['requests'] for s in snapshots],
+                                 [1 + index, 3 + index, 4 + 2 * index, 6 + 2 * index])
+                self.assertEqual(snapshots[-1]['cost'], None if scope == 'OCR' else '0.50')
+            jev = [e[2] for e in events if e[:2] == ('jev_stats', index)]
+            self.assertEqual(jev[-1], dict(calls=6 + 2 * index, elapsed_seconds=1.0))
+
     def test_restart_validation_and_missing_changed_artifacts(self):
         path = self.jobs[0].path
         self.artifacts(path)

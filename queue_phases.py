@@ -130,17 +130,17 @@ def run_phased_jobs(jobs, settings, output, skip, stop, emit, *, pause=None, che
                         elif kind in ("usage", "jev_stats"):
                             records = usage if kind == "usage" else jev
                             scope = event[2].get("scope", "")
-                            records[index, phase, scope] = event[2]
+                            snapshots = records.setdefault((index, scope), {})
+                            snapshots[phase] = event[2]
                             combined = {}
-                            for (i, _, s), values in records.items():
-                                if i == index and s == scope:
-                                    for key, value in values.items():
-                                        if key == "cost" and value is not None:
-                                            combined[key] = str(Decimal(combined.get(key) or "0") + Decimal(value))
-                                        elif value is not None and not isinstance(value, str):
-                                            combined[key] = (combined.get(key) or 0) + value
-                                        elif key not in combined:
-                                            combined[key] = value
+                            for values in snapshots.values():
+                                for key, value in values.items():
+                                    if key == "cost" and value is not None:
+                                        combined[key] = str(Decimal(combined.get(key) or "0") + Decimal(value))
+                                    elif value is not None and not isinstance(value, str):
+                                        combined[key] = (combined.get(key) or 0) + value
+                                    elif key not in combined:
+                                        combined[key] = value
                             event = (kind, index, combined)
                     emit(event)
 
