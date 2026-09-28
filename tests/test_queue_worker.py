@@ -324,6 +324,22 @@ class QueueWorkerTests(unittest.TestCase):
         self.assertEqual(detail.splitlines()[1:],
                          ["ERROR"] + [f"line{i}" for i in range(6, 25)] + ["finished translating all dirs"])
 
+    def test_retry_notifications_count_recovery_once_and_not_usage_or_exhaustion(self):
+        lines = [
+            '[WARNING] llm_chat:request_chat_completion:366 - Codex retryable failure: timeout. Attempt 1/3',
+            '[ERROR] trans_llm:_translate:1253 - Failed to parse matching translation count for prompt:',
+            '[WARNING] trans_llm:_translate:1260 - LLM translation failed due to count mismatch. Attempt: 1',
+            '[INFO] trans_llm:_translate:1334 - Codex timeout rescue: page=1.jpg, Jev checks=1; retrying translation once.',
+            '[INFO] trans_llm:_log_token_usage:1160 - LLM token usage: page=1.jpg, attempt=2',
+            '[ERROR] llm_chat:request_chat_completion:360 - Codex retry budget exhausted after 3 attempts',
+        ]
+        retry = mock.Mock()
+        script = f"lines = {lines!r}; [print(line) for line in lines]; input()"
+        with self.assertRaises(RuntimeError):
+            run_translation([sys.executable, '-u', '-c', script], self.root, None,
+                            threading.Event(), lambda *args: None, retry=retry)
+        self.assertEqual(retry.call_count, 3)
+
     def test_recovered_llm_parse_error_does_not_fail_completed_translation(self):
         lines = [
             '[ERROR  ] trans_llm:_translate:1253 - Failed to parse matching translation count for prompt:',

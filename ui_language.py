@@ -9,6 +9,7 @@ def tr(text):
     return TRANSLATIONS.get(text, {}).get(_language, text)
 
 TRANSLATIONS = {
+    "｜失敗 {0}｜本次重試 {1}": {"en": " | Failed {0} | Run retries {1}", "ja": "｜失敗 {0}｜今回の再試行 {1}"},
     '翻譯頁數：{0}': {'en': 'Translation pages: {0}', 'ja': '翻訳ページ数：{0}'},
     '等待執行頁數：{0}': {'en': 'Pending pages: {0}', 'ja': '待機中のページ数：{0}'},
     '倒數啟動': {'en': 'Countdown', 'ja': 'カウントダウン'},

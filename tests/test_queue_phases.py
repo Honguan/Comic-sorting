@@ -47,6 +47,7 @@ class PhaseTests(unittest.TestCase):
             path, config = Path(command[0]), load_json(command[1], {})
             phase = kw['request']['phase']
             calls.append((phase, path.name))
+            kw['retry']()
             sessions.setdefault(phase, []).append(kw['session'])
             self.assertEqual(config['other'], 'preserve')
             self.assertEqual(config['module']['enable_translate'], phase == 'translate')
@@ -75,6 +76,7 @@ class PhaseTests(unittest.TestCase):
         self.assertEqual([e for e in events if e[0] == 'usage'][-1][2]['requests'], 2)
         self.assertEqual([e for e in events if e[0] == 'usage'][-1][2]['cost'], '0.3')
         self.assertEqual(events.count(('done',)), 1)
+        self.assertEqual(events.count(('retry',)), 4)
         self.assertEqual(load_json(self.config, {}), {'module': {'enable_translate': True}, 'other': 'preserve'})
 
     def test_usage_snapshots_replace_within_phase_and_sum_only_matching_job_scope(self):

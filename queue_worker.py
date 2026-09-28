@@ -250,7 +250,7 @@ class TranslationSession:
             self.process = None
 
 
-def run_translation(command, root, env, stop, progress, log_context="", usage=None, timing=None, *, session=None, request=None, jev=None):
+def run_translation(command, root, env, stop, progress, log_context="", usage=None, timing=None, *, session=None, request=None, jev=None, retry=None):
     completed = False
     native_completed = None
     failures = deque(maxlen=5)
@@ -312,6 +312,11 @@ def run_translation(command, root, env, stop, progress, log_context="", usage=No
                 failures.append(line)
                 if "Image translation pipeline stopped" in diagnostic:
                     session.fatal.set()
+            if retry is not None and re.search(
+                    r"(?:llm_chat:request_chat_completion:\d+ - Codex retryable failure:|"
+                    r"trans_llm:_translate:\d+ - (?:LLM translation failed.*Attempt:|"
+                    r"Codex timeout rescue:.*retrying translation once\.))", diagnostic):
+                retry()
             stage_progress = parse_bt_progress(line)
             if stage_progress:
                 stages[stage_progress[0]] = stage_progress[1]
@@ -466,6 +471,7 @@ def run_jobs(jobs, settings, output, skip, stop, emit, *, pause=None, checkpoint
                                                             settings.get("bt_python", ""), path, **command_options), stop,
                                         lambda *values: emit(("bt_progress", *values)), log_context=job_id,
                                         usage=lambda values: emit(("usage", index, values)),
+                                        retry=lambda: emit(("retry",)),
                                         jev=lambda values: emit(("jev_stats", index, values)),
                                         timing=lambda name, seconds: emit(("stage_time", index, name, seconds)), **session_options)
                         if isinstance(diagnostic, str):

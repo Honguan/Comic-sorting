@@ -55,6 +55,7 @@ class TranslationQueue:
         self.notified_jobs = set()
         self.notified_run = None
         self.stage_times = {}
+        self.retry_count = 0
         self.editor = None
         self.config_editor = None
         self.controls = []
@@ -757,7 +758,8 @@ class TranslationQueue:
         self.summary.set(tr("佇列 {0} 項｜等待 {1}｜完成 {2}｜需處理 {3}").format(
             len(self.jobs), sum(j.status in READY for j in self.jobs),
             sum(j.status in ("done", "done_warning") for j in self.jobs),
-            sum(j.status in ("failed", "cancelled", "blocked") for j in self.jobs)) + files)
+            sum(j.status in ("failed", "cancelled", "blocked") for j in self.jobs)) + tr("｜失敗 {0}｜本次重試 {1}").format(
+                sum(j.status == "failed" for j in self.jobs), self.retry_count) + files)
 
     def browse(self, variable, directory):
         selected = filedialog.askdirectory(initialdir=variable.get() or None) if directory else filedialog.askopenfilename()
@@ -1166,6 +1168,8 @@ class TranslationQueue:
             return
         if not self.app.save_settings():
             return
+        self.retry_count = 0
+        self.update_summary()
         self.stage_times.clear()
         self.usage_records.clear()
         self.jev_records.clear()
@@ -1283,6 +1287,9 @@ class TranslationQueue:
             elif event[0] == "usage":
                 self.usage_records[event[1], event[2]['scope']] = event[2]
                 self.show_usage()
+            elif event[0] == "retry":
+                self.retry_count += 1
+                self.update_summary()
             elif event[0] == "jev_stats":
                 self.jev_records[event[1]] = event[2]
                 self.show_usage()

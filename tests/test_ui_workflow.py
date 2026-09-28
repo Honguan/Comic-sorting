@@ -17,6 +17,21 @@ def detail_values(window):
 
 
 class WorkflowTests(unittest.TestCase):
+    def test_failure_and_retry_summary_updates_from_events(self):
+        q = self.app.translation_queue
+        q.jobs = [Job(self.folder / 'Chapter 1', 'translate'),
+                  Job(self.folder / 'Chapter 2', 'translate', 'blocked')]
+        q.active_jobs = tuple(q.jobs)
+        q.render()
+        q.events.put(('retry',))
+        q.events.put(('retry',))
+        q.events.put(('status', 0, 'failed', 'timeout'))
+        q.poll()
+        self.assertIn('失敗 1｜本次重試 2', q.summary.get())
+        q.events.put(('status', 0, 'prepared', ''))
+        q.poll()
+        self.assertIn('失敗 0｜本次重試 2', q.summary.get())
+
     def test_retry_restores_valid_preprocessing_for_selected_page_range(self):
         from comic_core import save_json, load_json
         from queue_phases import mark_prepared
