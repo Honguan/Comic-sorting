@@ -391,12 +391,16 @@ class TranslationQueue:
         record = self.history_run
         record['saved_at'] = datetime.now().astimezone().isoformat(timespec='seconds')
         if refresh:
+            stages, usage = {}, {}
+            for (index, stage), value in self.stage_times.items():
+                stages.setdefault(index, {})[stage] = value
+            for (index, scope), value in self.usage_records.items():
+                usage.setdefault(index, {})[scope] = dict(
+                    value, cost=str(value['cost']) if value['cost'] is not None else None)
             for index, (job, saved) in enumerate(zip(self.active_jobs, record['jobs'])):
                 saved.update(status=job.status, error=job.error,
                              jev_stats=self.jev_records.get(index, {}),
-                             stage_seconds={stage: value for (item, stage), value in self.stage_times.items() if item == index},
-                             usage={scope: dict(value, cost=str(value['cost']) if value['cost'] is not None else None)
-                                    for (item, scope), value in self.usage_records.items() if item == index})
+                             stage_seconds=stages.get(index, {}), usage=usage.get(index, {}))
         try:
             save_run(self.app.history_path, record)
         except (OSError, sqlite3.Error, ValueError) as error:
