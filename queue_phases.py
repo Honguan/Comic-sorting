@@ -10,7 +10,7 @@ import tempfile
 from comic_core import load_json, save_json
 from ui_language import tr
 
-MODES = {"normal": "原本流程", "prepare": "只跑前處理", "translate": "只翻譯已前處理", "two_pass": "先全部前處理再翻譯"}
+MODES = {"normal": "原本流程", "prepare": "只跑前處理", "translate": "只翻譯已前處理", "two_pass": "先全部前處理再翻譯", "parallel": "前處理與翻譯並行"}
 READY = ("pending", "prepared", "skipped")
 MARKER = ".comic-sorting-prepared.json"
 
@@ -64,7 +64,11 @@ def invalidate_prepared(path, selected):
         save_json(path / MARKER, marker)
 
 
-def run_phased_jobs(jobs, settings, output, skip, stop, emit, *, pause=None, checkpoint=None, blocked_jobs=()):
+def run_phased_jobs(jobs, settings, output, skip, stop, emit, *, pause=None, checkpoint=None, blocked_jobs=(), before_job=None):
+    if settings["bt_workflow"] == "parallel":
+        from queue_parallel import run_parallel_jobs
+        return run_parallel_jobs(jobs, settings, output, skip, stop, emit,
+                                 pause=pause, checkpoint=checkpoint, blocked_jobs=blocked_jobs)
     from queue_worker import run_jobs
     mode = settings["bt_workflow"]
     phases = ("prepare", "translate") if mode == "two_pass" else (mode,)
@@ -146,6 +150,7 @@ def run_phased_jobs(jobs, settings, output, skip, stop, emit, *, pause=None, che
 
                 run_jobs(tuple(jobs[i] for i in indices), options, output, skip, stop, forward,
                          pause=pause, checkpoint=save_checkpoint if checkpoint else None,
+                         before_job=(lambda index: before_job(indices[index])) if before_job else None,
                          blocked_jobs=tuple(i for i, original in enumerate(indices) if original in blocked_jobs))
         for index, job in enumerate(jobs):
             if job.action != "translate" and not stop.is_set() and not aborted:

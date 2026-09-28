@@ -17,6 +17,24 @@ def detail_values(window):
 
 
 class WorkflowTests(unittest.TestCase):
+    def test_parallel_progress_keeps_both_chapters_visible(self):
+        q = self.app.translation_queue
+        q.jobs = [Job(self.folder / 'Manga/Chapter 1', 'translate'),
+                  Job(self.folder / 'Manga/Chapter 2', 'translate')]
+        q.active_jobs = tuple(q.jobs)
+        q.render()
+        for phase, index, total in [('translate', 0, 10), ('prepare', 1, 20)]:
+            q.events.put(('phase_event', phase, ('status', index, 'running', '')))
+            q.events.put(('phase_event', phase, ('bt_reset', total, {})))
+            if phase == 'translate':
+                q.events.put(('phase_event', phase, ('bt_progress', 'Translation', 50, 5, 10, '1s')))
+        q.poll()
+        self.assertEqual(q.bt_progress['Translation'][:3], (50, 5, 10))
+        self.assertEqual(q.bt_progress['OCR'][2], 20)
+        self.assertIn('Manga/Chapter 1', q.label.get())
+        self.assertIn('Manga/Chapter 2', q.label.get())
+        self.assertEqual(q.tree.set(str(id(q.jobs[1])), 'status'), '前處理中')
+
     def test_failure_and_retry_summary_updates_from_events(self):
         q = self.app.translation_queue
         q.jobs = [Job(self.folder / 'Chapter 1', 'translate'),
@@ -86,7 +104,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(settings['bt_workflow'], 'prepare')
         self.assertEqual(settings['bt_jobs'][0]['status'], 'prepared')
         with mock.patch('translation_queue.threading.Thread') as worker:
-            for index, (mode, label) in enumerate(zip(MODES, ('開始執行', '開始前處理', '開始翻譯', '開始兩輪'))):
+            for index, (mode, label) in enumerate(zip(MODES, ('開始執行', '開始前處理', '開始翻譯', '開始兩輪', '開始並行'))):
                 q.workflow_menu.invoke(index)
                 self.assertEqual(q.workflow_mode(), mode)
                 self.assertEqual(q.start_button['text'], tr(label))

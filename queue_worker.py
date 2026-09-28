@@ -364,7 +364,7 @@ def run_translation(command, root, env, stop, progress, log_context="", usage=No
             session.close()
 
 
-def run_jobs(jobs, settings, output, skip, stop, emit, *, pause=None, checkpoint=None, blocked_jobs=()):
+def run_jobs(jobs, settings, output, skip, stop, emit, *, pause=None, checkpoint=None, blocked_jobs=(), before_job=None):
     """Run a pending-job snapshot; only the event consumer mutates Job state."""
     from queue_phases import run_phased_jobs, prepared, mark_prepared, invalidate_prepared, signature
     if settings.get("bt_workflow", "normal") != "normal":
@@ -386,6 +386,11 @@ def run_jobs(jobs, settings, output, skip, stop, emit, *, pause=None, checkpoint
                 settings.get("bt_export", False), settings.get("bt_cleanup", False))
     try:
         for index, job in enumerate(jobs):
+            if before_job is not None and not before_job(index):
+                if stop.is_set():
+                    break
+                emit(("total", index + 1))
+                continue
             if pause is not None and pause.is_set() and not stop.is_set():
                 paused_at = time.monotonic()
                 logger.info("[%s] queue_paused next_job=%s", run_id, index + 1)

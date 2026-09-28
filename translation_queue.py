@@ -56,6 +56,7 @@ class TranslationQueue:
         self.notified_run = None
         self.stage_times = {}
         self.retry_count = 0
+        self.phase_jobs = {}
         self.editor = None
         self.config_editor = None
         self.controls = []
@@ -476,8 +477,8 @@ class TranslationQueue:
             lines.append(tr('歷史紀錄儲存失敗'))
         self.notifications.send('done', tr('整批結束'), '\n'.join(lines), 3 if record['status'] == 'done' else 4)
 
-    def reset_bt_progress(self, total=None, enabled=None):
-        for name in BT_STAGES:
+    def reset_bt_progress(self, total=None, enabled=None, names=None):
+        for name in BT_STAGES if names is None else names:
             active = enabled is None or enabled.get(name, True)
             self.bt_progress[name] = (0, 0 if total is not None else None, total, None, active)
             self.bt_elapsed[name] = None
@@ -566,7 +567,7 @@ class TranslationQueue:
         for index in range(len(MODES)):
             self.workflow_menu.entryconfigure(index, state="disabled" if busy else "normal")
         resumable = self.running and self.pause_requested.is_set() and not self.stop.is_set()
-        start_text = {"normal": "開始執行", "prepare": "開始前處理", "translate": "開始翻譯", "two_pass": "開始兩輪"}
+        start_text = {"normal": "開始執行", "prepare": "開始前處理", "translate": "開始翻譯", "two_pass": "開始兩輪", "parallel": "開始並行"}
         self.start_button.configure(text=tr("繼續佇列") if resumable else
                                     tr(start_text[self.workflow_mode()]),
                                     state="normal" if resumable or (not busy and self.start_targets()) else "disabled")
@@ -1173,6 +1174,7 @@ class TranslationQueue:
         if not self.app.save_settings():
             return
         self.retry_count = 0
+        self.phase_jobs.clear()
         self.update_summary()
         self.stage_times.clear()
         self.usage_records.clear()
@@ -1232,6 +1234,15 @@ class TranslationQueue:
                 event = self.events.get_nowait()
             except queue.Empty:
                 break
+            phase = None
+            names = tuple(BT_STAGES)
+            if event[0] == "phase_event":
+                _, phase, event = event
+                names = tuple(name for name in BT_STAGES if (name == "Translation") == (phase == "translate"))
+                if event[0] in ("bt_progress",) and event[1] not in names:
+                    continue
+                if event[0] == "stage_time" and event[2] not in names:
+                    continue
             if event[0] == "checkpoint":
                 try:
                     if not self.app.save_settings() or not self.save_history():
@@ -1248,7 +1259,9 @@ class TranslationQueue:
                 changed = True
                 visible = self.tree.exists(str(id(job)))
                 if visible:
-                    self.tree.set(str(id(job)), "status", tr(STATUSES[job.status]))
+                    self.tree.set(str(id(job)), "status", tr(
+                        ("前處理中" if phase == "prepare" else "翻譯中")
+                        if phase and job.status == "running" else STATUSES[job.status]))
                 code, reason = error_info(job.status, job.error)
                 if code:
                     logger.warning("queue_status path=%s error_code=%s reason=%s", job.path, code, reason)
@@ -1261,11 +1274,16 @@ class TranslationQueue:
                         self.tree.see(str(id(job)))
                     self.stage.configure(value=0)
                     self.stage.pack_forget()
-                    self.reset_bt_progress()
-                    self.label.set(tr("正在處理：{0}").format(job.path.name))
+                    self.reset_bt_progress(names=names)
+                    if phase is None:
+                        self.label.set(tr("正在處理：{0}").format(job.path.name))
                 elif job.status in ("failed", "cancelled"):
-                    for name in BT_STAGES:
+                    for name in names:
                         self.show_bt_progress(name, STATUSES[job.status])
+                if phase:
+                    self.phase_jobs[phase] = str(job.path.parent.name + '/' + job.path.name) if job.status == "running" else '—'
+                    self.label.set(tr("前處理：{0}｜翻譯：{1}").format(
+                        self.phase_jobs.get('prepare', '—'), self.phase_jobs.get('translate', '—')))
             elif event[0] == "paused":
                 self.paused_at = event[1]
                 elapsed = self.paused_at - self.started_at
@@ -1306,14 +1324,15 @@ class TranslationQueue:
                 self.started_at = None
                 self.elapsed_label.set(elapsed_text(event[3]))
             elif event[0] == "bt_reset":
-                self.reset_bt_progress(event[1], event[2])
+                self.reset_bt_progress(event[1], event[2], names=names)
             elif event[0] == "bt_progress":
                 name, percent, current, total, eta = event[1:]
                 self.bt_progress[name] = (percent, current, total, eta, True)
                 self.bt_elapsed[name] = None  # Only pair page counts with timing from the same progress report.
                 self.show_bt_progress(name)
             elif event[0] == "stage":
-                self.label.set(f"{tr(event[1])}: {event[2]}%")
+                if phase is None:
+                    self.label.set(f"{tr(event[1])}: {event[2]}%")
                 self.stage.pack(fill="x", before=self.bt_frame)
                 self.stage.configure(value=event[2])
             elif event[0] == "total":

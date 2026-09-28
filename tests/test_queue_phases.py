@@ -41,6 +41,216 @@ class PhaseTests(unittest.TestCase):
             run_jobs(self.jobs, settings, '', True, threading.Event(), events.append)
         return events
 
+    def test_parallel_overlaps_chapters_and_reuses_two_sessions(self):
+        preparing_second, translating_first = threading.Event(), threading.Event()
+        sessions, calls = {}, []
+        def execute(command, root, env, stop, progress, **kw):
+            path = Path(command[0])
+            phase = kw['request']['phase']
+            sessions.setdefault(phase, []).append(kw['session'])
+            calls.append((phase, path.name))
+            if phase == 'prepare':
+                if path == self.jobs[1].path:
+                    preparing_second.set()
+                    self.assertTrue(translating_first.wait(3), 'translation did not overlap preprocessing')
+                self.artifacts(path)
+            else:
+                self.assertTrue(prepared(path, [path / '[1].png']))
+                if path == self.jobs[0].path:
+                    translating_first.set()
+                    self.assertTrue(preparing_second.wait(3))
+                (path / 'result').mkdir()
+                (path / 'result/[1].png').write_bytes(b'translated')
+            kw['retry']()
+            kw['usage'](dict(scope='total', requests=1, total_tokens=2, cost=None))
+        with patch('queue_worker.TranslationSession') as session:
+            session.side_effect = lambda *a: Mock()
+            events = self.run_mode('parallel', execute)
+        wrapped = [e[2] for e in events if e[0] == 'phase_event']
+        self.assertEqual([e[2] for e in wrapped if e[0] == 'status'].count('done'), 2)
+        self.assertFalse(any(e[0] == 'status' and e[2] == 'failed' for e in wrapped))
+        self.assertEqual([name for phase, name in calls if phase == 'translate'], ['Chapter 1', 'Chapter 2'])
+        for phase in sessions:
+            self.assertIs(sessions[phase][0], sessions[phase][1])
+            sessions[phase][0].close.assert_called_once_with(graceful=True)
+        self.assertIsNot(sessions['prepare'][0], sessions['translate'][0])
+        self.assertEqual([e for e in wrapped if e[0] == 'usage'][-1][2]['requests'], 2)
+        self.assertEqual(wrapped.count(('retry',)), 4)
+        self.assertEqual(events.count(('done',)), 1)
+        self.assertEqual([e for e in events if e[0] == 'total'][-1][1], 2)
+
+    def test_parallel_pause_stop_and_checkpoint_failure_release_workers(self):
+        from queue_parallel import run_parallel_jobs
+        for scenario in ('pause', 'stop', 'checkpoint'):
+            with self.subTest(scenario=scenario):
+                stop, pause = threading.Event(), threading.Event()
+                entered, paused = threading.Event(), threading.Event()
+                events, calls = [], []
+                if scenario == 'pause':
+                    pause.set()
+                def emit(event):
+                    events.append(event)
+                    if event[0] == 'paused':
+                        paused.set()
+                def execute(command, root, env, stopping, progress, **kw):
+                    phase = kw['request']['phase']
+                    calls.append(phase)
+                    entered.set()
+                    if scenario == 'stop':
+                        self.assertTrue(stopping.wait(3))
+                        raise RuntimeError('stopped')
+                    path = Path(command[0])
+                    if phase == 'prepare':
+                        self.artifacts(path)
+                    else:
+                        (path / 'result').mkdir(exist_ok=True)
+                        (path / 'result/[1].png').write_bytes(b'translated')
+                with patch('queue_worker.TranslationSession', side_effect=lambda *a: Mock()), \
+                     patch('queue_worker.translator_command', side_effect=lambda root, config, python, chapter, **kw:
+                           ([str(chapter), config], self.root, None)), \
+                     patch('queue_worker.run_translation', side_effect=execute):
+                    thread = threading.Thread(target=run_parallel_jobs, args=(self.jobs,
+                        dict(bt_config=str(self.config), bt_path='installed'), '', True, stop, emit),
+                        kwargs={'pause': pause, 'checkpoint': lambda: scenario != 'checkpoint'}, daemon=True)
+                    thread.start()
+                    try:
+                        if scenario == 'pause':
+                            self.assertTrue(paused.wait(3))
+                            self.assertFalse(calls)
+                            pause.clear()
+                        elif scenario == 'stop':
+                            self.assertTrue(entered.wait(3))
+                            stop.set()
+                        thread.join(5)
+                        self.assertFalse(thread.is_alive(), 'phase workers failed to join')
+                    finally:
+                        stop.set()
+                        thread.join(3)
+                self.assertEqual(events.count(('done',)), 1)
+                if scenario == 'checkpoint':
+                    self.assertFalse(calls)
+                if scenario == 'pause':
+                    self.assertEqual(sum(e[0] == 'paused' for e in events), 1)
+                    self.assertEqual(sum(e[0] == 'resumed' for e in events), 1)
+                    self.assertIn('translate', calls)
+                # Force actual preprocessing in the next scenario.
+                for job in self.jobs:
+                    (job.path / MARKER).unlink(missing_ok=True)
+
+    def test_parallel_stop_interrupts_both_active_sessions(self):
+        from queue_parallel import run_parallel_jobs
+        stop = threading.Event()
+        active = {phase: threading.Event() for phase in ('prepare', 'translate')}
+        sessions, events = {}, []
+        def execute(command, root, env, stopping, progress, **kw):
+            path, phase = Path(command[0]), kw['request']['phase']
+            sessions[phase] = kw['session']
+            if phase == 'prepare' and path == self.jobs[0].path:
+                self.artifacts(path)
+                return
+            active[phase].set()
+            self.assertTrue(stopping.wait(4))
+            raise RuntimeError('stopped')
+        with patch('queue_worker.TranslationSession', side_effect=lambda *a: Mock()), \
+             patch('queue_worker.translator_command', side_effect=lambda root, config, python, chapter, **kw:
+                   ([str(chapter), config], self.root, None)), \
+             patch('queue_worker.run_translation', side_effect=execute):
+            thread = threading.Thread(target=run_parallel_jobs, args=(self.jobs,
+                dict(bt_config=str(self.config), bt_path='installed'), '', True, stop, events.append), daemon=True)
+            thread.start()
+            try:
+                self.assertTrue(active['prepare'].wait(3))
+                self.assertTrue(active['translate'].wait(3))
+            finally:
+                stop.set()
+                thread.join(4)
+            self.assertFalse(thread.is_alive())
+        self.assertEqual(events.count(('done',)), 1)
+        self.assertEqual(len(sessions), 2)
+        for session in sessions.values():
+            self.assertTrue(session.close.called)
+        statuses = [e[2][2] for e in events if e[0] == 'phase_event' and e[2][0] == 'status']
+        self.assertEqual(statuses.count('cancelled'), 2)
+
+    def test_parallel_failed_prepared_checkpoint_never_releases_translation(self):
+        from queue_parallel import run_parallel_jobs
+        events, calls = [], []
+        def execute(command, root, env, stopping, progress, **kw):
+            calls.append(kw['request']['phase'])
+            self.artifacts(Path(command[0]))
+        def checkpoint():
+            return not any(e[0] == 'phase_event' and e[2][0] == 'status'
+                           and e[2][2] == 'prepared' for e in events)
+        with patch('queue_worker.TranslationSession', side_effect=lambda *a: Mock()), \
+             patch('queue_worker.translator_command', side_effect=lambda root, config, python, chapter, **kw:
+                   ([str(chapter), config], self.root, None)), \
+             patch('queue_worker.run_translation', side_effect=execute):
+            stop = threading.Event()
+            run_parallel_jobs(self.jobs, dict(bt_config=str(self.config), bt_path='installed'),
+                              '', True, stop, events.append, checkpoint=checkpoint)
+        self.assertTrue(stop.is_set())
+        self.assertEqual(calls, ['prepare'])
+
+    def test_parallel_duplicate_path_waits_for_previous_translation(self):
+        from queue_parallel import run_parallel_jobs
+        self.jobs.append(Job(self.jobs[0].path, 'translate'))
+        self.jobs.insert(0, Job(self.jobs[0].path, 'export'))
+        order = []
+        def execute(command, root, env, stop, progress, **kw):
+            path, phase = Path(command[0]), kw['request']['phase']
+            order.append((phase, path.name))
+            if phase == 'prepare':
+                self.artifacts(path)
+            else:
+                (path / 'result').mkdir(exist_ok=True)
+                (path / 'result/[1].png').write_bytes(b'translated')
+                # Invalidate readiness, so the duplicate must prepare again.
+                (path / 'inpainted/[1].png').write_bytes(b'changed')
+        with patch('queue_worker.TranslationSession', side_effect=lambda *a: Mock()):
+            events = self.run_mode('parallel', execute)
+        first_translate = order.index(('translate', 'Chapter 1'))
+        second_prepare = len(order) - 1 - order[::-1].index(('prepare', 'Chapter 1'))
+        self.assertLess(first_translate, second_prepare)
+        self.assertEqual(order.count(('translate', 'Chapter 1')), 2)
+
+    def test_parallel_reuses_persisted_preprocessing_after_restart(self):
+        path = self.jobs[0].path
+        self.artifacts(path)
+        mark_prepared(path, [path / '[1].png'])
+        calls = []
+        def execute(command, root, env, stop, progress, **kw):
+            path, phase = Path(command[0]), kw['request']['phase']
+            calls.append((phase, path.name))
+            if phase == 'prepare':
+                self.artifacts(path)
+            else:
+                (path / 'result').mkdir(exist_ok=True)
+                (path / 'result/[1].png').write_bytes(b'translated')
+        with patch('queue_worker.TranslationSession', side_effect=lambda *a: Mock()):
+            self.run_mode('parallel', execute)
+        self.assertNotIn(('prepare', 'Chapter 1'), calls)
+        self.assertIn(('translate', 'Chapter 1'), calls)
+
+    def test_parallel_failed_preprocessing_is_not_translated(self):
+        calls = []
+        def execute(command, root, env, stop, progress, **kw):
+            path, phase = Path(command[0]), kw['request']['phase']
+            calls.append((phase, path.name))
+            if phase == 'prepare':
+                if path == self.jobs[0].path:
+                    raise RuntimeError('preprocessing failed')
+                self.artifacts(path)
+            else:
+                (path / 'result').mkdir()
+                (path / 'result/[1].png').write_bytes(b'translated')
+        with patch('queue_worker.TranslationSession') as session:
+            session.side_effect = lambda *a: Mock()
+            events = self.run_mode('parallel', execute)
+        self.assertNotIn(('translate', 'Chapter 1'), calls)
+        self.assertIn(('translate', 'Chapter 2'), calls)
+        statuses = [e[2] for e in events if e[0] == 'phase_event' and e[2][0] == 'status']
+        self.assertEqual([e[2] for e in statuses if e[1] == 0][-1], 'failed')
+
     def test_two_pass_order_configs_models_and_usage(self):
         calls, sessions = [], {}
         def execute(command, root, env, stop, progress, **kw):

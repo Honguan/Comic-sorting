@@ -89,3 +89,5 @@ Core files: `Comic sorting.py` (main window), `comic_core.py` (file operations),
 ## License
 
 [MIT License](LICENSE) · Copyright (c) 2026 CHEN HONG GUAN. Third-party dependencies and external tools retain their own licenses.
+
+- **Preprocess and translate concurrently** runs two persistent processes. Translation consumes fully saved preprocessing results in queue order while preprocessing advances to the next chapter. Valid preparation is reused; failed preparation is not translated. Duplicate paths wait for the preceding translation to finish. Pause waits for both current chapters; stop cancels both workers. Saved preparation can be resumed after restart. Only the translation worker exports/cleans completed results. Keeping both processes alive requires more memory.

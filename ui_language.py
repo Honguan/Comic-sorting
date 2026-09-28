@@ -9,6 +9,11 @@ def tr(text):
     return TRANSLATIONS.get(text, {}).get(_language, text)
 
 TRANSLATIONS = {
+    '前處理與翻譯並行': {'en': 'Preprocess and translate concurrently', 'ja': '前処理と翻訳を並行実行'},
+    '開始並行': {'en': 'Run concurrently', 'ja': '並行開始'},
+    '前處理中': {'en': 'Preprocessing', 'ja': '前処理中'},
+    '翻譯中': {'en': 'Translating', 'ja': '翻訳中'},
+    '前處理：{0}｜翻譯：{1}': {'en': 'Preprocess: {0} | Translate: {1}', 'ja': '前処理：{0}｜翻訳：{1}'},
     "｜失敗 {0}｜本次重試 {1}": {"en": " | Failed {0} | Run retries {1}", "ja": "｜失敗 {0}｜今回の再試行 {1}"},
     '翻譯頁數：{0}': {'en': 'Translation pages: {0}', 'ja': '翻訳ページ数：{0}'},
     '等待執行頁數：{0}': {'en': 'Pending pages: {0}', 'ja': '待機中のページ数：{0}'},
