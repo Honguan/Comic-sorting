@@ -9,6 +9,27 @@ from queue_history import find_runs, history_totals, save_run, scope_records, us
 
 
 class HistoryStorageTests(unittest.TestCase):
+    def test_updated_checkpoint_search_uses_current_paths(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'history.sqlite3'
+            record = dict(id='same', started_at='2026-10-01', jobs=[dict(path='Old manga')])
+            save_run(path, record)
+            record['jobs'] = [dict(path='New manga')]
+            save_run(path, record)
+            self.assertEqual(find_runs(path, 'Old manga'), [])
+            self.assertEqual(find_runs(path, 'New manga'), [record])
+
+    def test_history_pages_keep_identical_timestamp_order_and_filters(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'history.sqlite3'
+            for i in range(7):
+                save_run(path, dict(id=str(i), started_at='2026-10-01', jobs=[dict(path='Manga')]))
+            seen = []
+            for offset in range(0, 7, 2):
+                seen.extend(r['id'] for r in find_runs(path, 'Manga', limit=2, offset=offset))
+            self.assertEqual(seen, [str(i) for i in reversed(range(7))])
+            self.assertEqual(find_runs(path, 'different', limit=2, offset=2), [])
+
     def test_token_units_match_in_text_and_columns(self):
         for tokens, expected in ((0, '0'), (999, '999'), (1000, '1.00K'),
                                  (22721625, '22.72M'), (1000000000, '1.00B')):

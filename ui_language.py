@@ -9,6 +9,9 @@ def tr(text):
     return TRANSLATIONS.get(text, {}).get(_language, text)
 
 TRANSLATIONS = {
+    '上一頁': {'en': 'Previous', 'ja': '前のページ'},
+    '下一頁': {'en': 'Next', 'ja': '次のページ'},
+    '第 {0} 頁｜顯示 {1} 筆（每頁 200 筆）；日期 YYYY-MM-DD，留白不限。展開批次與章節載入用量，選取後查看明細。': {'en': 'Page {0} | {1} records (200 per page). Dates: YYYY-MM-DD; blank means no limit. Expand batches and chapters for usage; select a row for details.', 'ja': '{0} ページ｜{1} 件（1 ページ 200 件）。日付は YYYY-MM-DD、空欄は制限なし。バッチと章を展開して使用量を、選択して詳細を表示します。'},
     'OCR 思考級別': {'en': 'OCR reasoning effort', 'ja': 'OCR 推論レベル'},
     '登入、登出與模型目錄刷新請使用 BallonsTranslator 原生設定介面。': {'en': 'Use BallonsTranslator settings to sign in, sign out, or refresh the model catalog.', 'ja': 'ログイン、ログアウト、モデル一覧の更新は BallonsTranslator の設定を使用してください。'},
     '前處理與翻譯並行': {'en': 'Preprocess and translate concurrently', 'ja': '前処理と翻訳を並行実行'},

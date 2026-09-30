@@ -17,6 +17,48 @@ def detail_values(window):
 
 
 class WorkflowTests(unittest.TestCase):
+    def test_status_batch_updates_controls_and_counts_once(self):
+        q = self.app.translation_queue
+        q.jobs = [Job(self.folder / f'Chapter {i}', 'translate') for i in range(3)]
+        q.active_jobs = tuple(q.jobs)
+        q.render()
+        for index in range(3):
+            q.events.put(('status', index, 'failed', 'synthetic failure'))
+            q.events.put(('retry',))
+        with mock.patch.object(q, 'update_controls', wraps=q.update_controls) as controls, \
+                mock.patch.object(q, 'update_summary', wraps=q.update_summary) as summary:
+            q.poll()
+        self.assertEqual(controls.call_count, 1)
+        self.assertEqual(summary.call_count, 1)
+        self.assertIn('失敗 3', q.summary.get())
+        self.assertIn('本次重試 3', q.summary.get())
+
+    def test_export_state_error_does_not_count_as_a_failed_chapter(self):
+        chapters = [self.folder / 'Chapter 1', self.folder / 'Chapter 2']
+        archives = [('created', self.folder / 'output' / f'{i}.cbz') for i in range(2)]
+        with mock.patch.object(comic, 'export_chapter', side_effect=archives), \
+                mock.patch.object(comic, 'save_json', side_effect=OSError('state write failed')), \
+                mock.patch.object(comic, 'clear_work_folders') as cleanup:
+            self.app.export_worker(chapters, str(self.folder / 'output'), True)
+        done = list(self.app.events.queue)[-1]
+        self.assertEqual(done[1], dict(created=2, updated=0, skipped=0, failed=0))
+        self.assertIn('state write failed', done[2][0])
+        self.assertIsNone(done[4])
+        cleanup.assert_not_called()
+
+    def test_statistics_render_once_after_event_batch(self):
+        q = self.app.translation_queue
+        usage = dict(scope='total', requests=1, total_tokens=10, cost=None,
+                     missing_usage_requests=0, unpriced_requests=1)
+        q.events.put(('usage', 0, usage))
+        q.events.put(('usage', 0, dict(usage, requests=2, total_tokens=20)))
+        q.events.put(('jev_stats', 0, dict(calls=1, elapsed_seconds=2)))
+        with mock.patch.object(q, 'show_usage', wraps=q.show_usage) as show:
+            q.poll()
+        show.assert_called_once()
+        self.assertIn('20 tokens', q.usage_labels['total'].get())
+        self.assertEqual(q.jev_elapsed_label.get(), '00:00:02')
+
     def test_settings_offer_native_interface_and_keep_jev_controls(self):
         from tkinter import ttk
         q = self.app.translation_queue
@@ -767,7 +809,7 @@ class WorkflowTests(unittest.TestCase):
     def test_live_usage_is_shown_in_separate_columns(self):
         q = self.app.translation_queue
         self.assertEqual(q.usage_table.set('total', 'tokens'), '尚未回報')
-        q.usage_records = {(0, 'total'): dict(total_tokens=12345, cost='0.125', requests=4, unpriced_requests=1, missing_usage_requests=1)}
+        q.usage_records[0, 'total'] = dict(total_tokens=12345, cost='0.125', requests=4, unpriced_requests=1, missing_usage_requests=1)
         q.show_usage()
         self.assertEqual(q.usage_table.item('total', 'values'), ('合計', '12.35K', 'US$0.13', '4', '僅含已知金額', '回報不完整'))
         q.show_usage()
@@ -1074,6 +1116,7 @@ class WorkflowTests(unittest.TestCase):
         q.open_history()
         history = q.history_window
         batch = history.tree.get_children()[0]
+        history.load_children(batch)
         folder = history.tree.get_children(batch)[0]
         self.assertIn('滿載', history.tree.set(folder, 'error_reason'))
         history.tree.selection_set(folder)
@@ -1095,6 +1138,7 @@ class WorkflowTests(unittest.TestCase):
         finally:
             restored_root.destroy()
         history.refresh()
+        history.load_children(history.tree.get_children()[0])
         folder = history.tree.get_children(history.tree.get_children()[0])[0]
         self.assertIn('滿載', history.tree.set(folder, 'error_reason'))
 
@@ -2207,6 +2251,7 @@ class WorkflowTests(unittest.TestCase):
         fields = dict(window.detail_tables['basic'].item(row, 'values')
                       for row in window.detail_tables['basic'].get_children())
         self.assertEqual(fields['完成數'], '2')
+        window.load_children('stopped')
         self.assertEqual(len(window.tree.get_children('stopped')), len(statuses))
         self.assertEqual(self.app.history_path.read_bytes(), original)
 
@@ -2241,6 +2286,7 @@ class WorkflowTests(unittest.TestCase):
         window = q.history_window
         self.root.update()
         batch = window.tree.get_children()[0]
+        window.load_children(batch)
         folders = window.tree.get_children(batch)
         self.assertEqual(len(folders), 2)
         self.assertFalse(window.tree.item(batch, 'open'))
@@ -2258,6 +2304,7 @@ class WorkflowTests(unittest.TestCase):
             self.assertTrue(window.tree.bbox(folder))
             self.assertEqual(tokens, window.tree.set(folder, 'tokens'))
             self.assertIn(cost, window.tree.set(folder, 'cost'))
+        window.load_children(folders[0])
         scopes = window.tree.get_children(folders[0])
         self.assertEqual([window.tree.item(item, 'text') for item in scopes], ['OCR', '翻譯', '合計'])
         self.assertFalse(window.tree.bbox(scopes[0]))
@@ -2272,8 +2319,9 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn(str(second), detail_values(window))
         self.assertIn('00:00:15', detail_values(window))
         window.refresh()
-        self.assertFalse(window.tree.item(batch, 'open'))
-        self.assertTrue(all(not window.tree.item(item, 'open') for item in window.tree.get_children(batch)))
+        self.assertTrue(window.tree.item(batch, 'open'))
+        self.assertTrue(window.tree.item(folders[0], 'open'))
+        self.assertEqual(window.tree.selection(), (scopes[0],))
         q.add_paths([self.chapter('Chapter 3')], 'translate')
         with mock.patch.object(q, 'validate', return_value=True), mock.patch('translation_queue.threading.Thread'):
             q.start()
@@ -2351,6 +2399,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn('US$2.61', detail_values(window))
         batch = window.tree.get_children()[0]
         self.assertFalse(window.tree.item(batch, 'open'))
+        window.load_children(batch)
         folder = window.tree.get_children(batch)[1]
         self.assertIn('US$2.61', window.tree.set(batch, 'cost'))
         self.assertIn('US$0.13', window.tree.set(folder, 'cost'))

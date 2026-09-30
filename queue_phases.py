@@ -2,7 +2,6 @@
 from copy import deepcopy
 from contextlib import ExitStack
 from datetime import datetime
-from decimal import Decimal
 import hashlib
 import json
 from pathlib import Path
@@ -10,6 +9,7 @@ import tempfile
 
 from comic_core import load_json, save_json
 from ui_language import tr
+from queue_stats import merge_snapshots
 
 MODES = {"normal": "原本流程", "prepare": "只跑前處理", "translate": "只翻譯已前處理", "two_pass": "先全部前處理再翻譯", "parallel": "前處理與翻譯並行"}
 READY = ("pending", "prepared", "skipped")
@@ -142,15 +142,7 @@ def run_phased_jobs(jobs, settings, output, skip, stop, emit, *, pause=None, che
                             scope = event[2].get("scope", "")
                             snapshots = records.setdefault((index, scope), {})
                             snapshots[phase] = event[2]
-                            combined = {}
-                            for values in snapshots.values():
-                                for key, value in values.items():
-                                    if key == "cost" and value is not None:
-                                        combined[key] = str(Decimal(combined.get(key) or "0") + Decimal(value))
-                                    elif value is not None and not isinstance(value, str):
-                                        combined[key] = (combined.get(key) or 0) + value
-                                    elif key not in combined:
-                                        combined[key] = value
+                            combined = merge_snapshots(snapshots.values())
                             event = (kind, index, combined)
                     emit(event)
 

@@ -19,6 +19,7 @@ from comic_core import (
     clear_work_folders, remove_aggregated_folders, delete_manga_folder, source_fingerprint,
     output_path_for, validate_cbz, create_cbz, load_json, save_json, export_chapter,
     aggregate_output, is_link_or_junction,
+    get_folders_with_numbers, scan_folder_data, aggregate_folders,
 )
 
 
@@ -86,6 +87,21 @@ class FileAggregatorApp:
             self.series_sort = "updated"
         self.series_sort_descending = settings.get("series_sort_descending", True) is True
 
+        self.build_library_panel()
+        self.build_work_tabs()
+
+        self.translation_queue = TranslationQueue(self, settings)
+        self.window_grip = ttk.Sizegrip(root)
+        self.window_grip.place(relx=1, rely=1, anchor="se")
+        self.root.protocol("WM_DELETE_WINDOW", self.close)
+        self.root.bind("<Configure>", self.remember_window_size, add="+")
+        if self.window_maximized and os.name == "nt":
+            self.root.state("zoomed")
+        if self.base_path.get() and Path(self.base_path.get()).is_dir():
+            self.load_folders()
+
+    def build_library_panel(self):
+        root = self.root
         language_row = ttk.Frame(root, padding=(10, 4))
         language_row.pack(fill="x")
         ttk.Label(language_row, text="介面語言 / Language / 表示言語").pack(side="left")
@@ -98,6 +114,7 @@ class FileAggregatorApp:
 
         self.panes = ttk.Panedwindow(root, orient="vertical")
         self.panes.pack(fill="both", expand=True, padx=10, pady=6)
+        self.panes.bind("<Map>", self.initialize_panes)
         manga = ttk.LabelFrame(self.panes, text=tr("漫畫整合"), padding=8)
         self.panes.add(manga, weight=1)
         path_row = ttk.Frame(manga)
@@ -191,6 +208,11 @@ class FileAggregatorApp:
             variable=self.keep_last_source, command=self.save_settings)
         self.keep_last_source_checkbox.pack(side="left", padx=(8, 0))
 
+    def initialize_panes(self, _event):
+        self.panes.unbind("<Map>")
+        self.panes.sashpos(0, int(self.panes.winfo_height() * .4))
+
+    def build_work_tabs(self):
         self.work_tabs = ttk.Notebook(self.panes)
         self.panes.add(self.work_tabs, weight=1)
         self.queue_tab = ttk.Frame(self.work_tabs)
@@ -232,16 +254,6 @@ class FileAggregatorApp:
         self.status_label = ttk.Label(export, textvariable=self.status_text)
         self.status_label.pack(anchor="w")
         self.progress.pack_forget()
-
-        self.translation_queue = TranslationQueue(self, settings)
-        self.window_grip = ttk.Sizegrip(root)
-        self.window_grip.place(relx=1, rely=1, anchor="se")
-        self.root.protocol("WM_DELETE_WINDOW", self.close)
-        self.root.bind("<Configure>", self.remember_window_size, add="+")
-        if self.window_maximized and os.name == "nt":
-            self.root.state("zoomed")
-        if self.base_path.get() and Path(self.base_path.get()).is_dir():
-            self.load_folders()
 
     def remember_window_size(self, event):
         if event.widget != self.root:
@@ -434,42 +446,7 @@ class FileAggregatorApp:
         self.apply_scan_data(base, data)
         self.translation_queue.render(refresh_counts=True)
 
-    @staticmethod
-    def scan_folder_data(base):
-        folders = FileAggregatorApp.get_folders_with_numbers(base)
-        series_groups = {}
-        chapter_updates = {}
-        chapter_sizes = {}
-        ready_chapters = set()
-        details = {}
-        page_counts = {}
-        for folder_path, folder_name, number in folders:
-            chapter = Path(folder_path)
-            sources = image_files(folder_path)
-            page_counts[chapter] = len(sources)
-            status, translated = translation_status(folder_path, source_images=sources)
-            if status == tr("可匯出"):
-                detail = tr("{0} 張翻譯圖片｜可匯出").format(len(translated))
-                images = translated
-                ready_chapters.add(chapter)
-            elif status == tr("結果為空"):
-                detail = tr("結果資料夾為空")
-                images = []
-            elif status == tr("部分翻譯"):
-                detail = tr("{0} 張翻譯圖片｜部分翻譯").format(len(translated))
-                images = translated
-            else:
-                images = sources
-                detail = tr("{0} 張圖片｜未翻譯").format(len(images))
-            chapter_updates[chapter] = updated_at(chapter, images)
-            chapter_sizes[chapter] = folder_size(chapter)
-            details[chapter] = detail
-            series_groups.setdefault(chapter.parent, []).append(
-                (str(chapter), folder_name, number))
-        for chapters in series_groups.values():
-            chapters.sort(key=lambda item: (item[2], natural_sort_key(item[1])))
-        return (folders, series_groups, chapter_updates, chapter_sizes,
-                ready_chapters, details, page_counts)
+    scan_folder_data = staticmethod(scan_folder_data)
 
     def sorted_series(self, base):
         def sort_key(series):
@@ -651,32 +628,7 @@ class FileAggregatorApp:
             self.translation_queue.add_paths([item[1]])
             return "break"
 
-    @staticmethod
-    def get_folders_with_numbers(base_path):
-        folders = []
-        base = Path(base_path)
-        if is_link_or_junction(base):
-            return folders
-
-        def fail(error):
-            raise error
-
-        for current, directory_names, file_names in os.walk(base, onerror=fail):
-            folder = Path(current)
-            has_result = any(name.casefold() == "result" for name in directory_names)
-            directory_names[:] = [name for name in directory_names
-                                  if name.casefold() not in {"result", "inpainted", "mask"}
-                                  and not (name.casefold().startswith(".chapter ")
-                                           and name.casefold().endswith((".tmp", ".backup")))
-                                  and not is_link_or_junction(folder / name)]
-            number = chapter_number(folder.name)
-            has_images = any(Path(name).suffix.casefold() in IMAGE_EXTENSIONS
-                             for name in file_names)
-            if folder != base and number is not None and (has_result or has_images):
-                folders.append((str(folder), folder.name, number))
-        return sorted(folders, key=lambda item: (
-            natural_sort_key(str(Path(item[0]).parent.relative_to(base))),
-            item[2], natural_sort_key(item[1])))
+    get_folders_with_numbers = staticmethod(get_folders_with_numbers)
 
     def selected_tree_item(self):
         selection = self.folder_tree.selection()
@@ -799,49 +751,7 @@ class FileAggregatorApp:
                 args=(chapters, start_idx, end_idx, remove_sources, keep_last), daemon=True).start()
             self.root.after(50, self.poll_aggregate_events)
 
-    def aggregate_folders(self, chapters, start_idx, end_idx, progress=None):
-        selected = chapters[start_idx:end_idx + 1]
-        output = aggregate_output(selected)
-        if len(selected) == 1 and Path(selected[0][0]).resolve() == output:
-            return output
-        sources = []
-        for folder_path, _, _ in selected:
-            images = image_files(folder_path)
-            if not images:
-                raise ValueError(tr("來源沒有可整合的圖片：{0}").format(folder_path))
-            sources.extend(images)
-        temporary = output.with_name(f".{output.name}.tmp")
-        backup = output.with_name(f".{output.name}.backup")
-        if temporary.exists():
-            shutil.rmtree(temporary)
-        if backup.exists():
-            if output.exists():
-                shutil.rmtree(backup)
-            else:
-                os.replace(backup, output)
-        if output.exists() and not output.is_dir():
-            raise ValueError(tr("輸出路徑不是資料夾：{0}").format(output))
-        temporary.mkdir()
-        try:
-            for index, source in enumerate(sources, 1):
-                shutil.copy2(source, temporary / f"{index}{source.suffix}")
-                if progress:
-                    progress(index, len(sources))
-            if output.exists():
-                os.replace(output, backup)
-            os.replace(temporary, output)
-        except Exception:
-            if temporary.exists():
-                shutil.rmtree(temporary)
-            if backup.exists() and not output.exists():
-                os.replace(backup, output)
-            raise
-        if backup.exists():
-            try:
-                shutil.rmtree(backup)
-            except OSError:
-                pass
-        return output
+    aggregate_folders = staticmethod(aggregate_folders)
 
     def aggregate_worker(self, chapters, start_idx, end_idx, remove_sources=False, keep_last=True):
         try:
@@ -998,7 +908,6 @@ class FileAggregatorApp:
         except Exception as error:
             logger.exception("export_state_save_failed path=%s", state_file)
             state_saved = False
-            counts["failed"] += 1
             errors.append(tr("狀態檔: {0}").format(error))
         cleanup = None
         if state_saved and exported_chapters:
@@ -1136,6 +1045,7 @@ if __name__ == "__main__":
         configure_logging()
         logger.info("application_start executable=%s", sys.executable)
         root = tk.Tk()
+        root.geometry(f"{min(1120, root.winfo_screenwidth())}x{min(780, root.winfo_screenheight())}")
         FileAggregatorApp(root)
         if instance is not None:
             instance.register_window(root)

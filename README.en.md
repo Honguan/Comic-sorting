@@ -43,9 +43,19 @@ The EXE includes this tool's dependencies; no separate Python or archive utility
 ### Translation, export, and records
 
 - Main queue → Scheduled start supports multiple one-shot schedules. Countdown accepts hours/minutes with shortcuts; Date and time has separate date/hour/minute fields and Today/Tomorrow buttons. Preview the local start time and confirm scope, chapters, and order when adding. Only unchanged, still-pending selected jobs run; busy or paused queues wait until idle. Changes to translation/cleanup/output settings require rescheduling. Keep the app open: closing cancels schedules; schedules do not wake or boot the computer.
-- The **▼ menu beside the Start button** at the bottom of the main queue offers Standard, Preprocess only, Translate preprocessed chapters, and Preprocess all then translate. Preprocessing runs detection, OCR, and inpainting without rendering results, exporting, or cleaning up. Models stay loaded across chapters within each pass; the process closes between passes to release models. Selecting a mode does not start work; click the main button (Start / Preprocess / Translate / Run two passes). Selection scope is unchanged.
+The **▼ menu beside Start** offers five workflows. Choose a mode, then click Start; selection scope is unchanged.
+
+| Workflow | Processing |
+| --- | --- |
+| Standard | Completes each chapter using the configured native pipeline. |
+| Preprocess only | Saves detection, OCR, and inpainting checkpoints without rendering, exporting, or cleanup. |
+| Translate preprocessed chapters | Validates sources and artifacts before translation; missing or changed preparation is skipped. |
+| Preprocess all then translate | Completes preparation, closes the process to release models, then translates. |
+| Preprocess and translate concurrently | Two persistent workers overlap preparation of the next chapter with translation of a saved chapter. |
+
 - Run the passes separately, including after restarting. Each chapter stores `.comic-sorting-prepared.json`; translation-only validates source images, OCR, and artifacts and skips missing or changed preprocessing. Existing data without this completion record must be preprocessed first. Completed queue jobs are not rerun automatically; requeue failed/stopped jobs. Cloud OCR or inpainting still uses the configured service during preprocessing.
 - Multi-chapter translation reuses one BallonsTranslator process. Each chapter finishes result checks, export, cleanup, and saving before the next is submitted. Pausing retains models and GPU memory; stopping or finishing the batch closes the process. After a translation failure, the next chapter gets a new process. BallonsTranslator source files are unchanged; its per-request Codex connection behavior is unchanged.
+- **Preprocess and translate concurrently** runs two persistent processes. Translation consumes fully saved preprocessing results in queue order while preprocessing advances to the next chapter. Valid preparation is reused; failed preparation is not translated. Duplicate paths wait for the preceding translation to finish. Pause waits for both current chapters; stop cancels both workers. Saved preparation can be resumed after restart. Only the translation worker exports/cleans completed results. Keeping both processes alive requires more memory.
 - Use Open native settings for modules, models, concurrency, prompts, fonts, and sign-in. Save and close BallonsTranslator before starting the queue. This tool no longer edits its configuration file.
 - Jev statistics remain supported when the installed version reports them. Without Jev or reported data, fields stay empty or show “—” without affecting processing or inferring usage. Configure Jev and its keys in that version's native interface.
 - Jev statistics update after each Jev cleanup call: processed/changed calls, cleared/trimmed/kept blocks, removed characters, and reported elapsed time. New Jev input tokens (K/M/B), request counts, and requests missing input usage are tracked separately, along with translator-reported cost, its reported/estimated source, and unpriced requests; these stay outside LLM totals. Legacy Jev usage records remain available. Jev time is already part of translation rescue (OCR in older versions) and is not added to batch elapsed time again. Missing historical data shows “—” without inferred backfilling.
@@ -54,6 +64,8 @@ The EXE includes this tool's dependencies; no separate Python or archive utility
 - Page ranges require BallonsTranslator support for native page selection. Completing a range does not mean the whole chapter is complete; incomplete chapter results skip automatic export and cleanup. Range jobs require a separate export opt-in.
 - CBZ files use `result` images and are saved as `<Komga folder>/<series>/<chapter>.cbz`. Export checks completeness and can skip unchanged content incrementally.
 - Stage displays include progress, remaining time, and average seconds per page. Usage and history use structured fields with K/M/B token counts. Costs are estimates of reported usage, **not actual bills**; missing and incomplete data are marked.
+- History displays 200 batches per page; use Previous/Next for other records. Expand batches and chapters to load their children. Refresh preserves expanded rows and selection on the current page; changing filters returns to the first page. Grand totals still include all history and reported usage from failed/stopped jobs.
+- Completed counts include successful jobs and completed jobs with warnings; pending, failed, stopped, and prepared-only jobs are excluded. A known cost subtotal stays marked as partial whenever any contributing record lacks a cost. Chapter and stage timings can overlap and are not added to batch wall time again.
 - Enable Windows and ntfy separately in Notifications. Notification failures do not stop jobs. Server acceptance does not guarantee delivery to your phone.
 
 ## Data and precautions
@@ -85,10 +97,10 @@ py -3.10 -m PyInstaller --clean --noconfirm "Comic sorting.spec"
 
 Output: `dist/Comic sorting.exe`. GitHub Actions tests and builds `main` and pull requests; `v*` tags trigger releases.
 
-Core files: `Comic sorting.py` (main window), `comic_core.py` (file operations), `queue_worker.py` (job execution), `translation_queue.py` (queue UI), and `queue_history.py` (history).
+Core files: `Comic sorting.py` (main window and events), `comic_core.py` (scanning, merging, and file operations), `queue_worker.py` (execution), `translation_queue.py` (queue UI), `queue_stats.py` (snapshot merging and incremental totals), and `queue_history.py` (history queries and pagination). All five workflows use the existing executor; settings and history formats remain unchanged.
+
+Run local measurements with `py -3.10 -X utf8 benchmarks/benchmark_refactor.py`. It uses synthetic data and does not translate. The [refactoring and validation report](docs/refactor-2026-10-01.md) records feature coverage, measurements, and limitations in Traditional Chinese.
 
 ## License
 
 [MIT License](LICENSE) · Copyright (c) 2026 CHEN HONG GUAN. Third-party dependencies and external tools retain their own licenses.
-
-- **Preprocess and translate concurrently** runs two persistent processes. Translation consumes fully saved preprocessing results in queue order while preprocessing advances to the next chapter. Valid preparation is reused; failed preparation is not translated. Duplicate paths wait for the preceding translation to finish. Pause waits for both current chapters; stop cancels both workers. Saved preparation can be resumed after restart. Only the translation worker exports/cleans completed results. Keeping both processes alive requires more memory.

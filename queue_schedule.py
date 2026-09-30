@@ -77,8 +77,9 @@ class QueueSchedule:
                 if entry['options'] != self.options():
                     entry['status'] = '設定已變更，請重新排程'
                     continue
+                current_jobs = {id(job) for job in q.jobs}
                 jobs = tuple(job for job, signature in entry['jobs']
-                             if any(job is current for current in q.jobs) and job.status in READY
+                             if id(job) in current_jobs and job.status in READY
                              and self.signature(job) == signature)
                 if jobs:
                     entry['status'] = '啟動失敗'

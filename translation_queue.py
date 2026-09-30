@@ -15,6 +15,7 @@ from ui_interactions import bind_table_shortcuts, copy_manga_names
 from queue_worker import BT_STAGES, Job, run_jobs, translator_command
 from app_logging import logger, log_path
 from ui_language import tr
+from queue_stats import SnapshotTotals
 from comic_core import FOLDER_KINDS, folder_kind, image_files, image_count
 from queue_history import HistoryWindow, elapsed_text, save_run, usage_text, usage_columns, JEV_FIELDS, jev_totals, jev_columns
 from queue_errors import error_details, error_info
@@ -67,8 +68,14 @@ class TranslationQueue:
         self.export = tk.BooleanVar(value=settings.get("bt_export", False))
         self.cleanup = tk.BooleanVar(value=settings.get("bt_cleanup", False))
         self.open_after_completion = tk.BooleanVar(value=settings.get("bt_open_after_completion") is True)
-        box = ttk.Frame(app.queue_tab, padding=8)
-        box.pack(fill="both", expand=True)
+        self.build_settings_panel(settings)
+        self.build_queue_panel()
+        self.restore_jobs(settings.get("bt_jobs", []))
+        self.render()
+        self.update_controls()
+
+    def build_settings_panel(self, settings):
+        app = self.app
         config_box = ttk.LabelFrame(app.settings_tab, text="BallonsTranslator", padding=8)
         config_box.pack(fill="x", padx=8, pady=8)
         for title, variable, directory in ((tr("安裝路徑"), self.installation, True),
@@ -88,6 +95,11 @@ class TranslationQueue:
         self.button(settings_actions, tr("開啟紀錄資料夾"), self.open_logs)
         self.notifications = NtfyNotifications(app, settings)
         self.scheduler = QueueSchedule(self)
+
+    def build_queue_panel(self):
+        app = self.app
+        box = ttk.Frame(app.queue_tab, padding=8)
+        box.pack(fill="both", expand=True)
         row = ttk.Frame(box)
         row.pack(fill="x", pady=(0, 4))
         self.action_choice = ttk.Combobox(row, textvariable=self.action,
@@ -195,7 +207,7 @@ class TranslationQueue:
         self.stop_button.pack(side="left", padx=2)
         self.schedule_button = ttk.Button(row, text=tr("排程啟動"), command=self.scheduler.show, width=0)
         self.schedule_button.pack(side="left", padx=2)
-        # Reserve execution controls before less urgent actions in narrow windows.
+        # Execution remains accessible when the window is narrow.
         for button in (self.stop_button, self.pause_button, self.workflow_choice, self.start_button, self.schedule_button):
             button.pack_configure(side="right", before=self.selection_buttons["移除選取"])
         self.context_menu.add_command(label=tr("清除已完成"), command=self.clear_completed)
@@ -223,8 +235,8 @@ class TranslationQueue:
             self.time_labels[name] = tk.StringVar(value=tr("累計耗時：{0}").format('—'))
             ttk.Label(progress_grid, textvariable=self.time_labels[name]).grid(row=row, column=3, sticky="w", padx=(8, 0))
         self.reset_bt_progress()
-        self.usage_records = {}
-        self.jev_records = {}
+        self.usage_records = SnapshotTotals(lambda key: key[1])
+        self.jev_records = SnapshotTotals()
         self.jev_window = None
         self.usage_labels = {}
         self.usage_frame, usage_grid, self.usage_toggle = self.collapsible_frame(
@@ -253,7 +265,8 @@ class TranslationQueue:
         for scope in ('OCR', 'Jev', 'translation', 'total'):
             self.usage_labels[scope] = tk.StringVar()
         self.show_usage()
-        records = settings.get("bt_jobs", [])
+
+    def restore_jobs(self, records):
         for record in records if isinstance(records, list) else []:
             if (not isinstance(record, dict) or record.get("action") not in ACTIONS
                     or not isinstance(record.get("path"), str) or not record["path"].strip()):
@@ -266,8 +279,6 @@ class TranslationQueue:
                 status = "pending"
             self.jobs.append(Job(Path(record["path"]).resolve(), record["action"], status, error,
                                  record.get("start_page", 1), record.get("end_page"), record.get("range_export") is True))
-        self.render()
-        self.update_controls()
 
     def toggle_queue_size(self):
         panes = self.app.panes
@@ -356,14 +367,15 @@ class TranslationQueue:
         self.jev_window.lift()
 
     def show_usage(self):
-        stats = jev_totals([{'jev_stats': value} for value in self.jev_records.values()])
+        stats = self.jev_records.aggregate()
         self.jev_elapsed_label.set(elapsed_text(stats.get('elapsed_seconds')))
         if self.jev_window is not None and self.jev_window.winfo_exists():
             self.jev_table.delete(*self.jev_table.get_children())
             for label, value in zip(JEV_FIELDS.values(), jev_columns(stats)):
                 self.jev_table.insert('', 'end', values=(tr(label), value))
         for scope, label in self.usage_labels.items():
-            records = [value for (_, kind), value in self.usage_records.items() if kind == scope]
+            summary = self.usage_records.aggregate(scope)
+            records = [summary] if summary else []
             label.set(usage_text(records))
             if scope == 'Jev' and not records:
                 if self.usage_table.exists(scope):
@@ -468,7 +480,8 @@ class TranslationQueue:
                  tr('完成時間：{0}').format(record.get('finished_at') or '—'),
                  tr('總耗時：{0}').format(elapsed_text(record.get('elapsed_seconds')))]
         for scope, title in (('OCR', 'OCR'), ('Jev', 'Jev'), ('translation', '翻譯'), ('total', '合計')):
-            lines.append(f'{tr(title)}: {usage_text([value for (_, kind), value in self.usage_records.items() if kind == scope])}')
+            summary = self.usage_records.aggregate(scope)
+            lines.append(f'{tr(title)}: {usage_text([summary] if summary else [])}')
         lines.append(tr('預估金額非實際帳單；僅含已回報用量。'))
         if self.history_save_failed:
             lines.append(tr('歷史紀錄儲存失敗'))
@@ -1206,6 +1219,9 @@ class TranslationQueue:
             now = time.monotonic() if self.paused_at is None else self.paused_at
             self.elapsed_label.set(elapsed_text(now - self.started_at))
         changed = False
+        statistics_changed = False
+        controls_changed = False
+        summary_changed = False
         for _ in range(100):
             try:
                 event = self.events.get_nowait()
@@ -1244,8 +1260,7 @@ class TranslationQueue:
                     logger.warning("queue_status path=%s error_code=%s reason=%s", job.path, code, reason)
                 if visible:
                     self.tree.set(str(id(job)), "error_reason", reason)
-                self.update_summary()
-                self.update_controls()
+                summary_changed = controls_changed = True
                 if job.status == "running":
                     if visible:
                         self.tree.see(str(id(job)))
@@ -1269,13 +1284,13 @@ class TranslationQueue:
                 if self.history_run is not None:
                     self.history_run['elapsed_seconds'] = elapsed
                     self.save_history()
-                self.update_controls()
+                controls_changed = True
             elif event[0] == "resumed":
                 self.started_at += event[1]
                 self.paused_at = None
                 if not self.stop.is_set():
                     self.label.set(tr("佇列繼續處理"))
-                self.update_controls()
+                controls_changed = True
             elif event[0] == "stage_time":
                 _, index, name, seconds = event
                 self.stage_times[index, name] = max(seconds, self.stage_times.get((index, name), 0))
@@ -1285,13 +1300,13 @@ class TranslationQueue:
                 self.show_bt_progress(name)
             elif event[0] == "usage":
                 self.usage_records[event[1], event[2]['scope']] = event[2]
-                self.show_usage()
+                statistics_changed = True
             elif event[0] == "retry":
                 self.retry_count += 1
-                self.update_summary()
+                summary_changed = True
             elif event[0] == "jev_stats":
                 self.jev_records[event[1]] = event[2]
-                self.show_usage()
+                statistics_changed = True
             elif event[0] == "job_time" and self.history_run is not None:
                 self.history_run['jobs'][event[1]].update(started_at=event[2], finished_at=event[3], elapsed_seconds=event[4])
                 self.notify_job(event[1])
@@ -1333,6 +1348,10 @@ class TranslationQueue:
                     logger.exception("translation_result_open_failed path=%s", path)
                     messagebox.showwarning(tr("無法開啟結果位置"), f"{path}\n\n{error}")
             elif event[0] == "done":
+                if statistics_changed:
+                    self.show_usage()
+                if summary_changed:
+                    self.update_summary()
                 if self.history_run is not None:
                     self.history_run['status'] = ('cancelled' if self.stop.is_set() else 'done'
                                                   if all(job.status in ('done', 'prepared', 'skipped') for job in self.active_jobs) else 'done_warning')
@@ -1347,6 +1366,12 @@ class TranslationQueue:
                 if self.app.base_path.get():
                     self.app.load_folders()
                 return
+        if statistics_changed:
+            self.show_usage()
+        if summary_changed:
+            self.update_summary()
+        if controls_changed:
+            self.update_controls()
         if changed and not self.app.save_settings():
             self.stop.set()
         self.app.root.after(50, self.poll)

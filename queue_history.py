@@ -62,7 +62,7 @@ def usage_text(records, *, empty_text=None):
     cost = (tr("預估 {0}").format(f"US${sum(costs).quantize(Decimal('0.01'), rounding=ROUND_CEILING):,.2f}")
             if costs else tr("無法預估"))
     text = tr("{0} tokens｜{1}｜{2} 次請求").format(token_text, cost, sum(value['requests'] for value in records))
-    if costs and any(value['cost'] is None or value['unpriced_requests'] for value in records):
+    if costs and any(value['cost'] is None or value['unpriced_requests'] or value.get('cost_incomplete') for value in records):
         text += tr("（僅含已知金額）")
     if any(value['missing_usage_requests'] for value in records):
         text += tr("（Token 回報不完整）")
@@ -75,16 +75,15 @@ def save_run(path, record):
     with closing(sqlite3.connect(path, timeout=1)) as db, db:
         db.execute("CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, started_at TEXT NOT NULL, paths TEXT NOT NULL, data TEXT NOT NULL)")
         db.execute("CREATE INDEX IF NOT EXISTS runs_started_at ON runs(started_at)")
-        db.execute("INSERT INTO runs VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET started_at=excluded.started_at, data=excluded.data",
+        db.execute("INSERT INTO runs VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET started_at=excluded.started_at, paths=excluded.paths, data=excluded.data",
                    (record['id'], record['started_at'], paths, payload))
 
 
-def find_runs(path, keyword='', start='', end=''):
-    # ponytail: show 200 matches at once; add pagination if browsing longer ranges is needed.
-    return list(iter_runs(path, keyword, start, end, limit=200))
+def find_runs(path, keyword='', start='', end='', *, limit=200, offset=0):
+    return list(iter_runs(path, keyword, start, end, limit=limit, offset=offset))
 
 
-def iter_runs(path, keyword='', start='', end='', *, limit=-1):
+def iter_runs(path, keyword='', start='', end='', *, limit=-1, offset=0):
     try:
         if start:
             date.fromisoformat(start)
@@ -108,7 +107,7 @@ def iter_runs(path, keyword='', start='', end='', *, limit=-1):
         values.append(end)
     where = " WHERE " + " AND ".join(clauses) if clauses else ""
     with closing(sqlite3.connect(Path(path).resolve().as_uri() + '?mode=ro', uri=True, timeout=1)) as db:
-        rows = db.execute("SELECT data FROM runs" + where + " ORDER BY started_at DESC, rowid DESC LIMIT ?", [*values, limit])
+        rows = db.execute("SELECT data FROM runs" + where + " ORDER BY started_at DESC, rowid DESC LIMIT ? OFFSET ?", [*values, limit, offset])
         for row in rows:
             record = json.loads(row[0])
             for job in record['jobs']:
@@ -152,7 +151,7 @@ def usage_columns(records):
     cost = f"US${sum(costs).quantize(Decimal('0.01'), rounding=ROUND_CEILING):,.2f}" if costs else tr("無法預估")
     tokens = format_tokens(sum(value['total_tokens'] for value in records)) if records else tr("尚未回報")
     requests = f"{sum(value['requests'] for value in records):,}" if records else '—'
-    partial = any(value['cost'] is None or value['unpriced_requests'] for value in records)
+    partial = any(value['cost'] is None or value['unpriced_requests'] or value.get('cost_incomplete') for value in records)
     pricing = tr("僅含已知金額") if costs and partial else tr("完整") if costs else tr("尚未回報")
     reporting = tr("回報不完整") if any(value['missing_usage_requests'] for value in records) else tr("完整") if records else tr("尚未回報")
     return tokens, cost, requests, pricing, reporting
@@ -166,6 +165,9 @@ class HistoryWindow(tk.Toplevel):
         self.minsize(820, 480)
         self.path, self.actions, self.statuses = path, actions, statuses
         self.records = {}
+        self.pending_children = set()
+        self.offset = 0
+        self.query = None
         self.keyword, self.start, self.end = tk.StringVar(), tk.StringVar(), tk.StringVar()
         filters = ttk.Frame(self, padding=8)
         filters.pack(fill='x')
@@ -181,6 +183,10 @@ class HistoryWindow(tk.Toplevel):
             entry.pack(side='left', padx=(4, 8))
             entry.bind('<Return>', lambda _event: self.refresh())
         ttk.Button(filters, text=tr("查詢／重新整理"), command=self.refresh).pack(side='left')
+        self.previous = ttk.Button(filters, text=tr('上一頁'), command=lambda: self.change_page(-1))
+        self.previous.pack(side='left', padx=(8, 2))
+        self.next = ttk.Button(filters, text=tr('下一頁'), command=lambda: self.change_page(1))
+        self.next.pack(side='left')
         self.note = tk.StringVar()
         ttk.Label(self, textvariable=self.note, padding=(8, 0), wraplength=780).pack(anchor='w')
         totals = ttk.LabelFrame(self, text=tr("全部總累計（所有歷史）"), padding=8)
@@ -252,6 +258,7 @@ class HistoryWindow(tk.Toplevel):
             frame.columnconfigure(0, weight=1)
             self.detail_tables[key] = table
         self.tree.bind('<<TreeviewSelect>>', lambda _event: self.show_details())
+        self.tree.bind('<<TreeviewOpen>>', lambda _event: self.load_children(self.tree.focus()))
         self.refresh()
 
     def fit_columns(self, event=None):
@@ -280,20 +287,30 @@ class HistoryWindow(tk.Toplevel):
         self.tree.xview_moveto(0)
 
     def refresh(self):
+        query = (self.keyword.get().strip(), self.start.get().strip(), self.end.get().strip())
+        offset = self.offset if query == self.query else 0
         try:
-            rows = find_runs(self.path, self.keyword.get().strip(), self.start.get().strip(), self.end.get().strip())
+            rows = find_runs(self.path, *query, limit=201, offset=offset)
             totals = history_totals(self.path)
         except (OSError, sqlite3.Error, ValueError) as error:
             messagebox.showerror(tr("歷史紀錄讀取失敗"), str(error), parent=self)
-            return
+            return False
+        self.query = query
+        self.offset = offset
+        self.previous.configure(state='normal' if self.offset else 'disabled')
+        self.next.configure(state='normal' if len(rows) > 200 else 'disabled')
+        rows = rows[:200]
         for key in ('runs', 'jobs'):
             self.total_counts[key].set(f"{totals[key]:,}")
         self.total_counts['elapsed'].set(elapsed_text(totals['elapsed_seconds']))
         self.fill_usage(self.totals, totals['usage_records'])
         self.jev_totals_table.delete(*self.jev_totals_table.get_children())
         self.jev_totals_table.insert('', 'end', values=jev_columns(totals['jev_stats']))
+        selected = self.tree.selection()
+        expanded = {item for item in self.records if self.tree.exists(item) and self.tree.item(item, 'open')}
         self.tree.delete(*self.tree.get_children())
         self.records = {}
+        self.pending_children.clear()
         for record in rows:
             self.tree.insert('', 'end', iid=record['id'], open=False,
                              text=record['started_at'][:19].replace('T', ' '), values=(
@@ -302,30 +319,62 @@ class HistoryWindow(tk.Toplevel):
                 completed_jobs(record), elapsed_text(record.get('elapsed_seconds')),
                 *usage_columns(scope_records(record, 'total')), ''))
             self.records[record['id']] = record, None
+            if record['jobs']:
+                self.pending_children.add(record['id'])
+                self.tree.insert(record['id'], 'end')
+            if record['id'] in expanded:
+                self.load_children(record['id'])
+                self.tree.item(record['id'], open=True)
+                for item in self.tree.get_children(record['id']):
+                    if item in expanded:
+                        self.load_children(item)
+                        self.tree.item(item, open=True)
+        self.note.set(tr("第 {0} 頁｜顯示 {1} 筆（每頁 200 筆）；日期 YYYY-MM-DD，留白不限。展開批次與章節載入用量，選取後查看明細。").format(self.offset // 200 + 1, len(rows)))
+        restored = [item for item in selected if self.tree.exists(item)]
+        if restored:
+            self.tree.selection_set(restored)
+        elif rows:
+            self.tree.selection_set(rows[0]['id'])
+        self.show_details()
+        self.fit_columns()
+        return True
+
+    def change_page(self, direction):
+        previous = self.offset
+        self.offset = max(0, self.offset + direction * 200)
+        if not self.refresh():
+            self.offset = previous
+
+    def load_children(self, item):
+        if item not in self.pending_children:
+            return
+        self.pending_children.remove(item)
+        self.tree.delete(*self.tree.get_children(item))
+        record, job = self.records[item]
+        if job is None:
             for index, job in enumerate(record['jobs'], 1):
                 usage = job.get('usage', {})
-                item = self.tree.insert(record['id'], 'end', open=False, text=f"{index}. {job['path']}", values=(
+                child = self.tree.insert(item, 'end', iid=f'job:{record["id"]}:{index}', open=False, text=f"{index}. {job['path']}", values=(
                     (job.get('finished_at') or '—')[:19].replace('T', ' '),
                     tr(self.statuses[job['status']]), '', elapsed_text(job.get('elapsed_seconds')),
                     *usage_columns([usage['total']] if 'total' in usage else []),
                     error_info(job['status'], job.get('error', ''))[1]))
-                self.records[item] = record, job
-                for scope, title, stage in (('OCR', 'OCR', 'OCR'), ('Jev', 'Jev', 'Jev'), ('translation', tr("翻譯"), 'Translation'),
-                                            ('total', tr("合計"), None)):
-                    if scope == 'Jev' and scope not in usage:
-                        continue
-                    seconds = job.get('elapsed_seconds') if stage is None else job.get('stage_seconds', {}).get(stage)
-                    if stage == 'Jev':
-                        seconds = job.get('jev_stats', {}).get('elapsed_seconds')
-                    child = self.tree.insert(item, 'end', text=title, values=(
-                        '', '', '', elapsed_text(seconds),
-                        *usage_columns([usage[scope]] if scope in usage else []), ''))
-                    self.records[child] = record, job
-        self.note.set(tr("顯示 {0} 筆（最多 200 筆）；日期格式 YYYY-MM-DD，留白不限。展開佇列及資料夾查看用量，選取後查看詳細資料。").format(len(rows)))
-        if rows:
-            self.tree.selection_set(rows[0]['id'])
-        self.show_details()
-        self.fit_columns()
+                self.records[child] = record, job
+                self.pending_children.add(child)
+                self.tree.insert(child, 'end')
+        else:
+            usage = job.get('usage', {})
+            for scope, title, stage in (('OCR', 'OCR', 'OCR'), ('Jev', 'Jev', 'Jev'), ('translation', tr("翻譯"), 'Translation'),
+                                        ('total', tr("合計"), None)):
+                if scope == 'Jev' and scope not in usage:
+                    continue
+                seconds = job.get('elapsed_seconds') if stage is None else job.get('stage_seconds', {}).get(stage)
+                if stage == 'Jev':
+                    seconds = job.get('jev_stats', {}).get('elapsed_seconds')
+                child = self.tree.insert(item, 'end', iid=f'{item}:scope:{scope}', text=title, values=(
+                    '', '', '', elapsed_text(seconds),
+                    *usage_columns([usage[scope]] if scope in usage else []), ''))
+                self.records[child] = record, job
 
     def fill_usage(self, table, usage):
         table.delete(*table.get_children())
@@ -338,7 +387,7 @@ class HistoryWindow(tk.Toplevel):
         for table in self.detail_tables.values():
             table.delete(*table.get_children())
         selected = self.tree.selection()
-        if not selected:
+        if not selected or selected[0] not in self.records:
             return
         record, job = self.records[selected[0]]
         source = job if job is not None else record

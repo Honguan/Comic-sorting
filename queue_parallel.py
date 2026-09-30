@@ -1,10 +1,10 @@
 """Two persistent phase workers, joined through durable chapter checkpoints."""
 from datetime import datetime
-from decimal import Decimal
 import threading
 import time
 
 from queue_phases import run_phased_jobs
+from queue_stats import merge_snapshots
 
 
 def run_parallel_jobs(jobs, settings, output, skip, stop, emit, *, pause=None,
@@ -98,15 +98,7 @@ def run_parallel_jobs(jobs, settings, output, skip, stop, emit, *, pause=None,
                     key = (kind, event[1], event[2].get('scope', ''))
                     values = snapshots.setdefault(key, {})
                     values[phase] = event[2]
-                    combined = {}
-                    for snapshot in values.values():
-                        for name, value in snapshot.items():
-                            if name == 'cost' and value is not None:
-                                combined[name] = str(Decimal(combined.get(name) or '0') + Decimal(value))
-                            elif value is not None and not isinstance(value, str):
-                                combined[name] = (combined.get(name) or 0) + value
-                            elif name not in combined:
-                                combined[name] = value
+                    combined = merge_snapshots(values.values())
                     event = (kind, event[1], combined)
                 emit(('phase_event', phase, event))
 
