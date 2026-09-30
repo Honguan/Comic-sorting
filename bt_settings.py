@@ -155,12 +155,20 @@ class ConfigDocument:
             return [p["id"] for p in self.data["module"]["llm_profiles"] if isinstance(p, dict) and p.get(support)]
         if len(path) == 4 and path[:2] == ("module", "llm_profiles") and parent.get("backend") == "codex":
             catalog = self.data['module'].get('codex_models', {})
-            if catalog and key in ('model', 'vision_model'):
-                modality = 'image' if key == 'vision_model' else 'text'
-                return [model for model, info in catalog.items() if modality in info.get('modalities', [])]
-            if key == 'thinking_level' and parent.get('model') in catalog:
-                return ['Auto'] + ['Disabled' if effort == 'none' else effort
-                                   for effort in catalog[parent['model']].get('efforts', [])]
+            if key in ('model', 'vision_model'):
+                if catalog:
+                    modality = 'image' if key == 'vision_model' else 'text'
+                    return [model for model, info in catalog.items() if modality in info.get('modalities', [])]
+                if 'codex_model_options' in self.metadata:
+                    return list(dict.fromkeys(self.metadata['codex_model_options']
+                                              + parent.get(key + '_options', [])
+                                              + ([parent[key]] if parent.get(key) else [])))
+            if key == 'thinking_level':
+                if catalog:
+                    return ['Auto'] + ['Disabled' if effort == 'none' else effort
+                                       for effort in catalog.get(parent.get('model'), {}).get('efforts', [])]
+                if 'codex_thinking_choices' in self.metadata:
+                    return self.metadata['codex_thinking_choices'].get(parent.get('model'), ['Auto'])
         if len(path) == 4 and path[:2] == ("module", "llm_profiles") and key in ("thinking_level", "vision_thinking_level") and parent.get("transport") == "Codex App Server":
             model = parent.get("vision_model" if key == "vision_thinking_level" else "model")
             efforts = self.metadata.get("codex_reasoning_efforts", {}).get(model)

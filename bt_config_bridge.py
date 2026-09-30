@@ -145,7 +145,15 @@ def metadata():
                           ("linear_gradient", text_effects.LinearGradientPaint),
                           ("texture", text_effects.TexturePaint))
     }
-    return {"defaults": defaults, "schema": schema, "templates": templates,
+    # The native Codex serializer omits selectable options from saved profiles.
+    codex_choices = {}
+    if "backend" in profile:
+        codex_choices["codex_model_options"] = list(llm_profiles.CODEX_MODEL_OPTIONS)
+        codex_choices["codex_thinking_choices"] = {
+            model: llm_profiles.codex_thinking_options(llm_profiles.LLMProfile(model=model), {})
+            for model in dict.fromkeys(list(llm_profiles.CODEX_MODEL_OPTIONS)
+                                       + list(llm_profiles.CODEX_MODEL_REASONING_EFFORTS))}
+    return {"defaults": defaults, "schema": schema, "templates": templates, **codex_choices,
             "translator_languages": translator_languages,
             "codex_reasoning_efforts": llm_profiles.CODEX_MODEL_REASONING_EFFORTS}
 

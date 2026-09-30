@@ -255,6 +255,47 @@ class ConfigEditorTests(ConfigFixture, unittest.TestCase):
         self.assertEqual(saved['image_prompt'], 'remove text')
         self.assertEqual(saved['api_key'], profile['api_key'])
 
+    def test_direct_codex_offline_models_reasoning_and_catalog_override(self):
+        profile = self.raw['module']['llm_profiles'][0]
+        profile.update(backend='codex', built_in=True, model='gpt-5.6', model_options=[],
+                       vision_model='old-vision', vision_model_options=['old-vision'],
+                       thinking_level='Auto', thinking_level_options=['Auto', 'minimal'])
+        self.meta['codex_model_options'] = ['gpt-6.1-sol', 'gpt-5.6']
+        self.meta['codex_thinking_choices'] = {
+            'gpt-6.1-sol': ['Auto', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+            'gpt-5.6': ['Auto', 'Disabled', 'low', 'high', 'max']}
+        self.path.write_text(json.dumps(self.raw), encoding='utf-8')
+        before = self.path.read_bytes()
+        self.editor.loaded(self.document())
+        prefix = ('module', 'llm_profiles', 0)
+        model, thinking = prefix + ('model',), prefix + ('thinking_level',)
+        self.assertIn('gpt-6.1-sol', self.editor.document.choices(model))
+        self.assertIn('gpt-6.1-sol', self.editor.document.choices(prefix + ('vision_model',)))
+        self.assertIn('old-vision', self.editor.document.choices(prefix + ('vision_model',)))
+        self.assertEqual(self.editor.document.choices(thinking),
+                         ['Auto', 'Disabled', 'low', 'high', 'max'])
+        self.assertFalse(self.editor.document.dirty)
+        self.assertEqual(self.path.read_bytes(), before)
+        self.editor.fields[model][0].set('gpt-6.1-sol')
+        self.editor.rebuild()
+        self.assertEqual(self.editor.document.choices(thinking),
+                         ['Auto', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'])
+        self.editor.fields[thinking][0].set('high')
+        self.editor.save()
+        self.wait_idle()
+        doc = self.document()
+        self.assertEqual(doc.get(model), 'gpt-6.1-sol')
+        self.assertEqual(doc.get(thinking), 'high')
+        self.assertEqual(doc.get(prefix + ('prompt',)), profile['prompt'])
+        doc.data['module']['codex_models'] = {
+            'gpt-6.1-sol': {'modalities': ['text', 'image'], 'efforts': ['high']}}
+        self.assertEqual(doc.choices(thinking), ['Auto', 'high'])
+        doc.set(model, 'gpt-5.6')
+        self.assertEqual(doc.choices(thinking), ['Auto'])
+        doc.data['module']['codex_models'] = {}
+        doc.set(model, 'unknown-model')
+        self.assertEqual(doc.choices(thinking), ['Auto'])
+
     def test_jev_settings_preserve_secret_and_save_provider_and_toggle(self):
         self.meta['defaults']['module']['ocr_jev_filter'] = False
         self.meta['defaults']['module']['ocr_jev_openrouter_api_key'] = ''
