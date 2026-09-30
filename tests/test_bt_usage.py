@@ -16,6 +16,41 @@ def usage_line(scope='', tokens=1274185, cost='2.483284', subtotal=None, unprice
 
 
 class UsageTests(unittest.TestCase):
+    def test_official_request_logs_count_each_response_not_cumulative_or_details(self):
+        lines = [
+            '[INFO ] ocr_llm:_request_ocr_content:350 - Used 10 tokens (Total: 100010)',
+            '[INFO ] ocr_llm:_request_ocr_content:350 - Used 20 tokens (Total: 100030)',
+            '[DEBUG] trans_llm:_log_token_usage:1182 - LLM token usage: page=1.png, attempt=1, prompt=100, completion=20, reasoning=12, total=120, cache_hit=80',
+            '[DEBUG] trans_llm:_log_token_usage:1182 - LLM token usage: page=1.png, attempt=2, prompt=6, completion=4, reasoning=2, cache_hit=5',
+            '[DEBUG] trans_llm:_log_token_usage:1182 - LLM token usage: page=2.png, attempt=1, prompt_cache_diagnostics=not_reported',
+            "[DEBUG] llm_chat:request_chat_completion:373 - LLM output-limited response: prompt=5, completion=3, total=8, chars=12, content='total=999'",
+            'finished translating all dirs']
+        records = []
+        run_translation([sys.executable, '-c', f'print({chr(10).join(lines)!r})'], Path.cwd(), None,
+                        threading.Event(), lambda *args: None, usage=records.append)
+        latest = {record['scope']: record for record in records}
+        self.assertEqual(latest['OCR']['total_tokens'], 30)
+        self.assertEqual(latest['OCR']['requests'], 2)
+        self.assertEqual(latest['translation']['total_tokens'], 138)
+        self.assertEqual(latest['translation']['requests'], 4)
+        self.assertEqual(latest['total']['total_tokens'], 168)
+        self.assertEqual(latest['total']['requests'], 6)
+        self.assertEqual(latest['total']['missing_usage_requests'], 1)
+        self.assertEqual(latest['total']['unpriced_requests'], 6)
+        self.assertIsNone(latest['total']['cost'])
+
+    def test_native_summaries_override_request_snapshots_without_double_counting(self):
+        lines = ['[DEBUG] trans_llm:_log_token_usage:1182 - LLM token usage: prompt=8, completion=2, total=10',
+                 usage_line('translation ', 10, '0.01'), usage_line('', 10, '0.01'),
+                 'finished translating all dirs']
+        records = []
+        run_translation([sys.executable, '-c', f'print({chr(10).join(lines)!r})'], Path.cwd(), None,
+                        threading.Event(), lambda *args: None, usage=records.append)
+        self.assertEqual(records[0]['scope'], 'translation')
+        self.assertEqual(records[0]['requests'], 1)
+        self.assertEqual(records[-1]['total_tokens'], 10)
+        self.assertEqual(records[-1]['cost'], Decimal('0.01'))
+
     def test_jev_input_tokens_do_not_enter_llm_usage(self):
         data = dict(event='finished', audit_id='new-page', elapsed_seconds=2,
                     blocks=[dict(action='kept', removed_characters=0)],

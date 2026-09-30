@@ -47,6 +47,36 @@ def parse_bt_usage(line):
                 rates_date=fields.get('rates_date'), **counts)
 
 
+def parse_bt_request_usage(line):
+    """Read official per-response usage, never cumulative OCR or token subsets."""
+    match = re.search(r"\[(?:DEBUG|INFO)\s*\]\s+(ocr_llm|trans_llm|llm_chat):\w+:\d+ - (.*)", line)
+    if not match:
+        return None
+    module, message = match.groups()
+    scope = 'OCR' if module == 'ocr_llm' else 'translation'
+    used = re.fullmatch(r"Used (\d+) tokens \(Total: \d+\)", message)
+    if used and module in ('ocr_llm', 'trans_llm'):
+        total = int(used[1])
+    elif module in ('trans_llm', 'llm_chat') and message.startswith(
+            ('LLM token usage: ', 'LLM output-limited response: ')):
+        # Output-limit diagnostics can also contain arbitrary response text.
+        details = message.split(': ', 1)[1].split(', content=', 1)[0]
+        try:
+            counts = {key: int(value) for key, value in
+                      re.findall(r"(?:^|, )(prompt|completion|total)=([^, ]+)", details)}
+            if any(value < 0 for value in counts.values()):
+                return None
+        except ValueError:
+            return None
+        total = counts.get('total')
+        if total is None and 'prompt' in counts and 'completion' in counts:
+            total = counts['prompt'] + counts['completion']
+    else:
+        return None
+    return dict(scope=scope, requests=1, total_tokens=total if total is not None else 0,
+                missing_usage_requests=int(total is None), unpriced_requests=1, cost=None)
+
+
 def parse_jev_stats(line):
     marker = ' - Jev OCR filter audit: '
     if marker not in line:
@@ -259,6 +289,8 @@ def run_translation(command, root, env, stop, progress, log_context="", usage=No
     recent = deque(maxlen=20)
     stages = {}
     jev_seen, jev_totals = set(), {}
+    usage_records, summary_scopes = {}, set()
+    request_usage_seen = False
     ansi = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\))")
     owned = session is None
     session = session or TranslationSession(stop)
@@ -284,8 +316,27 @@ def run_translation(command, root, env, stop, progress, log_context="", usage=No
                 logger.info("[%s] BT %s", log_context, line)
             recent.append(line)
             consumption = parse_bt_usage(line)
+            if consumption is not None:
+                summary_scopes.add(consumption['scope'])
+            else:
+                response_usage = parse_bt_request_usage(line)
+                if response_usage is not None and response_usage['scope'] not in summary_scopes:
+                    request_usage_seen = True
+                    previous = usage_records.get(response_usage['scope'], {})
+                    consumption = dict(response_usage)
+                    for key in ('requests', 'total_tokens', 'missing_usage_requests', 'unpriced_requests'):
+                        consumption[key] += previous.get(key, 0)
             if consumption is not None and usage is not None:
+                usage_records[consumption['scope']] = consumption
                 usage(consumption)
+                if (request_usage_seen and consumption['scope'] in ('OCR', 'translation')
+                        and 'total' not in summary_scopes):
+                    # Phase/job snapshots replace earlier snapshots; Jev stays separate.
+                    records = [usage_records[scope] for scope in ('OCR', 'translation') if scope in usage_records]
+                    total = {key: sum(record[key] for record in records) for key in
+                             ('requests', 'total_tokens', 'missing_usage_requests', 'unpriced_requests')}
+                    costs = [record['cost'] for record in records if record['cost'] is not None]
+                    usage(dict(scope='total', cost=sum(costs) if costs else None, **total))
             stats = parse_jev_stats(line)
             if stats is not None and stats['audit_id'] not in jev_seen:
                 jev_seen.add(stats.pop('audit_id'))

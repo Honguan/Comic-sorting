@@ -17,6 +17,31 @@ def detail_values(window):
 
 
 class WorkflowTests(unittest.TestCase):
+    def test_settings_offer_native_interface_and_keep_jev_controls(self):
+        from tkinter import ttk
+        q = self.app.translation_queue
+        widgets, labels = [self.app.settings_tab, self.app.queue_tab], []
+        while widgets:
+            widget = widgets.pop()
+            widgets.extend(widget.winfo_children())
+            if isinstance(widget, ttk.Button):
+                labels.append(str(widget['text']))
+        self.assertNotIn('編輯設定檔', labels)
+        self.assertIn('開啟原生設定介面', labels)
+        self.assertIn('開啟紀錄資料夾', labels)
+        self.assertIn('Jev 統計', labels)
+        command = ['python.exe', '-u', '-m', 'ballontranslator', '--config', 'native.json']
+        with mock.patch.object(q, 'command', return_value=(command, self.folder, {})), \
+                mock.patch('translation_queue.subprocess.Popen') as launch:
+            launch.return_value.poll.return_value = None
+            q.open_settings()
+            q.open_settings()
+        launch.assert_called_once_with(command, cwd=self.folder, env={}, creationflags=mock.ANY)
+        with mock.patch.object(self.app, 'save_settings', return_value=True), \
+                mock.patch.object(self.root, 'destroy') as close:
+            self.app.close()
+        close.assert_called_once()
+
     def test_parallel_progress_keeps_both_chapters_visible(self):
         q = self.app.translation_queue
         q.jobs = [Job(self.folder / 'Manga/Chapter 1', 'translate'),
