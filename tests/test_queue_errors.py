@@ -10,6 +10,11 @@ class QueueErrorTests(unittest.TestCase):
 
     def test_real_diagnostics_distinguish_causes_from_wrappers(self):
         cases = (
+            ('CodexSignInRequiredError: Sign in to Codex', 'LLM_AUTH'),
+            ('This Codex model is unavailable.', 'LLM_MODEL'),
+            ('Codex input exceeds the model context window.', 'LLM_CONTEXT'),
+            ('The account does not have permission for this Codex request.', 'LLM_PERMISSION'),
+            ('The ChatGPT account has reached its Codex usage limit. Check the account limits before retrying.', 'LLM_QUOTA'),
             ('Codex turn failed: Selected model is at capacity. Please try a different model.\n'
              '[INFO] module_manager:_imgtrans_pipeline:1142 - Image translation pipeline stopped by user', 'LLM_CAPACITY'),
             ('RateLimitError: Error code: 429 - {"code":"insufficient_quota"}', 'LLM_QUOTA'),

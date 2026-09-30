@@ -36,6 +36,7 @@ LABELS = {
     "llm_translate_summary_memory": "摘要與記憶", "llm_translate_overwrite_summary": "覆寫既有摘要",
     "translator_llm_id": "翻譯用 LLM", "ocr_llm_id": "OCR 用 LLM", "inpaint_llm_id": "修補用 LLM",
     "api_key": "API 金鑰", "base_url": "基礎 URL", "model": "文本模型", "vision_model": "視覺模型",
+    "vision_thinking_level": "OCR 思考級別",
     "image_model": "圖像模型", "max_tokens": "Token 輸出上限", "temperature": "溫度",
     "frequency_penalty": "頻率懲罰", "presence_penalty": "存在懲罰", "thinking_level": "思考級別",
     "prompt": "翻譯提示詞", "vision_prompt": "視覺提示詞", "image_prompt": "圖像提示詞",
@@ -152,6 +153,14 @@ class ConfigDocument:
         if key in ("translator_llm_id", "ocr_llm_id", "inpaint_llm_id"):
             support = {"translator_llm_id": "support_text", "ocr_llm_id": "support_vision", "inpaint_llm_id": "support_image"}[key]
             return [p["id"] for p in self.data["module"]["llm_profiles"] if isinstance(p, dict) and p.get(support)]
+        if len(path) == 4 and path[:2] == ("module", "llm_profiles") and parent.get("backend") == "codex":
+            catalog = self.data['module'].get('codex_models', {})
+            if catalog and key in ('model', 'vision_model'):
+                modality = 'image' if key == 'vision_model' else 'text'
+                return [model for model, info in catalog.items() if modality in info.get('modalities', [])]
+            if key == 'thinking_level' and parent.get('model') in catalog:
+                return ['Auto'] + ['Disabled' if effort == 'none' else effort
+                                   for effort in catalog[parent['model']].get('efforts', [])]
         if len(path) == 4 and path[:2] == ("module", "llm_profiles") and key in ("thinking_level", "vision_thinking_level") and parent.get("transport") == "Codex App Server":
             model = parent.get("vision_model" if key == "vision_thinking_level" else "model")
             efforts = self.metadata.get("codex_reasoning_efforts", {}).get(model)
@@ -330,7 +339,10 @@ class ConfigEditor(tk.Toplevel):
         widget.grid(row=row, column=1, sticky="ew", pady=6)
         self.fields[path] = (var, read)
         if refresh:
-            widget.bind("<<ComboboxSelected>>", lambda _e: self.rebuild())
+            if isinstance(value, bool):
+                widget.configure(command=self.rebuild)
+            else:
+                widget.bind("<<ComboboxSelected>>", lambda _e: self.rebuild())
         if path[-1] == "font_family":
             widget.configure(values=sorted(set(tkfont.families(self))), state="normal")
         if path[-1] == "llm_glossary_path":
@@ -383,6 +395,16 @@ class ConfigEditor(tk.Toplevel):
                 if key == 'translator' and name == 'LLMTranslator' and param == 'timeout rescue' and not legacy_jev and 'ocr_jev_provider' in module:
                     continue
                 self.field(params, ("module", key + "_params", name, param), str(name) + " / " + field_name(param))
+        codex_profiles = [(index, profile) for index, profile in enumerate(module.get('llm_profiles', []))
+                          if profile.get('backend') == 'codex']
+        if codex_profiles:
+            codex = self.section('Codex HTTP')
+            ttk.Label(codex, text=tr('登入、登出與模型目錄刷新請使用 BallonsTranslator 原生設定介面。'),
+                      wraplength=560).grid(row=0, column=0, columnspan=2, sticky='w', pady=8)
+            for index, profile in codex_profiles:
+                for key in ('support_text', 'support_vision', 'support_image'):
+                    self.field(codex, ('module', 'llm_profiles', index, key),
+                               str(profile.get('name', 'Codex')) + ' / ' + field_name(key), refresh=True)
         selected = set()
         for key, capability in (("translator_llm_id", "support_text"), ("ocr_llm_id", "support_vision"), ("inpaint_llm_id", "support_image")):
             native = {"translator_llm_id": ("translator", "LLMTranslator"), "ocr_llm_id": ("ocr", "LLMOCR"), "inpaint_llm_id": ("inpainter", "LLMInpaint")}
@@ -397,8 +419,12 @@ class ConfigEditor(tk.Toplevel):
             if profile.get("id") in selected:
                 if profile.get("transport") == "Codex App Server":
                     for key in ("codex_execution", "codex_executable", "codex_timeout"):
-                        self.field(params, ("module", "llm_profiles", index, key), str(profile.get("name", "LLM")) + " / " + field_name(key))
-                for key in ("model", "vision_model", "image_model", "base_url", "api_key", "max_tokens", "temperature", "thinking_level", "prompt", "vision_prompt"):
+                        if key == 'codex_executable' and profile.get('codex_execution') == 'HTTP':
+                            continue
+                        self.field(params, ("module", "llm_profiles", index, key), str(profile.get("name", "LLM")) + " / " + field_name(key), refresh=key == "codex_execution")
+                for key in ("model", "vision_model", "image_model", "base_url", "api_key", "max_tokens", "temperature", "thinking_level", "vision_thinking_level", "prompt", "vision_prompt", "image_prompt"):
+                    if profile.get('backend') == 'codex' and key in ('base_url', 'api_key', 'vision_thinking_level'):
+                        continue
                     if ("module", "llm_profiles", index, key) in self.fields:
                         continue
                     self.field(params, ("module", "llm_profiles", index, key), str(profile.get("name", "LLM")) + " / " + field_name(key),

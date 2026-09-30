@@ -213,12 +213,12 @@ class ConfigEditorTests(ConfigFixture, unittest.TestCase):
         self.path.write_text(json.dumps(self.raw, ensure_ascii=False), encoding="utf-8")
         self.meta["templates"]["llm_profiles"]["LLM"]["codex_execution"] = "Python SDK"
         self.meta["schema"]["children"]["module"]["children"]["llm_profiles"]["item"]["children"]["codex_execution"] = {
-            "type": "string", "choices": ["Python SDK", "CLI"], "strict_choices": True}
+            "type": "string", "choices": ["HTTP", "Python SDK", "CLI"], "strict_choices": True}
         self.editor.loaded(self.document())
         path = ("module", "llm_profiles", 0, "codex_execution")
         self.assertEqual(self.editor.fields[path][0].get(), "Python SDK")
         self.assertFalse(self.editor.document.dirty)
-        for value in ("CLI", "Python SDK"):
+        for value in ("HTTP", "CLI", "Python SDK"):
             self.editor.fields[path][0].set(value)
             self.editor.save()
             self.wait_idle()
@@ -226,6 +226,34 @@ class ConfigEditorTests(ConfigFixture, unittest.TestCase):
             self.assertEqual(saved["module"]["llm_profiles"][0]["codex_execution"], value)
         with self.assertRaises(ValueError):
             self.editor.document.set(path, "invalid")
+
+    def test_direct_codex_catalog_capabilities_and_image_prompt(self):
+        profile = self.raw['module']['llm_profiles'][0]
+        profile.update(backend='codex', model='text-model', vision_model='vision-model',
+                       thinking_level='Auto', vision_thinking_level='low', image_prompt='repair')
+        self.raw['module']['codex_models'] = {
+            'text-model': {'modalities': ['text'], 'efforts': ['none', 'low']},
+            'vision-model': {'modalities': ['text', 'image'], 'efforts': ['high']}}
+        self.path.write_text(json.dumps(self.raw), encoding='utf-8')
+        self.editor.loaded(self.document())
+        prefix = ('module', 'llm_profiles', 0)
+        self.assertEqual(self.editor.document.choices(prefix + ('vision_model',)), ['vision-model'])
+        self.assertEqual(self.editor.document.choices(prefix + ('thinking_level',)), ['Auto', 'Disabled', 'low'])
+        self.assertNotIn(prefix + ('api_key',), self.editor.fields)
+        self.assertNotIn(prefix + ('vision_thinking_level',), self.editor.fields)
+        self.editor.fields[prefix + ('support_image',)][0].set(True)
+        self.editor.rebuild()
+        self.assertIn('demo', self.editor.document.choices(('module', 'inpaint_llm_id')))
+        self.editor.fields[prefix + ('image_prompt',)][0].set('remove text')
+        self.editor.fields[prefix + ('model',)][0].set('vision-model')
+        self.editor.rebuild()
+        self.assertEqual(self.editor.document.choices(prefix + ('thinking_level',)), ['Auto', 'high'])
+        self.editor.save()
+        self.wait_idle()
+        saved = json.loads(self.path.read_text(encoding='utf-8'))['module']['llm_profiles'][0]
+        self.assertTrue(saved['support_image'])
+        self.assertEqual(saved['image_prompt'], 'remove text')
+        self.assertEqual(saved['api_key'], profile['api_key'])
 
     def test_jev_settings_preserve_secret_and_save_provider_and_toggle(self):
         self.meta['defaults']['module']['ocr_jev_filter'] = False

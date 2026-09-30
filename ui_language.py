@@ -9,6 +9,8 @@ def tr(text):
     return TRANSLATIONS.get(text, {}).get(_language, text)
 
 TRANSLATIONS = {
+    'OCR 思考級別': {'en': 'OCR reasoning effort', 'ja': 'OCR 推論レベル'},
+    '登入、登出與模型目錄刷新請使用 BallonsTranslator 原生設定介面。': {'en': 'Use BallonsTranslator settings to sign in, sign out, or refresh the model catalog.', 'ja': 'ログイン、ログアウト、モデル一覧の更新は BallonsTranslator の設定を使用してください。'},
     '前處理與翻譯並行': {'en': 'Preprocess and translate concurrently', 'ja': '前処理と翻訳を並行実行'},
     '開始並行': {'en': 'Run concurrently', 'ja': '並行開始'},
     '前處理中': {'en': 'Preprocessing', 'ja': '前処理中'},
