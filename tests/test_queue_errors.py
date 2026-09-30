@@ -11,6 +11,8 @@ class QueueErrorTests(unittest.TestCase):
     def test_real_diagnostics_distinguish_causes_from_wrappers(self):
         cases = (
             ('CodexSignInRequiredError: Sign in to Codex', 'LLM_AUTH'),
+            ('[ERROR  ] codex_account:show_codex_sign_in_required:26 - Sign in with ChatGPT to use Codex.\n'
+             '[INFO   ] module_manager:_imgtrans_pipeline_impl:1329 - Image translation pipeline stopped by user', 'LLM_AUTH'),
             ('This Codex model is unavailable.', 'LLM_MODEL'),
             ('Codex input exceeds the model context window.', 'LLM_CONTEXT'),
             ('The account does not have permission for this Codex request.', 'LLM_PERMISSION'),

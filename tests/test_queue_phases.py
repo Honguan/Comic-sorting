@@ -41,6 +41,44 @@ class PhaseTests(unittest.TestCase):
             run_jobs(self.jobs, settings, '', True, threading.Event(), events.append)
         return events
 
+    def test_phase_configs_preserve_native_account_path_and_clean_up(self):
+        auth = self.config.parent / 'codex/http-auth.json'
+        save_json(auth, {'test_account': 'native'})
+        original, account = self.config.read_bytes(), auth.read_bytes()
+        for mode in ('prepare', 'translate', 'two_pass', 'parallel'):
+            with self.subTest(mode=mode):
+                for job in self.jobs:
+                    (job.path / MARKER).unlink(missing_ok=True)
+                    if mode == 'translate':
+                        self.artifacts(job.path)
+                        mark_prepared(job.path, [job.path / '[1].png'])
+                configs = []
+                def execute(command, root, env, stop, progress, **kw):
+                    path, config = Path(command[0]), Path(command[1])
+                    configs.append(config)
+                    # Native HTTP auth and its keyring ID use the config directory.
+                    if not (config.parent / 'codex/http-auth.json').is_file():
+                        raise RuntimeError('Sign in with ChatGPT to use Codex.')
+                    self.assertEqual(config.parent.resolve(), self.config.parent.resolve())
+                    data = load_json(config, {})
+                    self.assertEqual(data['module']['enable_translate'], kw['request']['phase'] == 'translate')
+                    save_json(Path(str(config) + '.tmp'), data)
+                    if kw['request']['phase'] == 'prepare':
+                        self.artifacts(path)
+                    else:
+                        (path / 'result').mkdir(exist_ok=True)
+                        (path / 'result/[1].png').write_bytes(b'translated')
+                with patch('queue_worker.TranslationSession', side_effect=lambda *a: Mock()):
+                    events = self.run_mode(mode, execute)
+                statuses = [e[2] if e[0] == 'phase_event' else e for e in events]
+                self.assertFalse(any(e[:1] == ('status',) and e[2] == 'failed' for e in statuses), events)
+                self.assertTrue(configs)
+                for config in configs:
+                    self.assertFalse(config.exists())
+                    self.assertFalse(Path(str(config) + '.tmp').exists())
+                self.assertEqual(self.config.read_bytes(), original)
+                self.assertEqual(auth.read_bytes(), account)
+
     def test_parallel_overlaps_chapters_and_reuses_two_sessions(self):
         preparing_second, translating_first = threading.Event(), threading.Event()
         sessions, calls = {}, []

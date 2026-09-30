@@ -1,5 +1,6 @@
 """Disk-backed, chapter-level preprocessing checkpoints and two-pass execution."""
 from copy import deepcopy
+from contextlib import ExitStack
 from datetime import datetime
 from decimal import Decimal
 import hashlib
@@ -88,7 +89,7 @@ def run_phased_jobs(jobs, settings, output, skip, stop, emit, *, pause=None, che
         config = load_json(settings["bt_config"], {}, strict=True)
         if mode not in MODES:
             raise ValueError("Unknown queue workflow: " + str(mode))
-        with tempfile.TemporaryDirectory(prefix="comic-sorting-phases-") as temporary:
+        with ExitStack() as cleanup:
             for phase in phases:
                 if stop.is_set() or aborted:
                     break
@@ -101,7 +102,12 @@ def run_phased_jobs(jobs, settings, output, skip, stop, emit, *, pause=None, che
                     module[key] = phase == "prepare"
                 module["enable_translate"] = phase == "translate"
                 module["finish_code"] = 7 if phase == "prepare" else 8
-                config_path = Path(temporary) / (phase + ".json")
+                # Native accounts and keyring IDs are relative to the config directory.
+                with tempfile.NamedTemporaryFile(dir=Path(settings["bt_config"]).resolve().parent,
+                        prefix=".comic-sorting-" + phase + "-", suffix=".json", delete=False) as file:
+                    config_path = Path(file.name)
+                cleanup.callback(config_path.unlink, missing_ok=True)
+                cleanup.callback(Path(str(config_path) + '.tmp').unlink, missing_ok=True)
                 save_json(config_path, phase_config)
                 options = dict(settings, bt_workflow="normal", bt_phase=phase, bt_config=str(config_path))
                 if phase == "prepare":
