@@ -6,6 +6,7 @@ import uuid
 import queue
 import threading
 import time
+import math
 import subprocess
 import os
 import tkinter as tk
@@ -146,6 +147,8 @@ class TranslationQueue:
         self.queue_restore_ratio = None
         self.last_library_ratio = None
         self.sash_after = None
+        self.sash_velocity = 0.0
+        app.panes.bind("<ButtonPress-1>", self.cancel_sash_animation, add="+")
         app.panes.bind("<Configure>", lambda _event: app.panes.sashpos(0, 0)
                        if self.queue_restore_ratio is not None and self.sash_after is None else None, add="+")
 
@@ -247,7 +250,7 @@ class TranslationQueue:
         summary_label = ttk.Label(footer, textvariable=self.summary, wraplength=650, style="Muted.TLabel")
         summary_label.pack(fill="x", pady=(4, 2))
         summary_label.bind("<Configure>", lambda event: summary_label.configure(wraplength=event.width)
-                           if event.width > 100 else None)
+                           if event.width > 100 and self.sash_after is None else None)
         self.total = ttk.Progressbar(footer)
         self.total.pack(fill="x")
         self.label = tk.StringVar(value=tr("BallonsTranslator：待命"))
@@ -256,7 +259,8 @@ class TranslationQueue:
         stage_label = ttk.Label(self.bt_toggle.master, textvariable=self.label, wraplength=500)
         stage_label.pack(side="left", fill="x", expand=True, padx=(8, 0))
         stage_label.bind("<Configure>", lambda event: stage_label.configure(wraplength=event.width)
-                         if event.width > 100 else None)
+                         if event.width > 100 and self.sash_after is None else None)
+        self.resize_widgets = (app.folder_tree, self.tree, app.scan_status_label, summary_label, stage_label)
         progress_grid.columnconfigure(1, weight=1)
         self.bt_bars = {}
         self.bt_labels = {}
@@ -338,19 +342,56 @@ class TranslationQueue:
             self.zoom_button.configure(text=tr("放大佇列"))
         self.animate_sash(target)
 
-    def animate_sash(self, target):
+    def finish_sash_layout(self):
+        for widget in self.resize_widgets:
+            widget.event_generate("<Configure>", width=widget.winfo_width())
+
+    def cancel_sash_animation(self, _event=None):
         if self.sash_after is not None:
             self.app.root.after_cancel(self.sash_after)
             self.sash_after = None
+        self.sash_velocity = 0.0
+        self.queue_restore_ratio = None
+        self.zoom_button.configure(text=tr("放大佇列"))
+        self.finish_sash_layout()
+
+    def animate_sash(self, target):
+        if self.sash_after is not None:
+            self.app.root.after_cancel(self.sash_after)
+        else:
+            self.sash_velocity = 0.0
         panes = self.app.panes
-        start, started = panes.sashpos(0), time.monotonic()
+        position, previous = float(panes.sashpos(0)), time.monotonic()
+        ratio = target / max(1, panes.winfo_width())
         if not panes.winfo_ismapped():
             panes.sashpos(0, target)
+            self.sash_after = None
+            self.sash_velocity = 0.0
             return
         def step():
-            progress = min(1, (time.monotonic() - started) / .18)
-            panes.sashpos(0, round(start + (target - start) * (1 - (1 - progress) ** 3)))
-            self.sash_after = self.app.root.after(16, step) if progress < 1 else None
+            nonlocal position, previous
+            now = time.monotonic()
+            delta, previous = max(0, now - previous), now
+            goal = round(ratio * panes.winfo_width())
+            # Critically damped motion preserves velocity when the target reverses.
+            offset = position - goal
+            impulse = self.sash_velocity + 34 * offset
+            decay = math.exp(-34 * delta)
+            position = goal + (offset + impulse * delta) * decay
+            self.sash_velocity = (self.sash_velocity - 34 * impulse * delta) * decay
+            bounded = min(panes.winfo_width(), max(0, position))
+            if bounded != position:
+                position, self.sash_velocity = bounded, 0.0
+            if abs(position - goal) < .5 and abs(self.sash_velocity) < 12:
+                panes.sashpos(0, goal)
+                self.sash_after = None
+                self.sash_velocity = 0.0
+                self.finish_sash_layout()
+                return
+            if panes.sashpos(0) != round(position):
+                panes.sashpos(0, round(position))
+            delay = max(1, 16 - round((time.monotonic() - now) * 1000))
+            self.sash_after = self.app.root.after(delay, step)
         step()
 
     def collapsible_frame(self, parent, title):
@@ -559,6 +600,8 @@ class TranslationQueue:
         self.bt_labels[name].set(text)
 
     def fit_columns(self, event):
+        if self.sash_after is not None:
+            return
         width = event.width - 4
         if width < 100 or getattr(self, "_queue_width", None) == width:
             return

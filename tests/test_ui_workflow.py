@@ -2103,6 +2103,77 @@ class WorkflowTests(unittest.TestCase):
         self.root.update()
         self.assertEqual((self.root.winfo_width(), self.root.winfo_height()), (820, 640))
 
+    def test_zoom_reversal_preserves_motion_and_resized_target(self):
+        self.root.geometry('1024x780')
+        self.root.deiconify()
+        self.root.update()
+        q, panes = self.app.translation_queue, self.app.panes
+        panes.sashpos(0, 300)
+        self.root.update()
+        clock, callbacks, handles = [100.0], {}, iter(range(10000))
+        def schedule(_delay, callback):
+            handle = str(next(handles))
+            callbacks[handle] = callback
+            return handle
+        def advance(seconds):
+            clock[0] += seconds
+            callback = callbacks.pop(q.sash_after)
+            callback()
+            self.root.update()
+        with mock.patch('translation_queue.time.monotonic', side_effect=lambda: clock[0]), \
+                mock.patch.object(self.root, 'after', side_effect=schedule), \
+                mock.patch.object(self.root, 'after_cancel', side_effect=lambda handle: callbacks.pop(handle, None)):
+            q.animate_sash(0)
+            advance(.06)
+            before = panes.sashpos(0)
+            q.animate_sash(300)
+            advance(.005)
+            self.assertLess(panes.sashpos(0), before, 'reversal must decelerate existing motion first')
+            ratio = 300 / panes.winfo_width()
+            self.root.geometry('900x700')
+            self.root.update()
+            for _ in range(100):
+                if q.sash_after is None:
+                    break
+                advance(.016)
+            self.assertIsNone(q.sash_after)
+            self.assertAlmostEqual(panes.sashpos(0) / panes.winfo_width(), ratio, delta=.002)
+
+    def test_zoom_defers_column_and_wrapping_reflow(self):
+        path = self.chapter('Chapter 1')
+        self.app.apply_scan_data(path.parent.parent, self.app.scan_folder_data(path.parent.parent))
+        tree = self.app.folder_tree
+        tree.selection_set(tree.get_children()[0])
+        self.app.on_tree_select()
+        self.root.geometry('1024x780')
+        self.root.deiconify()
+        self.root.update()
+        q = self.app.translation_queue
+        height = self.app.folder_details_label.winfo_reqheight()
+        clock, callbacks, handles = [100.0], {}, iter(range(10000))
+        def schedule(_delay, callback):
+            handle = str(next(handles))
+            callbacks[handle] = callback
+            return handle
+        with mock.patch.object(q.tree, 'column', wraps=q.tree.column) as columns, \
+                mock.patch('translation_queue.time.monotonic', side_effect=lambda: clock[0]), \
+                mock.patch.object(self.root, 'after', side_effect=schedule):
+            q.zoom_button.invoke()
+            clock[0] += .06
+            callbacks.pop(q.sash_after)()
+            self.root.update()
+            self.assertIsNotNone(q.sash_after)
+            self.assertFalse(any('width' in call.kwargs for call in columns.call_args_list))
+            self.assertEqual(self.app.folder_details_label.winfo_reqheight(), height)
+            for _ in range(100):
+                if q.sash_after is None:
+                    break
+                clock[0] += .016
+                callbacks.pop(q.sash_after)()
+                self.root.update()
+            self.assertIsNone(q.sash_after)
+            self.assertTrue(any('width' in call.kwargs for call in columns.call_args_list))
+
     def test_queue_can_expand_restore_and_resize_with_progress_open(self):
         self.root.geometry('1024x780')
         self.root.deiconify()
@@ -2113,8 +2184,8 @@ class WorkflowTests(unittest.TestCase):
         before = q.tree.winfo_width()
         ratio = panes.sashpos(0) / panes.winfo_width()
         def finish_animation():
-            deadline = time.monotonic() + .25
-            while time.monotonic() < deadline:
+            deadline = time.monotonic() + 1
+            while q.sash_after is not None and time.monotonic() < deadline:
                 self.root.update()
                 time.sleep(.01)
             self.assertIsNone(q.sash_after)
@@ -2144,6 +2215,27 @@ class WorkflowTests(unittest.TestCase):
         panes.sashpos(0, 200)
         self.root.update()
         self.assertEqual(panes.sashpos(0), 200)
+        q.zoom_button.invoke()
+        handle = q.sash_after
+        self.assertIsNotNone(handle)
+        panes.event_generate('<ButtonPress-1>', x=panes.sashpos(0), y=10)
+        panes.event_generate('<ButtonRelease-1>', x=panes.sashpos(0), y=10)
+        self.assertIsNone(q.sash_after)
+        self.assertIsNone(q.queue_restore_ratio)
+        self.assertEqual(q.sash_velocity, 0)
+        self.assertNotIn(handle, self.root.tk.call('after', 'info'))
+        panes.sashpos(0, 200)
+        self.root.update()
+        self.assertEqual(panes.sashpos(0), 200)
+        q.zoom_button.invoke()
+        handle = q.sash_after
+        with mock.patch.object(self.app, 'save_settings', return_value=True), \
+                mock.patch.object(self.root, 'destroy') as destroy:
+            self.app.close()
+            destroy.assert_called_once()
+        self.assertIsNone(q.sash_after)
+        self.assertNotIn(handle, self.root.tk.call('after', 'info'))
+
 
     def test_queue_details_preserve_library_and_queue_space(self):
         self.root.geometry('980x720')

@@ -193,7 +193,7 @@ class FileAggregatorApp:
         self.scan_status_label = ttk.Label(scan_row, textvariable=self.scan_status_text, wraplength=300, style="Muted.TLabel")
         self.scan_status_label.pack(side="left", fill="x", expand=True)
         self.scan_status_label.bind("<Configure>", lambda event: self.scan_status_label.configure(wraplength=event.width)
-                                    if event.width > 100 else None)
+                                    if event.width > 100 and self.translation_queue.sash_after is None else None)
         ttk.Label(manga_footer, textvariable=self.current_series, wraplength=300).pack(anchor="w", pady=(8, 4))
         range_row = ttk.Frame(manga_footer)
         range_row.pack(fill="x")
@@ -388,6 +388,7 @@ class FileAggregatorApp:
             return
         if self.save_settings():
             logger.info("application_close")
+            self.translation_queue.cancel_sash_animation()
             self.root.destroy()
 
     def browse(self):
@@ -713,6 +714,8 @@ class FileAggregatorApp:
         return len(selection) > 1 and all(self.tree_items[item][0] in FOLDER_KINDS for item in selection)
 
     def fit_folder_columns(self, event):
+        if self.translation_queue.sash_after is not None:
+            return
         width = event.width - 4
         if width < 100 or getattr(self, "_library_width", None) == width:
             return
