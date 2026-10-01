@@ -157,7 +157,7 @@ class TranslationQueue:
         tree_frame = ttk.Frame(box)
         tree_frame.pack(fill="both", expand=True, pady=4)
         self.tree = ttk.Treeview(tree_frame, columns=("kind", "action", "pages", "status", "error_reason"), show="tree headings", height=3)
-        for column, text in (("#0", "漫畫路徑"), ("kind", "資料夾類型"), ("action", "動作"), ("pages", "翻譯頁數"),
+        for column, text in (("#0", "漫畫 / 章節"), ("kind", "資料夾類型"), ("action", "動作"), ("pages", "翻譯頁數"),
                              ("status", "狀態"), ("error_reason", "錯誤原因")):
             self.tree.heading(column, text=tr(text))
         self.tree.column("#0", width=340, minwidth=40, stretch=False)
@@ -165,6 +165,9 @@ class TranslationQueue:
         self.tree.column("action", width=85, stretch=False)
         self.tree.column("pages", width=120, stretch=False)
         self.tree.column("status", width=110, stretch=False)
+        for status, color in (("failed", "#b42318"), ("blocked", "#b42318"),
+                              ("done", "#166534"), ("done_warning", "#92400e")):
+            self.tree.tag_configure(status, foreground=color)
         self.tree.column("error_reason", width=220, minwidth=40, stretch=False)
         vertical = ttk.Scrollbar(tree_frame, command=self.tree.yview)
         horizontal = ttk.Scrollbar(tree_frame, orient="horizontal", command=self.tree.xview)
@@ -261,7 +264,7 @@ class TranslationQueue:
         elapsed_row.pack(fill="x", pady=(4, 0))
         details_row = ttk.Frame(footer)
         details_row.pack(fill="x", pady=(2, 0))
-        self.bt_frame, progress_grid, self.bt_toggle = self.collapsible_frame(details_row, tr("各階段進度"))
+        self.bt_frame, progress_grid, self.bt_toggle = self.collapsible_frame(details_row, tr("各階段進度"), tr("進度"))
         stage_label = ttk.Label(elapsed_row, textvariable=self.label, width=1, wraplength=300)
         stage_label.pack(side="left", fill="x", expand=True, padx=(0, 8))
         stage_label.bind("<Configure>", lambda event: stage_label.configure(wraplength=event.width)
@@ -632,14 +635,20 @@ class TranslationQueue:
         self.bt_frame.master.columnconfigure(1, weight=1 if wrapped else 0)
         self.bt_frame.master.columnconfigure(2, weight=0 if wrapped else 1)
         font = tkfont.nametofont("TkDefaultFont", root=self.app.root)
-        self.tree.configure(displaycolumns=("action", "pages", "status") if width >= 650 else ("pages", "status"))
-        fixed = {"action": font.measure(tr("翻譯")) + 24,
-                 "pages": max(95, font.measure(tr("翻譯頁數")) + 16),
-                 "status": max(160, font.measure(tr("完成（有異常）")) + 24)}
+        name_min = min(180, width // 2)
+        fixed = {"status": min(max(font.measure(tr(value)) for value in STATUSES.values()) + 20, width - name_min),
+                 "pages": max(90, font.measure(tr("翻譯頁數")) + 16),
+                 "action": max(font.measure(tr(value)) for value in ACTIONS.values()) + 20,
+                 "error_reason": 180}
+        visible = ["status"]
+        for column in ("pages", "action", "error_reason"):
+            if name_min + sum(fixed[key] for key in (*visible, column)) <= width:
+                visible.append(column)
+        self.tree.configure(displaycolumns=visible)
         for column, size in fixed.items():
             self.tree.column(column, width=size, minwidth=size, stretch=False)
-        self.tree.column("#0", width=max(200, width - sum(fixed[key] for key in self.tree["displaycolumns"])),
-                         minwidth=200, stretch=False)
+        self.tree.column("#0", width=width - sum(fixed[key] for key in visible),
+                         minwidth=name_min, stretch=False)
 
 
     def update_selection_details(self):
@@ -661,9 +670,10 @@ class TranslationQueue:
         job = next((job for job in jobs if len(selection) == 1 and str(id(job)) == item), None)
         if job:
             reason = error_info(job.status, job.error)[1]
-            self.selection_details.set(str(job.path) + "\n" + " | ".join(filter(None, (
-                tr(FOLDER_KINDS[folder_kind(job.path.name)]), tr(ACTIONS[job.action]),
-                self.page_range_text(job), tr(STATUSES[job.status]), reason))) + "\n" + summary)
+            heading = f"{job.path.name} · {tr(STATUSES[job.status])}"
+            metadata = " | ".join((tr(FOLDER_KINDS[folder_kind(job.path.name)]),
+                                   tr(ACTIONS[job.action]), self.page_range_text(job)))
+            self.selection_details.set("\n".join(filter(None, (heading, reason, metadata, str(job.path), summary))))
         else:
             self.selection_details.set((item.split(":", 1)[1] + "\n" if len(selection) == 1 else "") + summary)
 
@@ -770,10 +780,12 @@ class TranslationQueue:
             root = "path:" + str(job.path.parent.parent)
             series = "series:" + str(job.path.parent)
             if not self.tree.exists(root):
-                self.tree.insert("", "end", iid=root, text=str(job.path.parent.parent), open=bool(query) or open_groups.get(root, single_root))
+                path = job.path.parent.parent
+                self.tree.insert("", "end", iid=root, text=(path.name or str(path)) if single_root else str(path),
+                                 open=bool(query) or open_groups.get(root, single_root))
             if not self.tree.exists(series):
                 self.tree.insert(root, "end", iid=series, text=job.path.parent.name, open=bool(query) or open_groups.get(series, False))
-            self.tree.insert(series, "end", iid=item, text=f"{index}. {job.path.name}",
+            self.tree.insert(series, "end", iid=item, text=f"{index}. {job.path.name}", tags=(job.status,),
                              values=(tr(FOLDER_KINDS[folder_kind(job.path.name)]), tr(ACTIONS[job.action]), self.page_range_text(job), tr(STATUSES[job.status]),
                                      error_info(job.status, job.error)[1]))
             if item in selected:
@@ -886,11 +898,12 @@ class TranslationQueue:
             files += tr("（{0} 項計算中）").format(calculating)
         if unknown > calculating:
             files += tr("（{0} 項無法計數）").format(unknown - calculating)
+        failures = sum(j.status == "failed" for j in self.jobs)
+        retries = tr("｜失敗 {0}｜本次重試 {1}").format(failures, self.retry_count) if failures or self.retry_count else ""
         self.summary.set(tr("佇列 {0} 項｜等待 {1}｜完成 {2}｜需處理 {3}").format(
             len(self.jobs), sum(j.status in READY for j in self.jobs),
             sum(j.status in ("done", "done_warning") for j in self.jobs),
-            sum(j.status in ("failed", "cancelled", "blocked") for j in self.jobs)) + tr("｜失敗 {0}｜本次重試 {1}").format(
-                sum(j.status == "failed" for j in self.jobs), self.retry_count) + files)
+            sum(j.status in ("failed", "cancelled", "blocked") for j in self.jobs)) + retries + files)
 
     def browse(self, variable, directory):
         selected = filedialog.askdirectory(initialdir=variable.get() or None) if directory else filedialog.askopenfilename()

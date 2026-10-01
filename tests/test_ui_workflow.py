@@ -1049,10 +1049,14 @@ class WorkflowTests(unittest.TestCase):
         item = str(id(q.jobs[0]))
         q.tree.selection_set(item)
         q.update_controls()
-        for width in (760, 1200, 1600):
+        for width in (340, 520, 760, 1200, 1600):
             q.fit_columns(SimpleNamespace(width=width))
+            self.assertIn("status", q.tree["displaycolumns"])
             self.assertLessEqual(sum(q.tree.column(c, "width") for c in ("#0", *q.tree["displaycolumns"])), width)
             self.assertTrue(all(q.tree.column(c, "width") >= 40 for c in q.tree["displaycolumns"]))
+        self.assertIn("error_reason", q.tree["displaycolumns"])
+        self.assertTrue(q.selection_details.get().splitlines()[0].startswith(path.name))
+        self.assertIn("滿載", q.selection_details.get().splitlines()[1])
         self.assertIn(str(path), q.selection_details.get())
         self.assertIn('滿載', q.selection_details.get())
         self.assertNotIn('LLM_CAPACITY', q.selection_details.get())
@@ -1070,7 +1074,7 @@ class WorkflowTests(unittest.TestCase):
         q.render()
         root = q.tree.get_children()[0]
         series = q.tree.get_children(root)
-        self.assertEqual(q.tree.item(root, "text"), str(base))
+        self.assertEqual(q.tree.item(root, "text"), base.name)
         self.assertEqual([q.tree.item(item, "text") for item in series], ["漫畫 A", "漫畫 B"])
         self.assertEqual([q.tree.item(item, "text") for item in q.tree.get_children(series[0])], ["1. Chapter 1-10", "3. Chapter 11-20"])
         self.assertTrue(q.tree.item(root, "open"))

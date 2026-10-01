@@ -5,9 +5,9 @@ from tkinter import font, ttk
 def apply_theme(root):
     for name in ('TkDefaultFont', 'TkTextFont', 'TkMenuFont', 'TkHeadingFont'):
         named = font.nametofont(name, root=root)
-        named.configure(size=max(11, named.cget('size')))
+        named.configure(size=max(12, named.cget('size')))
     background, surface = "#f7f9fc", "#ffffff"
-    ink, muted, accent = "#192b40", "#607086", "#0067c0"
+    ink, muted, accent = "#192b40", "#475569", "#0067c0"
     selected = "#dceeff"
     family = font.nametofont("TkDefaultFont", root=root).cget("family")
     heading = (family, font.nametofont("TkDefaultFont", root=root).cget("size"), "bold")

@@ -779,7 +779,7 @@ class FileAggregatorApp:
             item = selection[0]
             path = self.tree_items[item][1]
             values = self.folder_tree.item(item, "values")
-            self.folder_details.set(str(path) + "\n" + " | ".join(str(value) for value in values if value))
+            self.folder_details.set(path.name + "\n" + " | ".join(str(value) for value in values if value) + "\n" + str(path))
             kind = self.tree_items[item][0]
             self.current_series.set(self.series_name(path if kind == 'series' else path.parent))
         else:

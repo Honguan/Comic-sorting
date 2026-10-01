@@ -17,6 +17,7 @@ TRANSLATIONS = {
     '章節序號': {'en': 'Chapter index', 'ja': '章の順番'},
     '加入區間': {'en': 'Add range', 'ja': '範囲を追加'},
     '加入選取': {'en': 'Add selected', 'ja': '選択を追加'},
+    '進度': {'en': 'Progress', 'ja': '進捗'},
     '加入漫畫與章節': {'en': 'Add manga and chapters', 'ja': '漫画と章を追加'},
     '漫畫': {'en': 'Manga', 'ja': '漫画'},
     '加入佇列': {'en': 'Add to queue', 'ja': 'キューに追加'},
