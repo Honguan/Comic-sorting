@@ -2947,7 +2947,7 @@ class WorkflowTests(unittest.TestCase):
             self.assertTrue(q.running)
             self.assertTrue(self.app.manga_busy)
             self.assertEqual([job.status for job in q.active_jobs], ['done', 'pending'])
-            self.assertIn('佇列已暫停', q.label.get())
+            self.assertEqual(q.label.get(), '已暫停；按「繼續佇列」恢復')
             self.assertFalse(q.stop_button.instate(['disabled']))
             self.assertTrue(q.range_button.instate(['disabled']))
             notify.assert_not_called()

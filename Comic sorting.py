@@ -284,7 +284,7 @@ class FileAggregatorApp:
 
         integration = ttk.LabelFrame(self.aggregate_tab, text=tr("章節整合"), padding=12)
         integration.pack(fill="x", padx=8, pady=8)
-        ttk.Label(integration, text=tr("先在漫畫庫選取漫畫或章節；整合是選用工具。"), wraplength=450).pack(anchor="w")
+        ttk.Label(integration, text=tr("先從漫畫庫選取漫畫或章節。"), wraplength=450).pack(anchor="w")
         ttk.Label(integration, textvariable=self.current_series).pack(anchor="w", pady=8)
         range_row = ttk.Frame(integration)
         range_row.pack(fill="x")
@@ -315,7 +315,7 @@ class FileAggregatorApp:
             values=tuple(LANGUAGES.values()), state="readonly", width=12)
         language_choice.pack(side="left", padx=8)
         language_choice.bind("<<ComboboxSelected>>", lambda _event: self.save_settings())
-        ttk.Label(language_row, text=tr("重新啟動後套用語言")).pack(anchor="w")
+        ttk.Label(language_row, text=tr("重啟後套用")).pack(anchor="w")
 
         export = ttk.LabelFrame(self.export_tab, text=tr("Komga 匯出"), padding=8)
         export.pack(fill="x", padx=10, pady=6)

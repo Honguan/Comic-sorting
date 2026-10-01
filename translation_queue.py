@@ -1180,7 +1180,7 @@ class TranslationQueue:
         box = ttk.Frame(dialog, padding=12)
         box.pack(fill="both", expand=True)
         ttk.Label(box, text=job.path.name).grid(row=0, column=0, columnspan=2, sticky="w")
-        ttk.Label(box, text=tr("共 {0} 頁，依檔名自然排序；包含起訖頁").format(len(images))).grid(row=1, column=0, columnspan=2, sticky="w", pady=6)
+        ttk.Label(box, text=tr("共 {0} 頁；檔名自然排序，含起訖頁").format(len(images))).grid(row=1, column=0, columnspan=2, sticky="w", pady=6)
         start = tk.StringVar(dialog, value=str(job.start_page))
         end = tk.StringVar(dialog, value="" if job.end_page is None else str(job.end_page))
         for row, title, variable in ((2, "起始頁", start), (3, "結束頁（空白到最後）", end)):
@@ -1189,7 +1189,7 @@ class TranslationQueue:
         range_export = tk.BooleanVar(dialog, value=job.range_export)
         export_check = ttk.Checkbutton(box, text=tr("指定頁面完成後匯出 CBZ"), variable=range_export)
         export_check.grid(row=4, column=0, columnspan=2, sticky="w", pady=(8, 0))
-        ttk.Label(box, text=tr("指定頁數專用，預設不匯出；勾選後須全章結果齊全才匯出整章 CBZ。"),
+        ttk.Label(box, text=tr("勾選後才匯出整章 CBZ；須全章結果齊全。"),
                   wraplength=420).grid(row=5, column=0, columnspan=2, sticky="w")
 
         def update_export(*_args):
@@ -1262,7 +1262,7 @@ class TranslationQueue:
     def request_pause(self):
         if self.running and not self.stop.is_set():
             self.pause_requested.set()
-            self.label.set(tr("目前項目完成後暫停後續佇列"))
+            self.label.set(tr("完成目前項目後暫停"))
             self.update_controls()
 
     def request_stop(self):
@@ -1438,7 +1438,7 @@ class TranslationQueue:
                 self.paused_at = event[1]
                 elapsed = self.paused_at - self.started_at
                 self.elapsed_label.set(elapsed_text(elapsed))
-                self.label.set(tr("佇列已暫停，按「繼續佇列」繼續"))
+                self.label.set(tr("已暫停；按「繼續佇列」恢復"))
                 if self.history_run is not None:
                     self.history_run['elapsed_seconds'] = elapsed
                     self.save_history()
