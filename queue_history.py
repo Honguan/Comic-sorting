@@ -178,15 +178,18 @@ MODEL_COLUMNS = dict(scope='項目', model='模型', total_tokens='Token 數', t
 def create_model_table(parent):
     toolbar = ttk.Frame(parent)
     toolbar.grid(row=0, column=0, columnspan=2, sticky='ew', padx=4, pady=4)
-    note = ttk.Label(toolbar, width=1, text=tr('佔比依 OCR／翻譯／合計分別計算；Token 僅含已回報用量，費用僅含已知金額。平均值以每次請求計算；平均 Token 排除未回報請求，金額不完整時不顯示平均費用。') + '\n' + tr('合計已包含 OCR 與翻譯；Jev 另列。快取屬於輸入 Token，分項只累加已回報資料；舊資料不推算模型分項。'), wraplength=950)
+    brief_note = tr('合計包含 OCR 與翻譯；預估費用僅含已知金額，非實際帳單。')
+    detailed_note = tr('佔比依 OCR／翻譯／合計分別計算；Token 僅含已回報用量，費用僅含已知金額。平均值以每次請求計算；平均 Token 排除未回報請求，金額不完整時不顯示平均費用。') + '\n' + tr('合計已包含 OCR 與翻譯；Jev 另列。快取屬於輸入 Token，分項只累加已回報資料；舊資料不推算模型分項。')
+    note = ttk.Label(toolbar, width=1, text=brief_note, wraplength=950)
     note.pack(side='left', fill='x', expand=True)
     note.bind('<Configure>', lambda event: note.configure(wraplength=event.width) if event.width > 100 else None)
-    overview = ('scope', 'model', 'total_tokens', 'token_share', 'requests', 'cost', 'avg_tokens', 'avg_cost')
+    overview = ('scope', 'model', 'total_tokens', 'requests', 'cost')
     table = ttk.Treeview(parent, columns=tuple(MODEL_COLUMNS), displaycolumns=overview, show='headings', height=8)
     detailed = tk.BooleanVar(parent, value=False)
     def toggle_columns():
         table.configure(displaycolumns=tuple(MODEL_COLUMNS) if detailed.get() else overview)
         table.xview_moveto(0)
+        note.configure(text=detailed_note if detailed.get() else brief_note)
     table.column_toggle = ttk.Checkbutton(toolbar, text=tr('全部欄位'), variable=detailed, command=toggle_columns)
     table.column_toggle.pack(side='right', padx=(8, 0))
     widths = dict(scope=60, model=180, total_tokens=100, token_share=85, requests=70, request_share=85,

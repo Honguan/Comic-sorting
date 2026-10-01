@@ -609,10 +609,8 @@ class FileAggregatorApp:
             self.folder_tree.insert(parent, 'end')
             if self.folder_tree.item(parent, 'open') or any(Path(path) in selected_paths for path in visible):
                 self.load_series_children(parent)
-        self.scan_status_text.set(
-            tr("{0} 個系列｜單一章節 {1} 個｜整合資料夾 {2} 個").format(
-                len(self.series_groups), sum(folder_kind(name) == "chapter" for _, name, _ in self.folders),
-                sum(folder_kind(name) == "merged" for _, name, _ in self.folders)))
+        self.scan_status_text.set(tr("{0} 部漫畫 · {1} 個資料夾").format(
+            len(self.series_groups), len(self.folders)))
 
         if view:
             self.folder_tree.yview_moveto(view[0])
@@ -788,8 +786,14 @@ class FileAggregatorApp:
             item = selection[0]
             path = self.tree_items[item][1]
             values = self.folder_tree.item(item, "values")
-            self.folder_details.set(path.name + "\n" + " | ".join(str(value) for value in values if value) + "\n" + str(path))
             kind = self.tree_items[item][0]
+            preview = ""
+            if len(values) >= 5:
+                status = tr("{0} 個資料夾").format(len(self.series_groups[path])) if kind == "series" else values[1]
+                preview = " · ".join(filter(None, (status, tr("{0} 頁").format(values[4]))))
+            details = [tr(title) + "：" + str(value) for title, value in zip(
+                ("資料夾類型", "狀態", "資料夾大小", "更新時間", "頁數"), values) if value]
+            self.folder_details.set("\n".join(filter(None, (path.name, preview, str(path), *details))))
             self.current_series.set(self.series_name(path if kind == 'series' else path.parent))
         else:
             self.folder_details.set("")

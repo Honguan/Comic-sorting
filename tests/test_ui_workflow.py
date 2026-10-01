@@ -265,7 +265,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual([j.status for j in q.jobs], ['prepared', 'pending', 'pending', 'pending'])
         self.assertTrue(all(j.error == '' for j in q.jobs))
         self.assertEqual(load_json(self.settings, {})['bt_jobs'][0]['status'], 'prepared')
-        self.assertIn('前處理完成', str(q.tree.item(str(id(q.jobs[0])), 'values')))
+        self.assertEqual(q.tree.set(str(id(q.jobs[0])), 'status'), '待翻譯')
         self.assertFalse(q.running)
         (path / '1.png').write_bytes(b'changed source')
         q.jobs[0].status = 'failed'
@@ -1036,9 +1036,55 @@ class WorkflowTests(unittest.TestCase):
         leaf = tree.get_children(parent)[0]
         tree.selection_set(leaf)
         self.app.on_tree_select()
+        preview = "\n".join(self.app.folder_details.get().splitlines()[:2])
+        self.assertNotIn(str(chapter), preview)
+        self.assertNotIn(tree.set(leaf, 'updated'), preview)
         self.assertIn(str(chapter), self.app.folder_details.get())
         self.assertIn(tree.set(leaf, 'updated'), self.app.folder_details.get())
         self.assertIn(tree.set(leaf, 'status'), self.app.folder_details.get())
+        self.assertEqual(self.app.scan_status_text.get(), '1 部漫畫 · 1 個資料夾')
+        tree.selection_set(parent)
+        self.app.on_tree_select()
+        self.assertIn('1 個資料夾', self.app.folder_details.get().splitlines()[1])
+
+    def test_compact_summary_preserves_full_totals_and_unknown_counts(self):
+        q = self.app.translation_queue
+        q.jobs = [Job(self.chapter(f'Chapter {i}'), 'translate', status=status)
+                  for i, status in enumerate(('pending', 'prepared', 'done', 'blocked'), 1)]
+        q.retry_count = 7
+        pending = q.jobs[:2]
+        for job in pending:
+            q.pending_file_counts[str(id(job))] = None
+            q.count_cache[job.path, job.start_page, job.end_page] = None
+        q.update_summary()
+        self.assertEqual(q.summary_preview.get().splitlines()[0], '等待 2 · 完成 1 · 需處理 1')
+        self.assertIn('頁數尚未確認', q.summary_preview.get())
+        self.assertNotIn('0 張', q.summary_preview.get())
+        self.assertIn('尚未確認', q.selection_page_count(pending))
+        self.assertIn('本次重試 7', q.summary.get())
+        for job in pending:
+            q.pending_file_counts[str(id(job))] = 0
+            q.count_cache[job.path, job.start_page, job.end_page] = 0
+        q.update_summary()
+        self.assertIn('待翻譯檔案 0 張', q.summary_preview.get())
+        self.assertEqual(q.selection_page_count(pending), '0 頁')
+        for job, count in zip(pending, (3, 4)):
+            q.pending_file_counts[str(id(job))] = count
+            q.count_cache[job.path, job.start_page, job.end_page] = count
+        q.update_summary()
+        self.assertIn('待翻譯檔案 7 張', q.summary_preview.get())
+        with mock.patch('translation_queue.messagebox.showinfo') as info:
+            q.view_menu.invoke(4)
+        self.assertIn('本次重試 7', info.call_args.args[1])
+        self.assertNotIn('｜', info.call_args.args[1])
+        for job in pending:
+            job.status = 'done'
+        q.update_summary()
+        self.assertEqual(q.summary_preview.get(), '等待 0 · 完成 3 · 需處理 1')
+        q.jobs[-1].status = 'done'
+        q.update_summary()
+        self.assertEqual(q.summary_preview.get(), '等待 0 · 完成 4')
+
 
     def test_queue_columns_fit_window_and_selected_details_keep_full_path(self):
         from types import SimpleNamespace
@@ -1062,7 +1108,8 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn('LLM_CAPACITY', q.selection_details.get())
         q.tree.selection_set(q.tree.parent(item))
         q.update_controls()
-        self.assertEqual(q.selection_details.get().splitlines()[0], str(path.parent))
+        self.assertEqual(q.selection_details.get().splitlines()[0], path.parent.name)
+        self.assertIn(str(path.parent), q.selection_details.get())
         self.assertIn('翻譯頁數：', q.selection_details.get())
         self.assertIn('0 單一｜1 整合', q.selection_details.get())
 
@@ -2139,7 +2186,7 @@ class WorkflowTests(unittest.TestCase):
             run_jobs(q.active_jobs, dict(bt_path="installed", bt_config=""), "", True, q.stop, q.events.put)
             q.poll()
         self.assertEqual(q.jobs[0].status, "done_warning")
-        self.assertEqual(q.tree.set(str(id(q.jobs[0])), "status"), tr("完成（有異常）"))
+        self.assertEqual(q.tree.set(str(id(q.jobs[0])), "status"), tr("完成需檢查"))
         self.assertIn("3221225477", q.jobs[0].error)
         self.assertEqual(load_json(self.settings, {})["bt_jobs"][0]["status"], "done_warning")
         q.tree.selection_set(str(id(q.jobs[0])))
@@ -2164,7 +2211,7 @@ class WorkflowTests(unittest.TestCase):
                     q.open_model_stats()
                     root.update()
                     table = q.model_usage_table
-                    overview = ('scope', 'model', 'total_tokens', 'token_share', 'requests', 'cost', 'avg_tokens', 'avg_cost')
+                    overview = ('scope', 'model', 'total_tokens', 'requests', 'cost')
                     self.assertEqual(table['displaycolumns'], overview)
                     self.assertLessEqual(sum(table.column(key, 'width') for key in overview), table.winfo_width())
                     row = json.dumps(['OCR', 'demo'])

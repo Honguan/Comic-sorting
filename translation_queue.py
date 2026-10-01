@@ -29,8 +29,8 @@ from queue_phases import MODES, READY, MARKER, prepared
 
 ACTIONS = {"translate": "翻譯", "export": "匯出", "cleanup": "清理"}
 STATUSES = {"pending": "等待", "running": "執行中", "done": "完成",
-            "prepared": "前處理完成／待翻譯", "skipped": "已略過",
-            "done_warning": "完成（有異常）",
+            "prepared": "待翻譯", "skipped": "已略過",
+            "done_warning": "完成需檢查",
             "failed": "失敗", "cancelled": "已停止", "blocked": "前置工作失敗"}
 
 
@@ -251,7 +251,8 @@ class TranslationQueue:
         self.context_menu.add_command(label=tr("清除已完成"), command=self.clear_completed)
         self.clear_completed_menu_index = self.context_menu.index("end")
         self.summary = tk.StringVar()
-        summary_label = ttk.Label(footer, textvariable=self.summary, wraplength=650, style="Muted.TLabel")
+        self.summary_preview = tk.StringVar()
+        summary_label = ttk.Label(footer, textvariable=self.summary_preview, wraplength=650, style="Muted.TLabel")
         summary_label.pack(fill="x", pady=(4, 2))
         summary_label.bind("<Configure>", lambda event: summary_label.configure(wraplength=event.width)
                            if event.width > 100 and self.sash_after is None else None)
@@ -317,6 +318,8 @@ class TranslationQueue:
         self.view_menu.add_command(label=tr("LLM 用量"), command=self.usage_toggle.invoke)
         self.view_menu.add_command(label=tr("歷史紀錄"), command=self.history_button.invoke)
         self.view_menu.add_cascade(label=tr("統計"), menu=self.stats_menu)
+        self.view_menu.add_command(label=tr("佇列摘要"), command=lambda: messagebox.showinfo(
+            tr("佇列摘要"), self.summary.get().replace("｜", "\n").replace(" | ", "\n")))
         self.view_menu.add_separator()
         self.view_menu.add_command(label=self.zoom_button.cget("text"), command=self.zoom_button.invoke)
         self.view_menu.configure(postcommand=lambda: self.view_menu.entryconfigure(
@@ -682,16 +685,20 @@ class TranslationQueue:
         if job:
             reason = error_info(job.status, job.error)[1]
             heading = f"{job.path.name} · {tr(STATUSES[job.status])}"
-            metadata = " | ".join((tr(FOLDER_KINDS[folder_kind(job.path.name)]),
-                                   tr(ACTIONS[job.action]), self.page_range_text(job)))
+            metadata = " · ".join((tr(ACTIONS[job.action]), self.page_range_text(job)))
             self.selection_details.set("\n".join(filter(None, (heading, reason, metadata, str(job.path), summary))))
         else:
-            self.selection_details.set((item.split(":", 1)[1] + "\n" if len(selection) == 1 else "") + summary)
+            heading = Path(item.split(":", 1)[1]).name if len(selection) == 1 else tr("已選取 {0} 個佇列項目").format(len(jobs))
+            preview = tr("翻譯頁數：{0}").format(self.selection_page_count(jobs)) if any(j.action == "translate" for j in jobs) else " · ".join(sorted({tr(ACTIONS[j.action]) for j in jobs}))
+            path = item.split(":", 1)[1] if len(selection) == 1 else ""
+            self.selection_details.set("\n".join(filter(None, (heading, preview, path, summary))))
 
     def selection_page_count(self, jobs):
         keys = [(j.path, j.start_page, j.end_page) for j in jobs if j.action == "translate"]
         counts = [self.count_cache.get(key) for key in keys]
         text = tr("{0} 頁").format(f"{sum(count for count in counts if count is not None):,}")
+        if counts and all(count is None for count in counts):
+            text = tr("尚未確認")
         calculating = sum(key not in self.count_cache for key in keys)
         unknown = counts.count(None) - calculating
         if calculating:
@@ -901,20 +908,30 @@ class TranslationQueue:
     def update_summary(self):
         counts = [self.pending_file_counts.get(str(id(job))) for job in self.jobs
                   if job.action == "translate" and job.status in READY]
-        files = tr("｜待翻譯檔案 {0} 張").format(f"{sum(count for count in counts if count is not None):,}")
+        total_pages = sum(count for count in counts if count is not None)
+        files = tr("｜待翻譯檔案 {0} 張").format(f"{total_pages:,}")
+        notes = ""
         unknown = counts.count(None)
         calculating = sum((j.path, j.start_page, j.end_page) not in self.count_cache for j in self.jobs
                           if j.action == "translate" and j.status in READY)
         if calculating:
-            files += tr("（{0} 項計算中）").format(calculating)
+            notes += tr("（{0} 項計算中）").format(calculating)
         if unknown > calculating:
-            files += tr("（{0} 項無法計數）").format(unknown - calculating)
+            notes += tr("（{0} 項無法計數）").format(unknown - calculating)
         failures = sum(j.status == "failed" for j in self.jobs)
         retries = tr("｜失敗 {0}｜本次重試 {1}").format(failures, self.retry_count) if failures or self.retry_count else ""
+        pending = sum(j.status in READY for j in self.jobs)
+        done = sum(j.status in ("done", "done_warning") for j in self.jobs)
+        attention = sum(j.status in ("failed", "cancelled", "blocked") for j in self.jobs)
         self.summary.set(tr("佇列 {0} 項｜等待 {1}｜完成 {2}｜需處理 {3}").format(
-            len(self.jobs), sum(j.status in READY for j in self.jobs),
-            sum(j.status in ("done", "done_warning") for j in self.jobs),
-            sum(j.status in ("failed", "cancelled", "blocked") for j in self.jobs)) + retries + files)
+            len(self.jobs), pending, done, attention) + retries + files + notes)
+        preview = tr("等待 {0} · 完成 {1}").format(pending, done)
+        if attention:
+            preview += tr(" · 需處理 {0}").format(attention)
+        if counts:
+            pages = files.lstrip("｜ |") if any(count is not None for count in counts) else tr("頁數尚未確認")
+            preview += "\n" + pages + notes
+        self.summary_preview.set(preview)
 
     def browse(self, variable, directory):
         selected = filedialog.askdirectory(initialdir=variable.get() or None) if directory else filedialog.askopenfilename()
@@ -1141,7 +1158,8 @@ class TranslationQueue:
         selected = set(self.tree.selection())
         for job in self.jobs:
             if str(id(job)) in selected:
-                messagebox.showinfo(tr("工作詳情"), f"{job.path}\n{tr(ACTIONS[job.action])} / {tr(STATUSES[job.status])}\n{self.page_range_text(job)}\n\n{error_details(job.status, job.error)}")
+                status = tr("前處理完成／待翻譯") if job.status == "prepared" else tr(STATUSES[job.status])
+                messagebox.showinfo(tr("工作詳情"), f"{job.path}\n{tr(ACTIONS[job.action])} / {status}\n{self.page_range_text(job)}\n\n{error_details(job.status, job.error)}")
                 break
 
     def edit_page_range(self):
