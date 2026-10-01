@@ -21,6 +21,7 @@ from comic_core import (clear_work_folders, export_chapter, image_files,
                         load_json, save_json, translation_status, translations_complete)
 from ui_language import tr
 from queue_errors import error_info
+from queue_stats import merge_snapshots
 
 
 BT_STAGES = {"Text Detection": "enable_detect", "OCR": "enable_ocr",
@@ -47,23 +48,57 @@ def parse_bt_usage(line):
                 rates_date=fields.get('rates_date'), **counts)
 
 
-def parse_bt_request_usage(line):
-    """Read official per-response usage, never cumulative OCR or token subsets."""
+# Standard USD per million tokens, verified 2026-10-01 on each model's page:
+# https://developers.openai.com/api/docs/models/<model>
+# Input, cached input, cache writes, output. Cache writes replace input pricing.
+BT_TOKEN_RATES = {
+    'gpt-6.1-sol': ('2', '0.10', '2.50', '10'),
+    'gpt-6-astra': ('10', '1', '12.50', '50'),
+    'gpt-6-sol': ('2', '0.20', '2.50', '10'),
+    'gpt-6-luna': ('0.10', '0.01', '0.125', '0.50'),
+    'gpt-5.6-sol': ('4', '0.40', '5', '20'),
+    'gpt-5.6-terra': ('2', '0.20', '2.50', '12'),
+    'gpt-5.6-luna': ('0.20', '0.02', '0.25', '1.20'),
+    'gpt-5.5': ('5', '0.50', None, '30'),
+}
+
+
+def estimate_bt_cost(counts, model):
+    rates = BT_TOKEN_RATES.get(model)
+    if rates is None or not all(key in counts for key in ('prompt', 'completion')):
+        return None
+    prompt, output = counts['prompt'], counts['completion']
+    hit, write = counts.get('cache_hit', 0), counts.get('cache_write', 0)
+    if (hit + write > prompt or (write and rates[2] is None)
+            or counts.get('total', prompt + output) != prompt + output):
+        return None
+    input_rate, hit_rate, write_rate, output_rate = (
+        Decimal(rate) if rate is not None else Decimal(0) for rate in rates)
+    # Reasoning is already included in completion; cache counts partition prompt.
+    input_cost = (prompt - hit - write) * input_rate + hit * hit_rate + write * write_rate
+    if prompt > 272_000:
+        input_cost *= 2
+        output_rate *= Decimal('1.5')
+    return (input_cost + output * output_rate) / 1_000_000
+
+
+def parse_bt_request_usage(line, model=None):
+    """Read per-response usage and estimate Standard API equivalent cost."""
     match = re.search(r"\[(?:DEBUG|INFO)\s*\]\s+(ocr_llm|trans_llm|llm_chat):\w+:\d+ - (.*)", line)
     if not match:
         return None
     module, message = match.groups()
     scope = 'OCR' if module == 'ocr_llm' else 'translation'
+    counts = {}
     used = re.fullmatch(r"Used (\d+) tokens \(Total: \d+\)", message)
     if used and module in ('ocr_llm', 'trans_llm'):
         total = int(used[1])
-    elif module in ('trans_llm', 'llm_chat') and message.startswith(
-            ('LLM token usage: ', 'LLM output-limited response: ')):
+    elif message.startswith(('LLM token usage: ', 'LLM output-limited response: ')):
         # Output-limit diagnostics can also contain arbitrary response text.
         details = message.split(': ', 1)[1].split(', content=', 1)[0]
         try:
             counts = {key: int(value) for key, value in
-                      re.findall(r"(?:^|, )(prompt|completion|total)=([^, ]+)", details)}
+                      re.findall(r"(?:^|, )(prompt|completion|total|cache_hit|cache_write)=([^, ]+)", details)}
             if any(value < 0 for value in counts.values()):
                 return None
         except ValueError:
@@ -73,8 +108,15 @@ def parse_bt_request_usage(line):
             total = counts['prompt'] + counts['completion']
     else:
         return None
-    return dict(scope=scope, requests=1, total_tokens=total if total is not None else 0,
-                missing_usage_requests=int(total is None), unpriced_requests=1, cost=None)
+    cost = estimate_bt_cost(counts, model)
+    record = dict(scope=scope, requests=1, total_tokens=total if total is not None else 0,
+                  missing_usage_requests=int(total is None), unpriced_requests=int(cost is None),
+                  cost=cost, **{key: value for key, value in counts.items() if key != 'total'})
+    if cost is not None:
+        record.update(model=model, rates_date='2026-10-01',
+                      price_basis='Self-estimated OpenAI Standard API equivalent (not a bill; unreported cache=0)',
+                      price_source='https://developers.openai.com/api/docs/models/' + model)
+    return record
 
 
 def parse_jev_stats(line):
@@ -290,6 +332,7 @@ def run_translation(command, root, env, stop, progress, log_context="", usage=No
     stages = {}
     jev_seen, jev_totals = set(), {}
     usage_records, summary_scopes = {}, set()
+    usage_models = {}
     request_usage_seen = False
     ansi = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\))")
     owned = session is None
@@ -315,17 +358,26 @@ def run_translation(command, root, env, stop, progress, log_context="", usage=No
             if line:
                 logger.info("[%s] BT %s", log_context, line)
             recent.append(line)
+            model_info = re.search(r"\[INFO\s*\]\s+(?:module_manager|trans_llm|ocr_llm):\w+:\d+ - LLM (translation|OCR) run: .*?model='([^']+)'", line)
+            if model_info:
+                usage_models[model_info[1]] = model_info[2]
             consumption = parse_bt_usage(line)
             if consumption is not None:
                 summary_scopes.add(consumption['scope'])
+                previous = usage_records.get(consumption['scope'], {})
+                if (consumption['cost'] is None and previous.get('cost') is not None
+                        and all(previous.get(key) == consumption[key] for key in
+                                ('requests', 'total_tokens', 'missing_usage_requests'))):
+                    consumption = dict(previous)
             else:
                 response_usage = parse_bt_request_usage(line)
                 if response_usage is not None and response_usage['scope'] not in summary_scopes:
+                    response_usage = parse_bt_request_usage(line, usage_models.get(response_usage['scope']))
                     request_usage_seen = True
                     previous = usage_records.get(response_usage['scope'], {})
-                    consumption = dict(response_usage)
-                    for key in ('requests', 'total_tokens', 'missing_usage_requests', 'unpriced_requests'):
-                        consumption[key] += previous.get(key, 0)
+                    consumption = merge_snapshots((previous, response_usage))
+                    if consumption['cost'] is not None:
+                        consumption['cost'] = Decimal(consumption['cost'])
             if consumption is not None and usage is not None:
                 usage_records[consumption['scope']] = consumption
                 usage(consumption)
@@ -333,10 +385,11 @@ def run_translation(command, root, env, stop, progress, log_context="", usage=No
                         and 'total' not in summary_scopes):
                     # Phase/job snapshots replace earlier snapshots; Jev stays separate.
                     records = [usage_records[scope] for scope in ('OCR', 'translation') if scope in usage_records]
-                    total = {key: sum(record[key] for record in records) for key in
-                             ('requests', 'total_tokens', 'missing_usage_requests', 'unpriced_requests')}
-                    costs = [record['cost'] for record in records if record['cost'] is not None]
-                    usage(dict(scope='total', cost=sum(costs) if costs else None, **total))
+                    total = dict(merge_snapshots(records), scope='total')
+                    if total['cost'] is not None:
+                        total['cost'] = Decimal(total['cost'])
+                    usage_records['total'] = total
+                    usage(total)
             stats = parse_jev_stats(line)
             if stats is not None and stats['audit_id'] not in jev_seen:
                 jev_seen.add(stats.pop('audit_id'))
