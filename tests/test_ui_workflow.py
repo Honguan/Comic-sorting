@@ -17,6 +17,66 @@ def detail_values(window):
 
 
 class WorkflowTests(unittest.TestCase):
+    def test_model_statistics_live_and_history_remain_clear_and_exact(self):
+        import json
+        from queue_worker import parse_bt_request_usage
+        from queue_stats import merge_snapshots
+        from queue_history import save_run
+        from model_pricing import get_price
+        q = self.app.translation_queue
+        ocr = parse_bt_request_usage('[INFO] ocr_llm:run:1 - LLM token usage: prompt=100, completion=20, total=120, cache_hit=80', 'gpt-4o-mini')
+        translation = parse_bt_request_usage('[INFO] trans_llm:run:1 - LLM token usage: prompt=100, completion=20, total=120',
+                                             'private-model', get_price('private-model', {'private-model': ['2', '2', '2', '10']}))
+        q.usage_records[0, 'OCR'] = ocr
+        q.usage_records[0, 'translation'] = translation
+        q.usage_records[0, 'total'] = dict(merge_snapshots((ocr, translation)), scope='total')
+        q.stats_menu.invoke(0)
+        table = q.model_usage_table
+        ocr_row = json.dumps(['OCR', 'gpt-4o-mini'])
+        translation_row = json.dumps(['translation', 'private-model'])
+        self.assertEqual(table.set(ocr_row, 'prompt'), '100')
+        self.assertEqual(table.set(ocr_row, 'cache_hit'), '80')
+        self.assertEqual(table.set(ocr_row, 'cost'), 'US$0.000021')
+        self.assertEqual(len(table.get_children()), 4)
+        translation = merge_snapshots((translation, translation))
+        q.usage_records[0, 'translation'] = translation
+        q.usage_records[0, 'total'] = dict(merge_snapshots((ocr, translation)), scope='total')
+        q.show_usage()
+        self.assertEqual(table.set(translation_row, 'requests'), '2')
+        self.assertEqual(table.set(translation_row, 'cost'), 'US$0.000800')
+        with mock.patch.object(table, 'item', wraps=table.item) as update:
+            q.show_usage()
+        self.assertFalse(any('values' in call.kwargs for call in update.call_args_list))
+        usage = {scope: dict(value, cost=str(value['cost']) if value['cost'] is not None else None)
+                 for (_index, scope), value in q.usage_records.items()}
+        record = dict(id='model-statistics', started_at='2026-10-01T12:00:00', status='done', elapsed_seconds=10,
+                      jobs=[dict(path=str(self.folder), action='translate', status='done', usage=usage, stage_seconds={})])
+        save_run(self.app.history_path, record)
+        q.open_history()
+        window = q.history_window
+        self.assertEqual(window.total_details.winfo_manager(), '')
+        window.toggle_totals()
+        self.assertEqual(window.total_details.winfo_manager(), 'pack')
+        window.toggle_totals()
+        self.assertEqual(window.total_details.winfo_manager(), '')
+        window.tree.selection_set('model-statistics')
+        window.show_details()
+        history_table = window.detail_tables['models']
+        self.assertEqual(history_table.set(translation_row, 'cost'), table.set(translation_row, 'cost'))
+        self.assertEqual(history_table.set(ocr_row, 'cache_hit'), '80')
+        legacy = dict(model='a', models=['a', 'b'], requests=2, total_tokens=240, cost='0.004',
+                      missing_usage_requests=0, unpriced_requests=0)
+        record['jobs'][0]['usage']['total'] = legacy
+        save_run(self.app.history_path, record)
+        window.refresh()
+        window.tree.selection_set('model-statistics')
+        window.show_details()
+        unknown = json.dumps(['total', ''])
+        self.assertEqual(history_table.set(unknown, 'model'), '模型未分項')
+        self.assertEqual(history_table.set(unknown, 'prompt'), '—')
+        self.assertEqual(history_table.set(unknown, 'cost'), 'US$0.004000')
+
+
     def test_status_batch_updates_controls_and_counts_once(self):
         q = self.app.translation_queue
         q.jobs = [Job(self.folder / f'Chapter {i}', 'translate') for i in range(3)]
@@ -71,7 +131,9 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn('編輯設定檔', labels)
         self.assertIn('開啟原生設定介面', labels)
         self.assertIn('開啟紀錄資料夾', labels)
-        self.assertIn('Jev 統計', labels)
+        self.assertEqual(q.stats_menu.entrycget(1, 'label'), 'Jev 統計')
+        q.stats_menu.invoke(1)
+        self.assertTrue(q.jev_window.winfo_exists())
         command = ['python.exe', '-u', '-m', 'ballontranslator', '--config', 'native.json']
         with mock.patch.object(q, 'command', return_value=(command, self.folder, {})), \
                 mock.patch('translation_queue.subprocess.Popen') as launch:

@@ -9,6 +9,20 @@ from queue_history import find_runs, history_totals, save_run, scope_records, us
 
 
 class HistoryStorageTests(unittest.TestCase):
+    def test_grand_totals_keep_bounded_usage_summaries(self):
+        from decimal import Decimal
+        from unittest.mock import patch
+        value = dict(requests=1, total_tokens=120, cost='0.001', unpriced_requests=0, missing_usage_requests=0)
+        record = dict(jobs=[dict(status='done', usage={'total': value})], elapsed_seconds=1)
+        with patch('queue_history.iter_runs', return_value=(record for _ in range(1000))):
+            result = history_totals('unused.sqlite3')
+        self.assertEqual((result['runs'], result['jobs'], result['elapsed_seconds']), (1000, 1000, 1000))
+        self.assertEqual(len(result['usage_records']['total']), 1)
+        summary = result['usage_records']['total'][0]
+        self.assertEqual((summary['requests'], summary['total_tokens']), (1000, 120000))
+        self.assertEqual(Decimal(summary['cost']), Decimal('1'))
+        self.assertEqual(value['requests'], 1)
+
     def test_updated_checkpoint_search_uses_current_paths(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / 'history.sqlite3'

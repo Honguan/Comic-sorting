@@ -10,7 +10,7 @@ from tkinter import font as tkfont, messagebox, ttk
 
 from queue_worker import BT_STAGES, parse_bt_usage
 from queue_errors import error_details, error_info
-from queue_stats import used_models
+from queue_stats import used_models, model_usage, merge_snapshots
 from ui_language import tr
 
 JEV_FIELDS = {'requests': '請求數', 'input_tokens': '輸入 Token', 'missing_input_usage_requests': '未回報請求數',
@@ -137,7 +137,7 @@ def completed_jobs(record):
 def history_totals(path):
     counts = dict(runs=0, jobs=0, elapsed_seconds=0)
     jev = {}
-    usage = {scope: [] for scope in ('OCR', 'Jev', 'translation', 'total')}
+    totals = {scope: {} for scope in ('OCR', 'Jev', 'translation', 'total')}
     # ponytail: scan stored runs on refresh; persist aggregates if history scanning becomes slow.
     for record in iter_runs(path):
         counts['runs'] += 1
@@ -145,8 +145,9 @@ def history_totals(path):
         counts['elapsed_seconds'] += record.get('elapsed_seconds') or 0
         for key, value in jev_totals(record['jobs']).items():
             jev[key] = jev.get(key, 0) + value
-        for scope, values in usage.items():
-            values.extend(scope_records(record, scope))
+        for scope in totals:
+            totals[scope] = merge_snapshots((totals[scope], *scope_records(record, scope)))
+    usage = {scope: [value] if value else [] for scope, value in totals.items()}
     return dict(counts, usage={scope: usage_text(values) for scope, values in usage.items()}, usage_records=usage, jev_stats=jev)
 
 
@@ -159,6 +160,60 @@ def usage_columns(records):
     pricing = tr("僅含已知金額") if costs and partial else tr("完整") if costs else tr("尚未回報")
     reporting = tr("回報不完整") if any(value['missing_usage_requests'] for value in records) else tr("完整") if records else tr("尚未回報")
     return tokens, cost, requests, pricing, reporting
+
+
+MODEL_COLUMNS = dict(scope='項目', model='模型', total_tokens='Token 數', requests='請求數',
+                     cost='預估金額（USD）', prompt='輸入 Token', completion='輸出 Token',
+                     cache_hit='快取讀取', cache_write='快取寫入', unpriced_requests='未計價請求數',
+                     missing_usage_requests='未回報請求數', pricing='金額完整性')
+
+
+def create_model_table(parent):
+    note = ttk.Label(parent, text=tr('合計已包含 OCR 與翻譯；Jev 另列。快取屬於輸入 Token，分項只累加已回報資料；舊資料不推算模型分項。'), wraplength=950)
+    note.grid(row=0, column=0, columnspan=2, sticky='ew', padx=4, pady=4)
+    note.bind('<Configure>', lambda event: note.configure(wraplength=max(100, event.width)))
+    table = ttk.Treeview(parent, columns=tuple(MODEL_COLUMNS), show='headings', height=8)
+    for key, title in MODEL_COLUMNS.items():
+        table.heading(key, text=tr(title))
+        table.column(key, width=220 if key == 'model' else 145 if key in ('cost', 'pricing') else 80 if key in ('scope', 'requests') else 110,
+                     minwidth=55, stretch=False, anchor='w' if key in ('scope', 'model', 'pricing') else 'e')
+    vertical = ttk.Scrollbar(parent, command=table.yview)
+    horizontal = ttk.Scrollbar(parent, orient='horizontal', command=table.xview)
+    table.configure(yscrollcommand=vertical.set, xscrollcommand=horizontal.set)
+    table.grid(row=1, column=0, sticky='nsew')
+    vertical.grid(row=1, column=1, sticky='ns')
+    horizontal.grid(row=2, column=0, sticky='ew')
+    parent.rowconfigure(1, weight=1)
+    parent.columnconfigure(0, weight=1)
+    return table
+
+
+def fill_model_usage(table, usage):
+    rows = {}
+    for scope, label in (('OCR', 'OCR'), ('translation', tr('翻譯')), ('total', tr('合計'))):
+        models = {}
+        for record in usage.get(scope, []):
+            for model, value in model_usage(record).items():
+                models[model] = merge_snapshots((models.get(model, {}), value))
+        for model, value in sorted(models.items()):
+            value = dict(dict(total_tokens=0, requests=0, cost=None, unpriced_requests=0, missing_usage_requests=0), **value)
+            cost = value['cost']
+            fields = dict(scope=label, model=model or tr('模型未分項'), pricing=usage_columns([value])[3],
+                          cost=f"US${Decimal(cost).quantize(Decimal('0.000001'), rounding=ROUND_CEILING):,.6f}" if cost is not None else tr('無法預估'))
+            fields.update({key: f"{value[key]:,}" if key in value else '—'
+                           for key in MODEL_COLUMNS if key not in fields})
+            rows[json.dumps([scope, model])] = tuple(fields[key] for key in MODEL_COLUMNS)
+    for item in set(table.get_children()) - rows.keys():
+        table.delete(item)
+    for item, values in rows.items():
+        if not table.exists(item):
+            table.insert('', 'end', iid=item, values=values)
+        elif tuple(table.item(item, 'values')) != values:
+            table.item(item, values=values)
+    if table.get_children() != tuple(rows):
+        for index, item in enumerate(rows):
+            table.move(item, '', index)
+
 
 
 class HistoryWindow(tk.Toplevel):
@@ -193,7 +248,7 @@ class HistoryWindow(tk.Toplevel):
         self.next.pack(side='left')
         self.note = tk.StringVar()
         ttk.Label(self, textvariable=self.note, padding=(8, 0), wraplength=780).pack(anchor='w')
-        totals = ttk.LabelFrame(self, text=tr("全部總累計（所有歷史）"), padding=8)
+        totals = ttk.LabelFrame(self, text=tr('全部歷史總累計'), padding=8)
         totals.pack(side='bottom', fill='x', padx=8, pady=(0, 8))
         summary = ttk.Frame(totals)
         summary.pack(fill='x', pady=(0, 6))
@@ -204,25 +259,31 @@ class HistoryWindow(tk.Toplevel):
             self.total_counts[key] = variable
             ttk.Entry(summary, textvariable=variable, state='readonly', width=14).grid(row=0, column=index * 2 + 1, sticky='ew', padx=(0, 12))
             summary.columnconfigure(index * 2 + 1, weight=1)
+        self.total_usage = tk.StringVar()
+        ttk.Label(summary, textvariable=self.total_usage, wraplength=950).grid(row=1, column=0, columnspan=7, sticky='w', pady=(4, 0))
+        self.totals_toggle = ttk.Button(summary, text=tr('詳細統計') + ' ▾', command=self.toggle_totals)
+        self.totals_toggle.grid(row=0, column=6, sticky='e')
+        self.total_details = ttk.Frame(totals)
         columns = ('scope', 'tokens', 'cost', 'requests', 'pricing', 'reporting')
-        self.totals = ttk.Treeview(totals, columns=columns, show='headings', height=4, selectmode='browse')
+        self.totals = ttk.Treeview(self.total_details, columns=columns, show='headings', height=4, selectmode='browse')
         for key, title, width in zip(columns, ('項目', 'Token 數', '預估金額（USD）', '請求數', '金額完整性', 'Token 完整性'), (70, 130, 130, 80, 145, 145)):
             self.totals.heading(key, text=tr(title))
             self.totals.column(key, width=width, minwidth=40, anchor='w' if key in ('scope', 'pricing', 'reporting') else 'e')
         self.totals.pack(fill='x')
-        self.jev_totals_table = ttk.Treeview(totals, columns=tuple(JEV_FIELDS),
+        self.jev_totals_table = ttk.Treeview(self.total_details, columns=tuple(JEV_FIELDS),
                                            displaycolumns=('requests', 'input_tokens', 'cost_nano_usd', 'cost_source', 'unpriced_requests', 'elapsed_seconds'),
                                            show='headings', height=1)
         for key, title in JEV_FIELDS.items():
             self.jev_totals_table.heading(key, text=tr(title))
             self.jev_totals_table.column(key, width=110, minwidth=40, anchor='e')
         self.jev_totals_table.pack(fill='x', pady=(4, 0))
-        note = ttk.Label(totals, text=tr("全部歷史，含失敗／停止已回報用量，不受查詢條件影響；耗時為各批次加總，可能重疊。"), wraplength=780)
+        note = ttk.Label(self.total_details, text=tr("全部歷史，含失敗／停止已回報用量，不受查詢條件影響；耗時為各批次加總，可能重疊。"), wraplength=780)
         note.pack(fill='x', pady=(4, 0))
         note.bind('<Configure>', lambda event: note.configure(wraplength=max(100, event.width)))
         panes = ttk.Panedwindow(self, orient='vertical')
         panes.pack(fill='both', expand=True, padx=8, pady=8)
-        listing, detail = ttk.Frame(panes), ttk.Frame(panes)
+        listing = ttk.LabelFrame(panes, text=tr('執行紀錄'), padding=4)
+        detail = ttk.LabelFrame(panes, text=tr('選取項目明細'), padding=4)
         panes.add(listing, weight=1)
         panes.add(detail, weight=1)
         columns = ('end', 'status', 'jobs', 'elapsed', 'tokens', 'cost', 'requests', 'pricing', 'reporting', 'error_reason')
@@ -243,9 +304,12 @@ class HistoryWindow(tk.Toplevel):
         self.details = ttk.Notebook(detail)
         self.details.pack(fill='both', expand=True)
         self.detail_tables = {}
-        for key, title in (('basic', '基本資料'), ('usage', '用量與金額'), ('stages', '各階段耗時'), ('jev', 'Jev 統計')):
+        for key, title in (('basic', '基本資料'), ('usage', '用量與金額'), ('models', '模型統計'), ('stages', '各階段耗時'), ('jev', 'Jev 統計')):
             frame = ttk.Frame(self.details)
             self.details.add(frame, text=tr(title))
+            if key == 'models':
+                self.detail_tables[key] = create_model_table(frame)
+                continue
             columns = self.totals['columns'] if key == 'usage' else ('field', 'value')
             table = ttk.Treeview(frame, columns=columns, show='headings', height=5)
             for column in columns:
@@ -264,6 +328,15 @@ class HistoryWindow(tk.Toplevel):
         self.tree.bind('<<TreeviewSelect>>', lambda _event: self.show_details())
         self.tree.bind('<<TreeviewOpen>>', lambda _event: self.load_children(self.tree.focus()))
         self.refresh()
+
+    def toggle_totals(self):
+        if self.total_details.winfo_manager():
+            self.total_details.pack_forget()
+            self.totals_toggle.configure(text=tr('詳細統計') + ' ▾')
+        else:
+            self.total_details.pack(fill='x', pady=(4, 0))
+            self.totals_toggle.configure(text=tr('詳細統計') + ' ▴')
+
 
     def fit_columns(self, event=None):
         width = max(1, self.tree.winfo_width() - 4)
@@ -307,6 +380,8 @@ class HistoryWindow(tk.Toplevel):
         for key in ('runs', 'jobs'):
             self.total_counts[key].set(f"{totals[key]:,}")
         self.total_counts['elapsed'].set(elapsed_text(totals['elapsed_seconds']))
+        self.total_usage.set('LLM ' + usage_text([dict(value, model=None, models=[])
+                                                for value in totals['usage_records']['total']]))
         self.fill_usage(self.totals, totals['usage_records'])
         self.jev_totals_table.delete(*self.jev_totals_table.get_children())
         self.jev_totals_table.insert('', 'end', values=jev_columns(totals['jev_stats']))
@@ -426,6 +501,9 @@ class HistoryWindow(tk.Toplevel):
         self.fill_usage(self.detail_tables['usage'], {
             scope: [item['usage'][scope] for item in jobs if scope in item.get('usage', {})]
             for scope in ('OCR', 'Jev', 'translation', 'total')})
+        fill_model_usage(self.detail_tables['models'], {
+            scope: [item['usage'][scope] for item in jobs if scope in item.get('usage', {})]
+            for scope in ('OCR', 'translation', 'total')})
         for stage in BT_STAGES:
             values = [item['stage_seconds'][stage] for item in jobs if stage in item.get('stage_seconds', {})]
             self.detail_tables['stages'].insert('', 'end', values=(tr(stage), elapsed_text(sum(values) if values else None)))

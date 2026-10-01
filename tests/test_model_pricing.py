@@ -17,6 +17,26 @@ from queue_stats import merge_snapshots, SnapshotTotals
 
 
 class ModelPricingTests(unittest.TestCase):
+    def test_native_summary_preserves_only_reconcilable_model_breakdowns(self):
+        requests = [dict(scope='translation', model=model, profile_id='test', usage='prompt=100, completion=20, total=120')
+                    for model in ('gpt-4o-mini', 'private-model')]
+        for cost, count, models in [('unavailable', 2, {'gpt-4o-mini', 'private-model'}), ('0.001', 2, {''}), ('unavailable', 3, {''})]:
+            lines = ['COMIC_SORTING_USAGE:' + json.dumps(value) for value in requests]
+            lines += [f'[INFO] module_manager:_finish_llm_usage_run:1 - LLM translation run usage: requests={count}, total_tokens={120 * count}, '
+                      f'missing_usage_requests=0, unpriced_requests=0, estimated_cost_usd={cost}',
+                      'finished translating all dirs']
+            records = []
+            run_translation([sys.executable, '-c', f'print({chr(10).join(lines)!r})'], Path.cwd(), None,
+                            threading.Event(), lambda *_args: None, usage=records.append,
+                            pricing={'private-model': ['2', '2', '2', '10']})
+            total = records[-1]
+            self.assertEqual(set(total['by_model']), models)
+            self.assertEqual(sum(value['total_tokens'] for value in total['by_model'].values()), 120 * count)
+            if count == 3:
+                self.assertIsNone(total['cost'])
+            else:
+                self.assertEqual(sum(Decimal(value['cost']) for value in total['by_model'].values()), total['cost'])
+
     def test_any_custom_model_and_catalog_context_tiers(self):
         price = get_price('private-model', {'private-model': ['1', '.1', '1.25', '5']})
         line = '[INFO] trans_llm:bridge:0 - LLM token usage: prompt=200, completion=50, total=250, cache_hit=80, cache_write=20'

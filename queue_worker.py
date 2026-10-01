@@ -21,7 +21,7 @@ from comic_core import (clear_work_folders, export_chapter, image_files,
                         load_json, save_json, translation_status, translations_complete)
 from ui_language import tr
 from queue_errors import error_info
-from queue_stats import merge_snapshots
+from queue_stats import merge_snapshots, model_usage
 from model_pricing import DEFAULT_RATES as BT_TOKEN_RATES, effective_rates, get_price
 
 
@@ -106,6 +106,7 @@ def parse_bt_request_usage(line, model=None, price=None):
                       price_source=price.get('url'),
                       model_rates={model: [str(rate) if rate is not None else None
                                            for rate in effective_rates(price, counts.get('prompt', 0))]})
+    record['by_model'] = model_usage(record)
     return record
 
 
@@ -361,10 +362,14 @@ def run_translation(command, root, env, stop, progress, log_context="", usage=No
                 for key in ('model', 'models', 'model_rates'):
                     if key in previous:
                         consumption[key] = previous[key]
-                if (consumption['cost'] is None and previous.get('cost') is not None
-                        and all(previous.get(key) == consumption[key] for key in
-                                ('requests', 'total_tokens', 'missing_usage_requests'))):
+                matches = all(previous.get(key) == consumption[key] for key in
+                              ('requests', 'total_tokens', 'missing_usage_requests'))
+                if consumption['cost'] is None and previous.get('cost') is not None and matches:
                     consumption = dict(previous)
+                elif previous.get('by_model') and previous.get('cost') == consumption['cost'] and matches:
+                    consumption['by_model'] = previous['by_model']
+                if 'by_model' not in consumption:
+                    consumption['by_model'] = model_usage(consumption)
             else:
                 response_usage = None if bridge_usage else parse_bt_request_usage(line)
                 marker = 'COMIC_SORTING_USAGE:'

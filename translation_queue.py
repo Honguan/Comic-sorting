@@ -18,7 +18,7 @@ from ui_language import tr
 from queue_stats import SnapshotTotals
 from model_pricing import open_pricing
 from comic_core import FOLDER_KINDS, folder_kind, image_files, image_count
-from queue_history import HistoryWindow, elapsed_text, save_run, usage_text, usage_columns, JEV_FIELDS, jev_totals, jev_columns
+from queue_history import HistoryWindow, elapsed_text, save_run, usage_text, usage_columns, JEV_FIELDS, jev_totals, jev_columns, create_model_table, fill_model_usage
 from queue_errors import error_details, error_info
 from ntfy_notifications import NtfyNotifications
 from queue_start_dialog import QueueStartDialog
@@ -241,6 +241,7 @@ class TranslationQueue:
         self.usage_records = SnapshotTotals(lambda key: key[1])
         self.jev_records = SnapshotTotals()
         self.jev_window = None
+        self.model_window = None
         self.usage_labels = {}
         self.usage_frame, usage_grid, self.usage_toggle = self.collapsible_frame(
             footer, tr("本次佇列 LLM 消耗（非實際帳單）"))
@@ -254,7 +255,12 @@ class TranslationQueue:
         self.jev_elapsed_label = tk.StringVar(value='—')
         ttk.Label(elapsed_row, text=tr('Jev 耗時')).pack(side='left', padx=(8, 4))
         ttk.Entry(elapsed_row, textvariable=self.jev_elapsed_label, state='readonly', width=10).pack(side='left')
-        ttk.Button(elapsed_row, text=tr('Jev 統計'), command=self.open_jev_stats).pack(side='left', padx=(4, 0))
+        stats_button = ttk.Menubutton(elapsed_row, text=tr('統計'))
+        self.stats_menu = tk.Menu(stats_button, tearoff=False)
+        self.stats_menu.add_command(label=tr('模型統計'), command=self.open_model_stats)
+        self.stats_menu.add_command(label=tr('Jev 統計'), command=self.open_jev_stats)
+        stats_button.configure(menu=self.stats_menu)
+        stats_button.pack(side='left', padx=(4, 0))
         columns = ('scope', 'tokens', 'cost', 'requests', 'pricing', 'reporting')
         self.usage_table = ttk.Treeview(usage_grid, columns=columns, show='headings', height=3)
         for key, title, width in zip(columns, ('項目', 'Token 數', '預估金額（USD）', '請求數', '金額完整性', 'Token 完整性'), (70, 130, 130, 80, 145, 145)):
@@ -356,6 +362,18 @@ class TranslationQueue:
         button.pack(side="left")
         return frame, content, button
 
+    def open_model_stats(self):
+        if self.model_window is None or not self.model_window.winfo_exists():
+            self.model_window = tk.Toplevel(self.app.root)
+            self.model_window.title(tr('模型統計'))
+            self.model_window.geometry('1140x480')
+            frame = ttk.Frame(self.model_window, padding=8)
+            frame.pack(fill='both', expand=True)
+            self.model_usage_table = create_model_table(frame)
+        self.show_usage()
+        self.model_window.lift()
+
+
     def open_jev_stats(self):
         if self.jev_window is None or not self.jev_window.winfo_exists():
             self.jev_window = tk.Toplevel(self.app.root)
@@ -376,9 +394,11 @@ class TranslationQueue:
             self.jev_table.delete(*self.jev_table.get_children())
             for label, value in zip(JEV_FIELDS.values(), jev_columns(stats)):
                 self.jev_table.insert('', 'end', values=(tr(label), value))
+        model_records = {}
         for scope, label in self.usage_labels.items():
             summary = self.usage_records.aggregate(scope)
             records = [summary] if summary else []
+            model_records[scope] = records
             label.set(usage_text(records))
             if scope == 'Jev' and not records:
                 if self.usage_table.exists(scope):
@@ -390,6 +410,8 @@ class TranslationQueue:
                 self.usage_table.item(scope, values=values)
             else:
                 self.usage_table.insert('', 'end', iid=scope, values=values)
+        if self.model_window is not None and self.model_window.winfo_exists():
+            fill_model_usage(self.model_usage_table, model_records)
 
     def open_history(self):
         if self.history_window and self.history_window.winfo_exists():

@@ -9,6 +9,14 @@ def tr(text):
     return TRANSLATIONS.get(text, {}).get(_language, text)
 
 TRANSLATIONS = {
+    '統計': {'en': 'Statistics', 'ja': '統計'},
+    '全部歷史總累計': {'en': 'All-history totals', 'ja': '全履歴の累計'},
+    '模型統計': {'en': 'Model statistics', 'ja': 'モデル統計'},
+    '模型未分項': {'en': 'Unallocated model usage', 'ja': 'モデル未分類'},
+    '詳細統計': {'en': 'Detailed statistics', 'ja': '詳細統計'},
+    '執行紀錄': {'en': 'Run records', 'ja': '実行履歴'},
+    '選取項目明細': {'en': 'Selected record details', 'ja': '選択項目の詳細'},
+    '合計已包含 OCR 與翻譯；Jev 另列。快取屬於輸入 Token，分項只累加已回報資料；舊資料不推算模型分項。': {'en': 'Totals include OCR and translation; Jev is separate. Cache tokens are part of input. Only reported breakdowns are added; legacy model breakdowns are not inferred.', 'ja': '合計には OCR と翻訳を含み、Jev は別集計です。キャッシュは入力 Token の一部です。報告済みの内訳のみを加算し、旧データのモデル内訳は推定しません。'},
     '模型': {'en': 'Model', 'ja': 'モデル'},
     '模型單價': {'en': 'Model token rates', 'ja': 'モデル単価'},
     '快取讀取': {'en': 'Cache read', 'ja': 'キャッシュ読み取り'},

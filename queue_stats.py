@@ -13,6 +13,22 @@ def used_models(record):
     return {model for model in [*models, record.get('model')] if isinstance(model, str) and model}
 
 
+def model_usage(record):
+    """Attribute legacy usage only when exactly one model is known."""
+    if 'by_model' in record:
+        return record['by_model']
+    if not record:
+        return {}
+    models = used_models(record)
+    model = next(iter(models)) if len(models) == 1 else ''
+    fields = ('requests', 'total_tokens', 'prompt', 'completion', 'cache_hit', 'cache_write',
+              'cost', 'cost_incomplete', 'missing_usage_requests', 'unpriced_requests')
+    value = {key: record[key] for key in fields if key in record}
+    if value.get('cost') is not None:
+        value['cost'] = str(value['cost'])
+    return {model: value}
+
+
 def merge_snapshots(records):
     result = {}
     unknown_cost = False
@@ -24,7 +40,11 @@ def merge_snapshots(records):
         for key, value in record.items():
             if key == 'models':
                 continue
-            if key == 'model_rates':
+            if key == 'by_model':
+                models = result.setdefault(key, {})
+                for model, usage in value.items():
+                    models[model] = merge_snapshots((models.get(model, {}), usage))
+            elif key == 'model_rates':
                 result.setdefault(key, {}).update(value)
             elif key == 'cost' and value is not None:
                 result[key] = str(Decimal(result.get(key) or '0') + Decimal(value))
@@ -48,6 +68,7 @@ class SnapshotTotals(MutableMapping):
         self.records, self.groups = {}, {}
         self.group_counts = {}
         self.model_counts = {}
+        self.model_totals = {}
 
     def __getitem__(self, key):
         return self.records[key]
@@ -81,17 +102,30 @@ class SnapshotTotals(MutableMapping):
 
     def __setitem__(self, key, record):
         group = self.group(key)
+        previous = self.records.get(key, {})
+        old_models, new_models = previous.get('by_model', {}), record.get('by_model', {})
+        if old_models or new_models:
+            totals = self.model_totals.setdefault(group, SnapshotTotals(lambda item: item[1]))
+            for model in old_models.keys() - new_models.keys():
+                del totals[key, model]
+            for model, value in new_models.items():
+                totals[key, model] = value
         if key not in self.records:
             self.group_counts[group] = self.group_counts.get(group, 0) + 1
         self.adjust(group, self.records.get(key, {}), -1)
         self.records[key] = dict(record)
         if 'models' in record:
             self.records[key]['models'] = sorted(used_models(record))
+        if 'by_model' in record:
+            self.records[key]['by_model'] = {model: dict(value) for model, value in new_models.items()}
         self.adjust(group, record, 1)
 
     def __delitem__(self, key):
         group = self.group(key)
-        self.adjust(group, self.records.pop(key), -1)
+        record = self.records.pop(key)
+        for model in record.get('by_model', {}):
+            del self.model_totals[group][key, model]
+        self.adjust(group, record, -1)
         self.group_counts[group] -= 1
 
     def clear(self):
@@ -99,11 +133,17 @@ class SnapshotTotals(MutableMapping):
         self.groups.clear()
         self.group_counts.clear()
         self.model_counts.clear()
+        self.model_totals.clear()
 
     def aggregate(self, group=None):
         result = {key: value[0] for key, value in self.groups.get(group, {}).items()}
         if self.model_counts.get(group):
             result['models'] = sorted(self.model_counts[group])
+        if group in self.model_totals:
+            totals = self.model_totals[group]
+            models = {model: totals.aggregate(model) for model, count in totals.group_counts.items() if count}
+            if models:
+                result['by_model'] = models
         if result and 'cost' not in result:
             result['cost'] = None
         partial = result.pop('cost_incomplete', 0)
