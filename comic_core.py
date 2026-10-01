@@ -70,11 +70,13 @@ def image_files(folder):
 
 def translations_complete(sources, translated, selected=None):
     """Allow extension changes only when the source basename is unambiguous."""
-    counts = Counter(path.stem.casefold() for path in sources)
+    def stem(path):
+        return (os.path.splitext(path.name)[0] if isinstance(path, os.DirEntry) else path.stem).casefold()
+    counts = Counter(stem(path) for path in sources)
     names = {path.name.casefold() for path in translated}
-    stems = {path.stem.casefold() for path in translated}
+    stems = {stem(path) for path in translated}
     return all(path.name.casefold() in names or
-               (counts[path.stem.casefold()] == 1 and path.stem.casefold() in stems)
+               (counts[stem(path)] == 1 and stem(path) in stems)
                for path in (sources if selected is None else selected))
 
 
@@ -472,7 +474,7 @@ def _chapter_inventory(chapter, directories, files, modified):
                     info = entry.stat(follow_symlinks=False)
                     total += info.st_size
                     if role and os.path.splitext(entry.name)[1].casefold() in IMAGE_EXTENSIONS:
-                        (sources if role == 'source' else translated).append(Path(entry.path))
+                        (sources if role == 'source' else translated).append(entry)
                         latest[role] = max(latest[role], info.st_mtime)
             except OSError:
                 if role:

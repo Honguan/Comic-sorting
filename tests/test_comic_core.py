@@ -37,6 +37,35 @@ class LibraryScanTests(unittest.TestCase):
             self.assertEqual(data[6][chapter], 1)
             self.assertIn(chapter, data[4])
 
+    def test_scan_path_allocations_do_not_scale_with_page_count(self):
+        from comic_core import scan_folder_data
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            chapter = base / 'Series' / 'Chapter 1'
+            result = chapter / 'result'
+            result.mkdir(parents=True)
+            (chapter / '1.png').write_bytes(b'source')
+            (result / '1.webp').write_bytes(b'translated')
+            with mock.patch('comic_core.Path', wraps=Path) as paths:
+                scan_folder_data(base)
+                allocations = paths.call_count
+            for number in range(2, 129):
+                (chapter / f'{number}.png').write_bytes(b'source')
+                (result / f'{number}.webp').write_bytes(b'translated')
+            with mock.patch('comic_core.Path', wraps=Path) as paths:
+                data = scan_folder_data(base)
+            self.assertEqual(paths.call_count, allocations)
+            self.assertEqual(data[6][chapter], 128)
+            self.assertEqual(data[3][chapter], 128 * (len(b'source') + len(b'translated')))
+            self.assertIn(chapter, data[4])
+            (chapter / '1.jpg').write_bytes(b'additional source')
+            self.assertNotIn(chapter, scan_folder_data(base)[4])
+            (result / '1.png').write_bytes(b'exact png result')
+            self.assertNotIn(chapter, scan_folder_data(base)[4])
+            (result / '1.jpg').write_bytes(b'exact jpg result')
+            self.assertIn(chapter, scan_folder_data(base)[4])
+
+
     def test_scan_reports_progress_without_changing_data(self):
         from comic_core import scan_folder_data
         with tempfile.TemporaryDirectory() as temporary:
