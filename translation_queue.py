@@ -366,7 +366,7 @@ class TranslationQueue:
         if self.model_window is None or not self.model_window.winfo_exists():
             self.model_window = tk.Toplevel(self.app.root)
             self.model_window.title(tr('模型統計'))
-            self.model_window.geometry('1140x480')
+            self.model_window.geometry('1200x480')
             frame = ttk.Frame(self.model_window, padding=8)
             frame.pack(fill='both', expand=True)
             self.model_usage_table = create_model_table(frame)

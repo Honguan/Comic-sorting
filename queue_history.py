@@ -1,7 +1,7 @@
 """Local queue history and its read-only viewer."""
 from contextlib import closing
 from datetime import date
-from decimal import Decimal, ROUND_CEILING
+from decimal import Decimal, ROUND_CEILING, ROUND_HALF_UP
 import json
 from pathlib import Path
 import sqlite3
@@ -162,20 +162,24 @@ def usage_columns(records):
     return tokens, cost, requests, pricing, reporting
 
 
-MODEL_COLUMNS = dict(scope='項目', model='模型', total_tokens='Token 數', requests='請求數',
-                     cost='預估金額（USD）', prompt='輸入 Token', completion='輸出 Token',
+MODEL_COLUMNS = dict(scope='項目', model='模型', total_tokens='Token 數', token_share='Token 佔比',
+                     requests='請求數', request_share='請求佔比', cost='預估金額（USD）', cost_share='已知費用佔比',
+                     avg_tokens='平均 Token', avg_cost='平均費用（USD）',
+                     prompt='輸入 Token', completion='輸出 Token',
                      cache_hit='快取讀取', cache_write='快取寫入', unpriced_requests='未計價請求數',
                      missing_usage_requests='未回報請求數', pricing='金額完整性')
 
 
 def create_model_table(parent):
-    note = ttk.Label(parent, text=tr('合計已包含 OCR 與翻譯；Jev 另列。快取屬於輸入 Token，分項只累加已回報資料；舊資料不推算模型分項。'), wraplength=950)
+    note = ttk.Label(parent, text=tr('佔比依 OCR／翻譯／合計分別計算；Token 僅含已回報用量，費用僅含已知金額。平均值以每次請求計算；平均 Token 排除未回報請求，金額不完整時不顯示平均費用。') + '\n' + tr('合計已包含 OCR 與翻譯；Jev 另列。快取屬於輸入 Token，分項只累加已回報資料；舊資料不推算模型分項。'), wraplength=950)
     note.grid(row=0, column=0, columnspan=2, sticky='ew', padx=4, pady=4)
-    note.bind('<Configure>', lambda event: note.configure(wraplength=max(100, event.width)))
+    note.bind('<Configure>', lambda event: note.configure(wraplength=event.width) if event.width > 100 else None)
     table = ttk.Treeview(parent, columns=tuple(MODEL_COLUMNS), show='headings', height=8)
+    widths = dict(scope=60, model=180, total_tokens=100, token_share=85, requests=70, request_share=85,
+                  cost=135, cost_share=115, avg_tokens=110, avg_cost=145, pricing=145)
     for key, title in MODEL_COLUMNS.items():
         table.heading(key, text=tr(title))
-        table.column(key, width=220 if key == 'model' else 145 if key in ('cost', 'pricing') else 80 if key in ('scope', 'requests') else 110,
+        table.column(key, width=max(widths.get(key, 110), tkfont.nametofont('TkHeadingFont').measure(tr(title)) + 16),
                      minwidth=55, stretch=False, anchor='w' if key in ('scope', 'model', 'pricing') else 'e')
     vertical = ttk.Scrollbar(parent, command=table.yview)
     horizontal = ttk.Scrollbar(parent, orient='horizontal', command=table.xview)
@@ -195,11 +199,18 @@ def fill_model_usage(table, usage):
         for record in usage.get(scope, []):
             for model, value in model_usage(record).items():
                 models[model] = merge_snapshots((models.get(model, {}), value))
+        totals = merge_snapshots(models.values())
         for model, value in sorted(models.items()):
             value = dict(dict(total_tokens=0, requests=0, cost=None, unpriced_requests=0, missing_usage_requests=0), **value)
             cost = value['cost']
+            reported_requests = value['requests'] - value['missing_usage_requests']
             fields = dict(scope=label, model=model or tr('模型未分項'), pricing=usage_columns([value])[3],
                           cost=f"US${Decimal(cost).quantize(Decimal('0.000001'), rounding=ROUND_CEILING):,.6f}" if cost is not None else tr('無法預估'))
+            for column, key in (('token_share', 'total_tokens'), ('request_share', 'requests'), ('cost_share', 'cost')):
+                amount, total = value.get(key), Decimal(totals.get(key) or 0)
+                fields[column] = f"{(Decimal(amount) * 100 / total).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP):.2f}%" if amount is not None and total > 0 else '—'
+            fields['avg_tokens'] = f"{(Decimal(value['total_tokens']) / reported_requests).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP):,.2f}" if reported_requests > 0 else '—'
+            fields['avg_cost'] = f"US${(Decimal(cost) / value['requests']).quantize(Decimal('0.000001'), rounding=ROUND_CEILING):,.6f}" if cost is not None and value['requests'] > 0 and not value['unpriced_requests'] and not value.get('cost_incomplete') else '—'
             fields.update({key: f"{value[key]:,}" if key in value else '—'
                            for key in MODEL_COLUMNS if key not in fields})
             rows[json.dumps([scope, model])] = tuple(fields[key] for key in MODEL_COLUMNS)
@@ -220,7 +231,7 @@ class HistoryWindow(tk.Toplevel):
     def __init__(self, parent, path, actions, statuses):
         super().__init__(parent)
         self.title(tr("歷史紀錄"))
-        self.geometry('1120x700')
+        self.geometry('1200x700')
         self.minsize(820, 480)
         self.path, self.actions, self.statuses = path, actions, statuses
         self.records = {}

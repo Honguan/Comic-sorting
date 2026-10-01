@@ -17,6 +17,68 @@ def detail_values(window):
 
 
 class WorkflowTests(unittest.TestCase):
+    def test_model_shares_and_averages_use_scope_and_complete_data(self):
+        import json
+        from queue_history import fill_model_usage
+
+        def record(model, requests, tokens, cost, missing=0, unpriced=0):
+            return dict(model=model, requests=requests, total_tokens=tokens, cost=cost,
+                        missing_usage_requests=missing, unpriced_requests=unpriced)
+
+        q = self.app.translation_queue
+        q.stats_menu.invoke(0)
+        table = q.model_usage_table
+        q.model_window.update_idletasks()
+        self.assertLessEqual(sum(table.column(key, 'width') for key in table['columns'][:10]) + 2,
+                             table.winfo_width())
+
+        a = record('a', 2, 300, '0.0000001')
+        b = record('b', 1, 900, '0.0000002')
+        unknown = dict(record('x', 1, 0, None, missing=1, unpriced=1), models=['x', 'y'])
+        fill_model_usage(table, {'OCR': [a], 'translation': [a, b, unknown], 'total': [a, b, unknown]})
+        self.assertEqual(table.set(json.dumps(['OCR', 'a']), 'token_share'), '100.00%')
+        for scope in ('translation', 'total'):
+            row = json.dumps([scope, 'a'])
+            self.assertEqual(table.set(row, 'token_share'), '25.00%')
+            self.assertEqual(table.set(row, 'request_share'), '50.00%')
+            self.assertEqual(table.set(row, 'cost_share'), '33.33%')
+            self.assertEqual(table.set(row, 'avg_tokens'), '150.00')
+            self.assertEqual(table.set(row, 'avg_cost'), 'US$0.000001')
+            other = json.dumps([scope, 'b'])
+            self.assertEqual(table.set(other, 'cost_share'), '66.67%')
+            self.assertEqual(table.set(other, 'cost'), table.set(row, 'cost'))
+            unallocated = json.dumps([scope, ''])
+            self.assertEqual(table.set(unallocated, 'request_share'), '25.00%')
+            for column in ('cost_share', 'avg_tokens', 'avg_cost'):
+                self.assertEqual(table.set(unallocated, column), '—')
+        self.assertEqual(a['cost'], '0.0000001')
+
+        fill_model_usage(table, {'translation': [record('a', 2, 300, '1'),
+                                                record('a', 1, 0, None, missing=1, unpriced=1),
+                                                record('b', 1, 100, '2')]})
+        row = json.dumps(['translation', 'a'])
+        self.assertEqual(table.set(row, 'avg_tokens'), '150.00')
+        self.assertEqual(table.set(row, 'avg_cost'), '—')
+        self.assertEqual(table.set(row, 'cost_share'), '33.33%')
+        self.assertEqual(table.set(row, 'pricing'), '僅含已知金額')
+
+        fill_model_usage(table, {'translation': [dict(record('a', 2, 300, '1'), cost_incomplete=True)]})
+        self.assertEqual(table.set(row, 'avg_cost'), '—')
+
+
+        fill_model_usage(table, {'total': [record('free', 2, 0, '0'), record('empty', 0, 0, '0')]})
+        free, empty = json.dumps(['total', 'free']), json.dumps(['total', 'empty'])
+        self.assertEqual(table.set(free, 'request_share'), '100.00%')
+        self.assertEqual(table.set(free, 'avg_tokens'), '0.00')
+        self.assertEqual(table.set(free, 'avg_cost'), 'US$0.000000')
+        for column in ('token_share', 'cost_share'):
+            self.assertEqual(table.set(free, column), '—')
+        for column in ('avg_tokens', 'avg_cost'):
+            self.assertEqual(table.set(empty, column), '—')
+        fill_model_usage(table, {})
+        self.assertEqual(table.get_children(), ())
+
+
     def test_model_statistics_live_and_history_remain_clear_and_exact(self):
         import json
         from queue_worker import parse_bt_request_usage
@@ -64,6 +126,11 @@ class WorkflowTests(unittest.TestCase):
         history_table = window.detail_tables['models']
         self.assertEqual(history_table.set(translation_row, 'cost'), table.set(translation_row, 'cost'))
         self.assertEqual(history_table.set(ocr_row, 'cache_hit'), '80')
+        for column, expected in (('token_share', '100.00%'), ('request_share', '100.00%'),
+                                 ('cost_share', '100.00%'), ('avg_tokens', '120.00'), ('avg_cost', 'US$0.000400')):
+            self.assertEqual(table.set(translation_row, column), expected)
+            self.assertEqual(history_table.set(translation_row, column), expected)
+
         legacy = dict(model='a', models=['a', 'b'], requests=2, total_tokens=240, cost='0.004',
                       missing_usage_requests=0, unpriced_requests=0)
         record['jobs'][0]['usage']['total'] = legacy
