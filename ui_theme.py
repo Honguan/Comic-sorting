@@ -3,6 +3,9 @@ from tkinter import font, ttk
 
 
 def apply_theme(root):
+    for name in ('TkDefaultFont', 'TkTextFont', 'TkMenuFont', 'TkHeadingFont'):
+        named = font.nametofont(name, root=root)
+        named.configure(size=max(11, named.cget('size')))
     background, surface = "#f7f9fc", "#ffffff"
     ink, muted, accent = "#192b40", "#607086", "#0067c0"
     selected = "#dceeff"
@@ -21,7 +24,7 @@ def apply_theme(root):
     style.configure("Muted.TLabel", foreground=muted)
     style.configure("TLabelframe", borderwidth=1)
     style.configure("TLabelframe.Label", font=heading, foreground=accent)
-    style.configure("TButton", padding=(3, 1))
+    style.configure("TButton", padding=(6, 3))
     # Share a drawable border so hover colors are visible on native Windows themes.
     if "Primary.border" not in style.element_names():
         style.element_create("Primary.border", "from", "clam", "Button.border")
@@ -43,7 +46,7 @@ def apply_theme(root):
               foreground=[("disabled", "#778599"), ("!disabled", surface)],
               bordercolor=[("disabled", "#d6dfe9")])
     for name in ("TEntry", "TCombobox", "TSpinbox"):
-        style.configure(name, padding=1)
+        style.configure(name, padding=3)
     style.configure("TNotebook", tabmargins=(0, 2, 0, 0))
     style.configure("TNotebook.Tab", padding=(10, 2))
     style.map("TNotebook.Tab", foreground=[("selected", accent)])

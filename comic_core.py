@@ -156,7 +156,7 @@ def summarize_names(names):
 
 
 def is_link_or_junction(path):
-    info = Path(path).lstat()
+    info = path.stat(follow_symlinks=False) if isinstance(path, os.DirEntry) else Path(path).lstat()
     return bool(stat.S_ISLNK(info.st_mode)
                 or getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT)
 
@@ -409,26 +409,33 @@ def export_chapter(series_path, chapter_path, komga_root, state, skip_unchanged=
 
 
 
-def get_folders_with_numbers(base_path):
-    folders = []
+def _library_directories(base_path):
     base = Path(base_path)
     if is_link_or_junction(base):
-        return folders
+        return
+    pending = [(base, None)]
+    while pending:
+        folder, directory = pending.pop()
+        with os.scandir(folder) as listing:
+            entries = list(listing)
+        directories = [entry for entry in entries if entry.is_dir()]
+        files = [entry for entry in entries if not entry.is_dir()]
+        modified = directory.stat(follow_symlinks=False).st_mtime if directory else folder.stat().st_mtime
+        yield folder, directories, files, modified
+        pending.extend((Path(entry.path), entry) for entry in reversed(directories)
+                       if entry.name.casefold() not in {"result", "inpainted", "mask"}
+                       and not (entry.name.casefold().startswith(".chapter ")
+                                and entry.name.casefold().endswith((".tmp", ".backup")))
+                       and not is_link_or_junction(entry))
 
-    def fail(error):
-        raise error
 
-    for current, directory_names, file_names in os.walk(base, onerror=fail):
-        folder = Path(current)
-        has_result = any(name.casefold() == "result" for name in directory_names)
-        directory_names[:] = [name for name in directory_names
-                              if name.casefold() not in {"result", "inpainted", "mask"}
-                              and not (name.casefold().startswith(".chapter ")
-                                       and name.casefold().endswith((".tmp", ".backup")))
-                              and not is_link_or_junction(folder / name)]
+def get_folders_with_numbers(base_path):
+    base = Path(base_path)
+    folders = []
+    for folder, directories, files, _modified in _library_directories(base):
         number = chapter_number(folder.name)
-        has_images = any(Path(name).suffix.casefold() in IMAGE_EXTENSIONS
-                         for name in file_names)
+        has_result = any(entry.name.casefold() == "result" for entry in directories)
+        has_images = any(os.path.splitext(entry.name)[1].casefold() in IMAGE_EXTENSIONS for entry in files)
         if folder != base and number is not None and (has_result or has_images):
             folders.append((str(folder), folder.name, number))
     return sorted(folders, key=lambda item: (
@@ -436,19 +443,62 @@ def get_folders_with_numbers(base_path):
         item[2], natural_sort_key(item[1])))
 
 
-def scan_folder_data(base):
-    folders = get_folders_with_numbers(base)
+def _chapter_inventory(chapter, directories, files, modified):
+    """Read source/result names, size, and timestamps from the same enumeration."""
+    sources, translated = [], []
+    latest = {'source': modified, 'result': modified}
+    total = 0
+    result = next((entry for entry in directories if entry.name.casefold() == 'result'
+                   and not is_link_or_junction(entry)), None)
+    pending = [(None, files, 'source')]
+    pending.extend((entry, None, 'result' if entry is result else None) for entry in directories
+                   if not is_link_or_junction(entry))
+    while pending:
+        directory, entries, role = pending.pop()
+        if entries is None:
+            try:
+                with os.scandir(directory.path) as listing:
+                    entries = list(listing)
+            except OSError:
+                if role == 'result':
+                    raise
+                continue
+        for entry in entries:
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    if not is_link_or_junction(entry):
+                        pending.append((entry, None, None))
+                elif entry.is_file(follow_symlinks=False) and not is_link_or_junction(entry):
+                    info = entry.stat(follow_symlinks=False)
+                    total += info.st_size
+                    if role and os.path.splitext(entry.name)[1].casefold() in IMAGE_EXTENSIONS:
+                        (sources if role == 'source' else translated).append(Path(entry.path))
+                        latest[role] = max(latest[role], info.st_mtime)
+            except OSError:
+                if role:
+                    raise
+    status = (tr('可匯出') if translations_complete(sources, translated) else tr('部分翻譯')) if translated else tr('結果為空') if result else tr('未翻譯')
+    return sources, translated, status, total, latest['result' if result else 'source']
+
+
+def scan_folder_data(base, progress=None):
+    base = Path(base)
+    folders = []
     series_groups = {}
     chapter_updates = {}
     chapter_sizes = {}
     ready_chapters = set()
     details = {}
     page_counts = {}
-    for folder_path, folder_name, number in folders:
-        chapter = Path(folder_path)
-        sources = image_files(folder_path)
+    for chapter, directories, files, modified in _library_directories(base):
+        number = chapter_number(chapter.name)
+        if chapter == base or number is None or not (any(entry.name.casefold() == 'result' for entry in directories)
+                or any(os.path.splitext(entry.name)[1].casefold() in IMAGE_EXTENSIONS for entry in files)):
+            continue
+        folder_path, folder_name = str(chapter), chapter.name
+        folders.append((folder_path, folder_name, number))
+        sources, translated, status, size, latest = _chapter_inventory(chapter, directories, files, modified)
         page_counts[chapter] = len(sources)
-        status, translated = translation_status(folder_path, source_images=sources)
         if status == tr("可匯出"):
             detail = tr("{0} 張翻譯圖片｜可匯出").format(len(translated))
             images = translated
@@ -462,11 +512,15 @@ def scan_folder_data(base):
         else:
             images = sources
             detail = tr("{0} 張圖片｜未翻譯").format(len(images))
-        chapter_updates[chapter] = updated_at(chapter, images)
-        chapter_sizes[chapter] = folder_size(chapter)
+        chapter_updates[chapter] = latest
+        chapter_sizes[chapter] = size
         details[chapter] = detail
         series_groups.setdefault(chapter.parent, []).append(
             (str(chapter), folder_name, number))
+        if progress and len(folders) % 128 == 0:
+            progress(len(folders))
+    folders.sort(key=lambda item: (natural_sort_key(str(Path(item[0]).parent.relative_to(base))),
+                                  item[2], natural_sort_key(item[1])))
     for chapters in series_groups.values():
         chapters.sort(key=lambda item: (item[2], natural_sort_key(item[1])))
     return (folders, series_groups, chapter_updates, chapter_sizes,

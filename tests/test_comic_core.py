@@ -12,6 +12,46 @@ if os.name == "nt":
     from _winapi import CreateJunction
 
 
+class LibraryScanTests(unittest.TestCase):
+    def test_scan_reuses_directory_entries_and_preserves_metadata(self):
+        from collections import Counter
+        from comic_core import scan_folder_data, folder_size, updated_at, image_files
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            chapter = base / 'Series' / 'Chapter 1'
+            result = chapter / 'RESULT'
+            result.mkdir(parents=True)
+            (chapter / '1.png').write_bytes(b'source')
+            (result / '1.webp').write_bytes(b'translated')
+            (chapter / 'mask').mkdir()
+            (chapter / 'mask' / 'work.bin').write_bytes(b'work')
+            expected_size = folder_size(chapter)
+            expected_time = updated_at(chapter, image_files(result))
+            with mock.patch('comic_core.os.scandir', wraps=os.scandir) as listing:
+                data = scan_folder_data(base)
+            counts = Counter(Path(call.args[0]) for call in listing.call_args_list)
+            self.assertEqual(counts[chapter], 1)
+            self.assertEqual(counts[result], 1)
+            self.assertEqual(data[3][chapter], expected_size)
+            self.assertEqual(data[2][chapter], expected_time)
+            self.assertEqual(data[6][chapter], 1)
+            self.assertIn(chapter, data[4])
+
+    def test_scan_reports_progress_without_changing_data(self):
+        from comic_core import scan_folder_data
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            for number in range(129):
+                chapter = base / 'Series' / f'Chapter {number}'
+                chapter.mkdir(parents=True)
+                (chapter / '1.png').write_bytes(b'page')
+                os.utime(chapter / '1.png', (100, 100))
+                os.utime(chapter, (100, 100))
+            counts = []
+            self.assertEqual(scan_folder_data(base, progress=counts.append), scan_folder_data(base))
+            self.assertEqual(counts, [128])
+
+
 class FolderDeletionTests(unittest.TestCase):
     def test_deletes_only_selected_subtree_and_rejects_root_or_external_paths(self):
         with tempfile.TemporaryDirectory() as temp:

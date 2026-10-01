@@ -19,18 +19,22 @@ The EXE includes this tool's dependencies; no separate Python or archive utility
 
 ## Common operations
 
+Select a manga in the left Comic library, enter its chapter list indices starting at 1, and click Add range. Use multi-selection and Add selected for specific chapters. Choose the action and workflow on the right, then click Start. Merge chapters is a separate tab; Options contains export/cleanup preferences, and More actions contains reordering, retry, and scheduling.
+
+Larger default text and fewer visible columns keep names, pages, and status readable. Selecting a row still shows its full path and metadata. Stage progress and queue LLM usage open in separate windows, while the main view keeps the list and elapsed time. Queue expansion/restoration is animated. The library creates chapter rows on expansion and reuses directory enumeration results during scanning, with progress counts and elapsed time.
+
 | Operation | Behavior |
 |---|---|
-| Merge chapters | Select chapters and a range within one series. Already merged folders are skipped. |
-| Add to queue | Choose translation, export, or cleanup, then add selected items or a specific path. Double-clicking a chapter in the upper list also adds it. |
-| Add by number range | Uses list start/end indices; a blank end means the last item. Adds jobs without merging or starting them. |
+| Merge chapters | Use the Merge chapters tab to select chapters and a range within one series. Already merged folders are skipped. |
+| Add to queue | Choose translation, export, or cleanup, then use Add selected in the library or add a specific path. Double-clicking a chapter also adds it. |
+| Add range | Uses list start/end indices; a blank end means the last item. Adds jobs without merging or starting them. |
 | Merge and queue | Adds the merged output as a pending translation job. Start it manually. |
 | Start | With a selection: runs pending jobs within the selected chapters or groups. Without a selection: runs all pending jobs in queue order. |
 | Reorder | Move up, down, to the top, or to the bottom. Selected jobs retain their relative order. |
 | Pause / resume | Finishes the current folder and its follow-up export/cleanup, then pauses. Resume continues the same batch. |
 | Stop | Interrupts current processing and keeps later pending jobs. Restarting the app does not automatically resume work. |
-| Requeue | With a selection: resets failed, warning, stopped, and blocked jobs in that scope. Without a selection: resets all failed/warning jobs. A completed job can only be requeued when its individual row is selected alone. |
-| Translation pages | Select one translation job and set an inclusive page range. Pages start at 1 and follow natural image-filename order. |
+| More actions → Retry | With a selection: resets failed, warning, stopped, and blocked jobs in that scope. Without a selection: resets all failed/warning jobs. A completed job can only be requeued when its individual row is selected alone. |
+| Options → Translation pages | Select one translation job and set an inclusive page range. Pages start at 1 and follow natural image-filename order. |
 | Search and view | Search manga names or paths. Groups show single/merged chapter counts and translation page counts. Expand the queue for more space. |
 | Names and paths | Export all manga names, or use the context menu to copy manga names or full paths. |
 
@@ -38,11 +42,11 @@ The EXE includes this tool's dependencies; no separate Python or archive utility
 - Starting one selected manga with multiple pending single chapters asks for a chapter range, defaulting to all; merged chapters remain included. Selecting chapter rows directly skips this question. Multiple manga instead show a draggable priority list with up/down controls. The default preserves queue order; changes apply only to this batch, and Cancel does not start it.
 - Adding the same path and action again resets the existing job to pending. Requeuing does not start work automatically. Adding and reordering jobs are disabled while running or paused.
 - Lists support Ctrl/Shift selection, Ctrl+A to select all, Esc to clear selection, and Ctrl+C to copy paths. Selecting a group while searching includes only visible matches.
-- Click manga-list column headers to sort. Maximize the window or drag the divider to resize the upper and lower areas.
+- Click the manga name header to sort by name, or use Tools → Sort for updated time, name, size, or chapter count. Selecting the same field again reverses its direction. Drag the divider to resize the left and right areas.
 
 ### Translation, export, and records
 
-- Main queue → Scheduled start supports multiple one-shot schedules. Countdown accepts hours/minutes with shortcuts; Date and time has separate date/hour/minute fields and Today/Tomorrow buttons. Preview the local start time and confirm scope, chapters, and order when adding. Only unchanged, still-pending selected jobs run; busy or paused queues wait until idle. Changes to translation/cleanup/output settings require rescheduling. Keep the app open: closing cancels schedules; schedules do not wake or boot the computer.
+- Main queue → More actions → Scheduled start supports multiple one-shot schedules. Countdown accepts hours/minutes with shortcuts; Date and time has separate date/hour/minute fields and Today/Tomorrow buttons. Preview the local start time and confirm scope, chapters, and order when adding. Only unchanged, still-pending selected jobs run; busy or paused queues wait until idle. Changes to translation/cleanup/output settings require rescheduling. Keep the app open: closing cancels schedules; schedules do not wake or boot the computer.
 The **▼ menu beside Start** offers five workflows. Choose a mode, then click Start; selection scope is unchanged.
 
 | Workflow | Processing |

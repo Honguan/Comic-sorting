@@ -85,17 +85,21 @@ class TranslationQueue:
                                           (tr("Python（空白使用內附環境）"), self.python, False)):
             row = ttk.Frame(config_box)
             row.pack(fill="x", pady=2)
-            ttk.Label(row, text=title, width=29).pack(side="left")
-            entry = ttk.Entry(row, textvariable=variable)
-            entry.pack(side="left", fill="x", expand=True)
+            ttk.Label(row, text=title).pack(anchor="w")
+            field = ttk.Frame(row)
+            field.pack(fill="x")
+            entry = ttk.Entry(field, textvariable=variable, width=8)
             entry.bind("<FocusOut>", lambda _event: self.app.save_settings())
             self.controls.append(entry)
-            self.button(row, tr("瀏覽"), lambda v=variable, d=directory: self.browse(v, d))
+            self.button(field, tr("瀏覽"), lambda v=variable, d=directory: self.browse(v, d)).pack_configure(side="right")
+            entry.pack(side="left", fill="x", expand=True)
         settings_actions = ttk.Frame(config_box)
         settings_actions.pack(fill="x", pady=(6, 0))
         self.button(settings_actions, tr("開啟原生設定介面"), self.open_settings)
         self.button(settings_actions, tr("開啟紀錄資料夾"), self.open_logs)
         self.button(settings_actions, tr('模型單價'), lambda: open_pricing(app.root, self.token_rates, app.save_settings))
+        for button in settings_actions.winfo_children():
+            button.pack_configure(side="top", fill="x", pady=3)
         self.notifications = NtfyNotifications(app, settings)
         self.scheduler = QueueSchedule(self)
 
@@ -104,41 +108,47 @@ class TranslationQueue:
         box = ttk.Frame(app.queue_tab, padding=8)
         box.pack(fill="both", expand=True)
         row = ttk.Frame(box)
-        row.pack(fill="x", pady=(0, 4))
+        row.pack(fill="x", pady=(0, 6))
         self.action_choice = ttk.Combobox(row, textvariable=self.action,
-                                         values=tuple(tr(value) for value in ACTIONS.values()),
-                                         state="readonly", width=10)
+            values=tuple(tr(value) for value in ACTIONS.values()), state="readonly", width=10)
         self.action_choice.pack(side="left", padx=(0, 4))
-        self.button(row, tr("加入上方選取項目"), self.add_selected)
-        self.button(row, tr("依編號加入佇列"), self.add_number_range)
         self.button(row, tr("加入指定路徑"), self.add_directory)
-        self.button(row, tr("整合＋加入佇列"), self.integrate)
         self.range_button = self.button(row, tr("翻譯頁數"), self.edit_page_range)
-        row = ttk.Frame(box)
-        row.pack(fill="x")
-        for text, variable in ((tr("翻譯成功後匯出 CBZ"), self.export),
-                               (tr("成功後清理 mask / inpainted"), self.cleanup),
-                               (tr("完成後開啟資料夾"), self.open_after_completion)):
-            check = ttk.Checkbutton(row, text=text, variable=variable, command=app.save_settings)
-            check.pack(side="left", padx=(0, 8))
-            self.controls.append(check)
+        self.range_button.pack_forget()
+        options = ttk.Menubutton(row, text=tr("選項"))
+        options.pack(side="left", padx=4)
+        options_menu = tk.Menu(options, tearoff=False)
+        options_menu.add_command(label=tr("翻譯頁數"), command=self.range_button.invoke)
+        options_menu.configure(postcommand=lambda: options_menu.entryconfigure(0, state=self.range_button.cget("state")))
+        for text, variable in (("翻譯成功後匯出 CBZ", self.export),
+                               ("成功後清理 mask / inpainted", self.cleanup),
+                               ("完成後開啟資料夾", self.open_after_completion)):
+            options_menu.add_checkbutton(label=tr(text), variable=variable, command=app.save_settings)
+        options.configure(menu=options_menu)
+        self.options_menu = options_menu
+        self.controls.extend((options, app.add_range_button, app.add_selected_button, app.aggregate_translate_button))
+        self.zoom_button = ttk.Button(row, text=tr("放大佇列"), command=self.toggle_queue_size)
+        self.zoom_button.pack(side="right")
+
         footer = ttk.Frame(box)
         footer.pack(side="bottom", fill="x")
         search_row = ttk.Frame(box)
         search_row.pack(fill="x", pady=(4, 0))
-        ttk.Label(search_row, text=tr("搜尋漫畫名稱／路徑")).pack(side="left", padx=(0, 6))
+        ttk.Label(search_row, text=tr("搜尋")).pack(side="left", padx=(0, 6))
         self.search = tk.StringVar()
         self.search_after = None
         self.search_entry = ttk.Entry(search_row, textvariable=self.search)
         self.search_entry.pack(side="left", fill="x", expand=True)
-        ttk.Button(search_row, text=tr("清除搜尋"), command=lambda: self.search.set("")).pack(side="left", padx=4)
+        self.search_entry.configure(width=8)
+        ttk.Button(search_row, text=tr("清除"), width=4, command=lambda: self.search.set("")).pack(side="left", padx=4)
         self.search_count = tk.StringVar()
         ttk.Label(search_row, textvariable=self.search_count).pack(side="left")
         self.queue_restore_ratio = None
-        self.zoom_button = ttk.Button(search_row, text=tr("放大佇列"), command=self.toggle_queue_size)
-        self.zoom_button.pack(side="right", padx=(4, 0))
+        self.last_library_ratio = None
+        self.sash_after = None
         app.panes.bind("<Configure>", lambda _event: app.panes.sashpos(0, 0)
-                       if self.queue_restore_ratio is not None else None, add="+")
+                       if self.queue_restore_ratio is not None and self.sash_after is None else None, add="+")
+
         tree_frame = ttk.Frame(box)
         tree_frame.pack(fill="both", expand=True, pady=4)
         self.tree = ttk.Treeview(tree_frame, columns=("kind", "action", "pages", "status", "error_reason"), show="tree headings", height=3)
@@ -181,6 +191,21 @@ class TranslationQueue:
                               ("移到最下", lambda: self.move(1, to_edge=True)), ("重新選取", self.retry),
                               ("清除已完成", self.clear_completed)):
             self.selection_buttons[text] = self.button(row, tr(text), command)
+        self.clear_selection_button.pack_forget()
+        self.operations_button = ttk.Menubutton(row, text=tr("更多操作"))
+        self.operations_button.pack(side="left")
+        self.operations_buttons = [*self.selection_buttons.values(), self.clear_selection_button]
+        self.operations_menu = tk.Menu(self.operations_button, tearoff=False)
+        for button in self.operations_buttons:
+            button.pack_forget()
+            self.operations_menu.add_command(label=tr("重試") if button is self.selection_buttons["重新選取"]
+                                             else button.cget("text"), command=button.invoke)
+        def sync_operations():
+            for index, button in enumerate(self.operations_buttons):
+                self.operations_menu.entryconfigure(index, state=button.cget("state"))
+        self.operations_menu.configure(postcommand=sync_operations)
+        self.operations_button.configure(menu=self.operations_menu)
+
         for text in ("重新選取", "上移", "下移", "移到最上", "移到最下"):
             self.context_menu.add_command(label=tr(text), command=self.selection_buttons[text].invoke)
         self.context_menu.add_command(label=tr("翻譯頁數"), command=self.edit_page_range)
@@ -211,18 +236,27 @@ class TranslationQueue:
         self.schedule_button = ttk.Button(row, text=tr("排程啟動"), command=self.scheduler.show, width=0)
         self.schedule_button.pack(side="left", padx=2)
         # Execution remains accessible when the window is narrow.
-        for button in (self.stop_button, self.pause_button, self.workflow_choice, self.start_button, self.schedule_button):
-            button.pack_configure(side="right", before=self.selection_buttons["移除選取"])
+        for button in (self.stop_button, self.pause_button, self.workflow_choice, self.start_button):
+            button.pack_configure(side="right", before=self.operations_button)
+        self.schedule_button.pack_forget()
+        self.operations_menu.add_command(label=self.schedule_button.cget("text"), command=self.schedule_button.invoke)
+        self.operations_buttons.append(self.schedule_button)
         self.context_menu.add_command(label=tr("清除已完成"), command=self.clear_completed)
         self.clear_completed_menu_index = self.context_menu.index("end")
         self.summary = tk.StringVar()
-        ttk.Label(footer, textvariable=self.summary).pack(anchor="w")
+        summary_label = ttk.Label(footer, textvariable=self.summary, wraplength=650, style="Muted.TLabel")
+        summary_label.pack(fill="x", pady=(4, 2))
+        summary_label.bind("<Configure>", lambda event: summary_label.configure(wraplength=event.width)
+                           if event.width > 100 else None)
         self.total = ttk.Progressbar(footer)
         self.total.pack(fill="x")
         self.label = tk.StringVar(value=tr("BallonsTranslator：待命"))
         self.stage = ttk.Progressbar(footer)
         self.bt_frame, progress_grid, self.bt_toggle = self.collapsible_frame(footer, tr("各階段進度"))
-        ttk.Label(self.bt_toggle.master, textvariable=self.label).pack(side="left", fill="x", expand=True, padx=(8, 0))
+        stage_label = ttk.Label(self.bt_toggle.master, textvariable=self.label, wraplength=500)
+        stage_label.pack(side="left", fill="x", expand=True, padx=(8, 0))
+        stage_label.bind("<Configure>", lambda event: stage_label.configure(wraplength=event.width)
+                         if event.width > 100 else None)
         progress_grid.columnconfigure(1, weight=1)
         self.bt_bars = {}
         self.bt_labels = {}
@@ -245,22 +279,23 @@ class TranslationQueue:
         self.usage_labels = {}
         self.usage_frame, usage_grid, self.usage_toggle = self.collapsible_frame(
             footer, tr("本次佇列 LLM 消耗（非實際帳單）"))
-        self.history_button = ttk.Button(self.usage_toggle.master, text=tr("歷史紀錄"), command=self.open_history, padding=0)
-        self.history_button.pack(side='left', padx=(8, 0))
+        elapsed_row = ttk.Frame(footer)
+        elapsed_row.pack(fill="x", pady=(4, 0))
         self.elapsed_label = tk.StringVar(value='00:00:00')
-        elapsed_row = ttk.Frame(self.usage_toggle.master)
-        elapsed_row.pack(side='right')
-        ttk.Label(elapsed_row, text=tr("累計耗時")).pack(side='left', padx=(4, 4))
-        ttk.Entry(elapsed_row, textvariable=self.elapsed_label, state='readonly', width=10).pack(side='left')
+        ttk.Label(elapsed_row, text=tr("本次耗時") + "：").pack(side="left")
+        ttk.Label(elapsed_row, textvariable=self.elapsed_label).pack(side="left")
         self.jev_elapsed_label = tk.StringVar(value='—')
-        ttk.Label(elapsed_row, text=tr('Jev 耗時')).pack(side='left', padx=(8, 4))
-        ttk.Entry(elapsed_row, textvariable=self.jev_elapsed_label, state='readonly', width=10).pack(side='left')
-        stats_button = ttk.Menubutton(elapsed_row, text=tr('統計'))
+        ttk.Label(elapsed_row, text=tr("Jev 耗時") + "：", style="Muted.TLabel").pack(side="left", padx=(12, 0))
+        ttk.Label(elapsed_row, textvariable=self.jev_elapsed_label, style="Muted.TLabel").pack(side="left")
+        self.history_button = ttk.Button(elapsed_row, text=tr("歷史紀錄"), command=self.open_history)
+        self.history_button.pack(side="right")
+        stats_button = ttk.Menubutton(elapsed_row, text=tr("統計"))
+        stats_button.pack(side="right", padx=4)
         self.stats_menu = tk.Menu(stats_button, tearoff=False)
-        self.stats_menu.add_command(label=tr('模型統計'), command=self.open_model_stats)
-        self.stats_menu.add_command(label=tr('Jev 統計'), command=self.open_jev_stats)
+        self.stats_menu.add_command(label=tr("模型統計"), command=self.open_model_stats)
+        self.stats_menu.add_command(label=tr("Jev 統計"), command=self.open_jev_stats)
         stats_button.configure(menu=self.stats_menu)
-        stats_button.pack(side='left', padx=(4, 0))
+
         columns = ('scope', 'tokens', 'cost', 'requests', 'pricing', 'reporting')
         self.usage_table = ttk.Treeview(usage_grid, columns=columns, show='headings', height=3)
         for key, title, width in zip(columns, ('項目', 'Token 數', '預估金額（USD）', '請求數', '金額完整性', 'Token 完整性'), (70, 130, 130, 80, 145, 145)):
@@ -291,76 +326,60 @@ class TranslationQueue:
 
     def toggle_queue_size(self):
         panes = self.app.panes
-        panes.update_idletasks()
         if self.queue_restore_ratio is None:
-            self.queue_restore_ratio = panes.sashpos(0) / max(1, panes.winfo_height())
-            panes.sashpos(0, 0)
+            if self.sash_after is None:
+                self.last_library_ratio = panes.sashpos(0) / max(1, panes.winfo_width())
+            self.queue_restore_ratio = self.last_library_ratio or .30
+            target = 0
             self.zoom_button.configure(text=tr("還原佇列大小"))
         else:
-            panes.sashpos(0, round(self.queue_restore_ratio * panes.winfo_height()))
+            target = round(self.queue_restore_ratio * panes.winfo_width())
             self.queue_restore_ratio = None
             self.zoom_button.configure(text=tr("放大佇列"))
+        self.animate_sash(target)
+
+    def animate_sash(self, target):
+        if self.sash_after is not None:
+            self.app.root.after_cancel(self.sash_after)
+            self.sash_after = None
+        panes = self.app.panes
+        start, started = panes.sashpos(0), time.monotonic()
+        if not panes.winfo_ismapped():
+            panes.sashpos(0, target)
+            return
+        def step():
+            progress = min(1, (time.monotonic() - started) / .18)
+            panes.sashpos(0, round(start + (target - start) * (1 - (1 - progress) ** 3)))
+            self.sash_after = self.app.root.after(16, step) if progress < 1 else None
+        step()
 
     def collapsible_frame(self, parent, title):
         frame = ttk.Frame(parent)
         frame.pack(fill="x", pady=(2, 0))
-        content = ttk.Frame(frame, padding=(6, 0))
-        borrowed_height = 0
-
-        def toggle():
-            nonlocal borrowed_height
-            panes = self.app.panes
-            layout_ready = panes.winfo_ismapped() and panes.sashpos(0) > 0
-            if layout_ready:
-                panes.update_idletasks()
-            sash = panes.sashpos(0)
-            old_height = frame.winfo_reqheight()
-            collapsing = bool(content.winfo_manager())
-            if collapsing:
-                content.pack_forget()
-                button.configure(text=f"▶ {title}")
-            else:
-                content.pack(fill="x")
-                button.configure(text=f"▼ {title}")
-            if self.queue_restore_ratio is not None:
-                borrowed_height = 0
-                return
-            if not layout_ready:
-                borrowed_height = 0
-                if not collapsing:
-                    def fit_initial():
-                        if not panes.winfo_exists() or not content.winfo_manager() or self.queue_restore_ratio is not None:
-                            return
-                        panes.update_idletasks()
-                        manga = panes.nametowidget(panes.panes()[0])
-                        minimum_manga = manga.winfo_reqheight() - self.app.folder_tree.winfo_reqheight()
-                        required = self.app.queue_tab.winfo_reqheight() - self.tree.winfo_reqheight() + 32
-                        panes.sashpos(0, max(minimum_manga, min(panes.sashpos(0), panes.winfo_height() - required)))
-                    self.app.root.after(1, fit_initial)
-                return
-            panes.update_idletasks()
-            row_height = int(ttk.Style(self.tree).lookup('Treeview', 'rowheight') or 20)
-            if collapsing:
-                # Return only space this section actually borrowed, including when
-                # sections close out of order or the user has moved the divider.
-                tabs = self.app.work_tabs
-                minimum_queue = (self.app.queue_tab.winfo_reqheight()
-                                 - max(0, int(self.tree['height']) - 1) * row_height
-                                 + tabs.winfo_height() - self.app.queue_tab.winfo_height())
-                panes.sashpos(0, sash + min(borrowed_height, max(0, tabs.winfo_height() - minimum_queue)))
-                borrowed_height = 0
-            else:
-                manga = panes.nametowidget(panes.panes()[0])
-                minimum_manga = manga.winfo_reqheight() - self.app.folder_tree.winfo_reqheight()
-                growth = max(0, frame.winfo_reqheight() - old_height)
-                target = sash - min(growth, max(0, sash - minimum_manga))
-                borrowed_height = sash - panes.sashpos(0, target)
-
         header = ttk.Frame(frame)
         header.pack(fill="x")
-        button = ttk.Button(header, text=f"▶ {title}", command=toggle, padding=0)
+        popup = tk.Toplevel(self.app.root)
+        popup.title(title)
+        popup.geometry("1200x360")
+        popup.minsize(900, 260)
+        popup.withdraw()
+        content = ttk.Frame(popup, padding=12)
+        def toggle():
+            if content.winfo_manager():
+                content.pack_forget()
+                popup.withdraw()
+                button.configure(text=f"▶ {title}")
+            else:
+                content.pack(fill="both", expand=True)
+                popup.deiconify()
+                popup.lift()
+                button.configure(text=f"▼ {title}")
+        button = ttk.Button(header, text=f"▶ {title}", command=toggle)
         button.pack(side="left")
+        popup.protocol("WM_DELETE_WINDOW", toggle)
         return frame, content, button
+
+
 
     def open_model_stats(self):
         if self.model_window is None or not self.model_window.winfo_exists():
@@ -540,21 +559,21 @@ class TranslationQueue:
         self.bt_labels[name].set(text)
 
     def fit_columns(self, event):
-        width = max(1, event.width - 4)
-        font = tkfont.Font(root=self.app.root, font=ttk.Style(self.tree).lookup("Treeview", "font") or "TkDefaultFont")
-        fixed = {column: font.measure(tr(text)) + 24 for column, text in
-                 (("kind", "整合資料夾"), ("action", "翻譯"), ("pages", "第 100–1000 頁"), ("status", "完成（有異常）"))}
-        fixed["kind"] = font.measure(tr("{0} 單一｜{1} 整合").format(9999, 9999)) + 24
-        scale = min(1, width * .60 / sum(fixed.values()))
+        width = event.width - 4
+        if width < 100 or getattr(self, "_queue_width", None) == width:
+            return
+        self._queue_width = width
+        font = tkfont.nametofont("TkDefaultFont", root=self.app.root)
+        self.tree.configure(displaycolumns=("action", "pages", "status") if width >= 650 else ("pages", "status"))
+        fixed = {"action": font.measure(tr("翻譯")) + 24,
+                 "pages": max(95, font.measure(tr("翻譯頁數")) + 16),
+                 "status": max(160, font.measure(tr("完成（有異常）")) + 24)}
         for column, size in fixed.items():
-            size = max(1, int(size * scale))
-            self.tree.column(column, width=size, minwidth=1, stretch=False)
-        remaining = width - sum(self.tree.column(column, "width") for column in fixed)
-        path_width = max(1, int(remaining * .62))
-        self.tree.column("#0", width=path_width, minwidth=1, stretch=False)
-        self.tree.column("error_reason", width=max(1, remaining - path_width), minwidth=1, stretch=False)
-        self.tree.xview_moveto(0)
-        self.selection_label.configure(wraplength=max(100, width))
+            self.tree.column(column, width=size, minwidth=size, stretch=False)
+        self.tree.column("#0", width=max(200, width - sum(fixed[key] for key in self.tree["displaycolumns"])),
+                         minwidth=200, stretch=False)
+        self.selection_label.configure(wraplength=width)
+
 
     def update_selection_details(self):
         selection = self.tree.selection()

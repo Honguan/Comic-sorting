@@ -1,4 +1,23 @@
 """Keyboard actions scoped to the focused table, never to text inputs."""
+from tkinter import ttk
+
+
+class LibraryTree(ttk.Treeview):
+    """Materialize chapter rows when expanded or requested by existing callers."""
+    def __init__(self, parent, load_children, **options):
+        super().__init__(parent, **options)
+        self.load_children = load_children
+        self.bind('<<TreeviewOpen>>', lambda _event: load_children(self.focus()))
+
+    def get_children(self, item=None):
+        if item:
+            self.load_children(item)
+        return super().get_children(item)
+
+    def item(self, item, option=None, **options):
+        if options.get('open'):
+            self.load_children(item)
+        return super().item(item, option, **options)
 
 
 def copy_manga_names(tree, series_paths):

@@ -9,6 +9,23 @@ def tr(text):
     return TRANSLATIONS.get(text, {}).get(_language, text)
 
 TRANSLATIONS = {
+    '排序': {'en': 'Sort', 'ja': '並べ替え'},
+    '搜尋': {'en': 'Search', 'ja': '検索'},
+    '漫畫庫': {'en': 'Comic library', 'ja': '漫画ライブラリ'},
+    '章節整合': {'en': 'Merge chapters', 'ja': '章の結合'},
+    '介面設定': {'en': 'Interface', 'ja': '表示設定'},
+    '章節序號': {'en': 'Chapter index', 'ja': '章の順番'},
+    '加入區間': {'en': 'Add range', 'ja': '範囲を追加'},
+    '加入選取': {'en': 'Add selected', 'ja': '選択を追加'},
+    '請先選擇漫畫': {'en': 'Select a comic first', 'ja': '漫画を選択してください'},
+    '先在漫畫庫選取漫畫或章節；整合是選用工具。': {'en': 'Select a comic or chapters in the library first. Merging is optional.', 'ja': 'まずライブラリで漫画または章を選択してください。結合は任意の機能です。'},
+    '頁數': {'en': 'Pages', 'ja': 'ページ数'},
+    '工具': {'en': 'Tools', 'ja': 'ツール'},
+    '清除': {'en': 'Clear', 'ja': 'クリア'},
+    '選項': {'en': 'Options', 'ja': 'オプション'},
+    '更多操作': {'en': 'More', 'ja': '操作'},
+    '重試': {'en': 'Retry', 'ja': '再試行'},
+    '本次耗時': {'en': 'Elapsed', 'ja': '経過時間'},
     '統計': {'en': 'Statistics', 'ja': '統計'},
     '全部歷史總累計': {'en': 'All-history totals', 'ja': '全履歴の累計'},
     '模型統計': {'en': 'Model statistics', 'ja': 'モデル統計'},

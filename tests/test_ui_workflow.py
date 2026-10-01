@@ -548,6 +548,8 @@ class WorkflowTests(unittest.TestCase):
             self.assertEqual(q.count_cache[path, 1, None], 3)
             self.assertEqual(q.count_cache[path, 2, 3], 2)
         (path / '3.webp').unlink()
+        self.app.scan_events.put(('progress', 128))
+        self.app.scan_events.put(('progress', 256))
         self.app.scan_events.put(('done', base, self.app.scan_folder_data(base)))
         self.app.poll_scan_events()
         self.wait_counts(q)
@@ -953,7 +955,7 @@ class WorkflowTests(unittest.TestCase):
         tree = self.app.folder_tree
         for width in (760, 1200, 1600):
             self.app.fit_folder_columns(SimpleNamespace(width=width))
-            self.assertLessEqual(sum(tree.column(c, "width") for c in ("#0", *tree['columns'])), width)
+            self.assertLessEqual(sum(tree.column(c, "width") for c in ("#0", *tree["displaycolumns"])), width)
         parent = tree.get_children()[0]
         leaf = tree.get_children(parent)[0]
         tree.selection_set(leaf)
@@ -973,8 +975,8 @@ class WorkflowTests(unittest.TestCase):
         q.update_controls()
         for width in (760, 1200, 1600):
             q.fit_columns(SimpleNamespace(width=width))
-            self.assertLessEqual(sum(q.tree.column(c, "width") for c in ("#0", *q.tree['columns'])), width)
-            self.assertTrue(all(q.tree.column(c, "width") > 0 for c in q.tree['columns']))
+            self.assertLessEqual(sum(q.tree.column(c, "width") for c in ("#0", *q.tree["displaycolumns"])), width)
+            self.assertTrue(all(q.tree.column(c, "width") >= 40 for c in q.tree["displaycolumns"]))
         self.assertIn(str(path), q.selection_details.get())
         self.assertIn('滿載', q.selection_details.get())
         self.assertNotIn('LLM_CAPACITY', q.selection_details.get())
@@ -1171,6 +1173,7 @@ class WorkflowTests(unittest.TestCase):
         base = self.folder / 'Comics'
         self.app.apply_scan_data(base, self.app.scan_folder_data(base))
         tree, q = self.app.folder_tree, self.app.translation_queue
+        tree.get_children(tree.get_children()[0])
         items = {path: item for item, (_, path) in self.app.tree_items.items()}
         self.assertEqual(tree.set(items[first], 'kind'), '單一章節')
         self.assertEqual(tree.set(items[merged], 'kind'), '整合資料夾')
@@ -1649,6 +1652,8 @@ class WorkflowTests(unittest.TestCase):
         self.root.update()
 
         def right_click(path):
+            for parent in tree.get_children():
+                tree.get_children(parent)
             item = next(key for key, (_, value) in self.app.tree_items.items() if value == path)
             tree.see(item)
             self.root.update()
@@ -1991,12 +1996,12 @@ class WorkflowTests(unittest.TestCase):
         self.assertFalse(self.app.translation_queue.open_after_completion.get())
         for expected in (True, False):
             q = self.app.translation_queue
-            check = next(w for w in q.controls if isinstance(w, tk.ttk.Checkbutton)
-                         and w.cget("text") == "完成後開啟資料夾")
-            check.invoke()
+            index = next(i for i in range(q.options_menu.index("end") + 1)
+                         if q.options_menu.entrycget(i, "label") == "完成後開啟資料夾")
+            q.options_menu.invoke(index)
             self.assertIs(comic.load_json(self.settings, {})["bt_open_after_completion"], expected)
             self.app.set_manga_busy(True)
-            self.assertTrue(check.instate(["disabled"]))
+            self.assertTrue(q.options_menu.master.instate(["disabled"]))
             self.app.set_manga_busy(False)
             self.root.update_idletasks()
             for handle in self.root.tk.call("after", "info"):
@@ -2070,7 +2075,7 @@ class WorkflowTests(unittest.TestCase):
         footer = self.app.translation_queue.usage_frame
         self.assertTrue(footer.winfo_ismapped())
         self.assertLessEqual(footer.winfo_rooty() - self.root.winfo_rooty() + footer.winfo_reqheight(), 780)
-        self.assertEqual(len(self.app.work_tabs.tabs()), 4)
+        self.assertEqual(len(self.app.work_tabs.tabs()), 5)
         n = self.app.translation_queue.notifications
         self.app.work_tabs.select(n.tab)
         self.root.update()
@@ -2105,12 +2110,19 @@ class WorkflowTests(unittest.TestCase):
         q, panes = self.app.translation_queue, self.app.panes
         panes.sashpos(0, 300)
         self.root.update()
-        before = q.tree.winfo_height()
-        ratio = panes.sashpos(0) / panes.winfo_height()
+        before = q.tree.winfo_width()
+        ratio = panes.sashpos(0) / panes.winfo_width()
+        def finish_animation():
+            deadline = time.monotonic() + .25
+            while time.monotonic() < deadline:
+                self.root.update()
+                time.sleep(.01)
+            self.assertIsNone(q.sash_after)
         q.zoom_button.invoke()
-        self.root.update()
+        self.assertIsNotNone(q.sash_after)
+        finish_animation()
         self.assertEqual(panes.sashpos(0), 0)
-        self.assertGreater(q.tree.winfo_height(), before)
+        self.assertGreater(q.tree.winfo_width(), before)
         for button in (q.bt_toggle, q.usage_toggle):
             button.invoke()
             self.root.update()
@@ -2121,74 +2133,39 @@ class WorkflowTests(unittest.TestCase):
         self.root.update()
         self.assertEqual(panes.sashpos(0), 0)
         q.zoom_button.invoke()
+        finish_animation()
+        self.assertAlmostEqual(panes.sashpos(0) / panes.winfo_width(), ratio, delta=.01)
+        # Rapid reversal resumes from the current frame and restores the same ratio.
+        q.zoom_button.invoke()
         self.root.update()
-        self.assertAlmostEqual(panes.sashpos(0) / panes.winfo_height(), ratio, delta=.01)
-        self.assertEqual(q.zoom_button['text'], '放大佇列')
-        panes.sashpos(0, 200)  # The native divider remains manually resizable.
+        q.zoom_button.invoke()
+        finish_animation()
+        self.assertAlmostEqual(panes.sashpos(0) / panes.winfo_width(), ratio, delta=.01)
+        panes.sashpos(0, 200)
         self.root.update()
         self.assertEqual(panes.sashpos(0), 200)
 
-    def test_expanded_queue_sections_borrow_manga_space_and_restore_it(self):
-        # Test the roomy layout even on CI's 1024x768 desktop; small-screen coverage follows below.
-        self.root.maxsize(1200, 1100)
-        self.root.geometry('980x900')
+    def test_queue_details_preserve_library_and_queue_space(self):
+        self.root.geometry('980x720')
         self.root.deiconify()
         self.root.update()
         q, panes = self.app.translation_queue, self.app.panes
-        manga = panes.nametowidget(panes.panes()[0])
-        panes.sashpos(0, 450)
-        self.root.update()
-        original_sash = panes.sashpos(0)
-        original_tree = q.tree.winfo_height()
-        original_manga = manga.winfo_height()
-        for _ in range(2):
-            q.bt_toggle.invoke()
-            self.root.update()
-            self.assertLess(manga.winfo_height(), original_manga)
-            self.assertAlmostEqual(q.tree.winfo_height(), original_tree, delta=1)
-            progress_sash = panes.sashpos(0)
-            q.usage_toggle.invoke()
-            self.root.update()
-            self.assertLess(panes.sashpos(0), progress_sash)
-            self.assertAlmostEqual(q.tree.winfo_height(), original_tree, delta=1)
-            # Close in a different order from opening; no cumulative sash drift.
-            q.bt_toggle.invoke()
-            self.root.update()
-            self.assertAlmostEqual(q.tree.winfo_height(), original_tree, delta=1)
-            q.usage_toggle.invoke()
-            self.root.update()
-            self.assertEqual(panes.sashpos(0), original_sash)
-            self.assertAlmostEqual(q.tree.winfo_height(), original_tree, delta=1)
-        # On a small desktop, the manga controls must remain accessible.
-        self.root.geometry('980x720')
-        self.root.update()
         panes.sashpos(0, 335)
         self.root.update()
-        q.bt_toggle.invoke()
-        q.usage_toggle.invoke()
-        self.root.update()
-        self.assertTrue(q.tree.winfo_ismapped())
-        self.assertTrue(self.app.aggregate_button.winfo_ismapped())
-        self.assertLessEqual(self.app.aggregate_button.winfo_rooty() + self.app.aggregate_button.winfo_reqheight(),
-                             manga.winfo_rooty() + manga.winfo_height())
-        q.usage_toggle.invoke()
-        q.bt_toggle.invoke()
-        self.root.update()
-        self.assertEqual(panes.sashpos(0), 335)
-        # A user's divider adjustment while expanded remains after collapsing.
-        self.root.geometry('980x900')
-        self.root.update()
-        panes.sashpos(0, 450)
-        self.root.update()
-        q.bt_toggle.invoke()
-        self.root.update()
-        panes.sashpos(0, panes.sashpos(0) + 15)
-        self.root.update()
-        adjusted_tree = q.tree.winfo_height()
-        q.bt_toggle.invoke()
-        self.root.update()
-        self.assertEqual(panes.sashpos(0), 465)
-        self.assertAlmostEqual(q.tree.winfo_height(), adjusted_tree, delta=1)
+        initial = (panes.sashpos(0), q.tree.winfo_width(), q.tree.winfo_height())
+        for _ in range(2):
+            q.bt_toggle.invoke()
+            q.usage_toggle.invoke()
+            self.root.update()
+            self.assertTrue(q.bt_bars['OCR'].master.winfo_ismapped())
+            self.assertTrue(q.usage_table.master.winfo_ismapped())
+            self.assertTrue(self.app.add_range_button.winfo_ismapped())
+            self.assertEqual((panes.sashpos(0), q.tree.winfo_width(), q.tree.winfo_height()), initial)
+            q.bt_toggle.invoke()
+            q.usage_toggle.invoke()
+            self.root.update()
+            self.assertEqual((panes.sashpos(0), q.tree.winfo_width(), q.tree.winfo_height()), initial)
+
 
     def test_queue_sections_collapse_independently_and_keep_receiving_updates(self):
         from queue_worker import parse_bt_usage
@@ -2201,7 +2178,7 @@ class WorkflowTests(unittest.TestCase):
         self.app.panes.sashpos(0, 120)
         self.root.update()
         progress_grid = q.bt_bars['OCR'].master
-        usage_grid = q.usage_frame.winfo_children()[0]
+        usage_grid = q.usage_table.master
         self.assertFalse(progress_grid.winfo_ismapped())
         self.assertFalse(usage_grid.winfo_ismapped())
         q.bt_toggle.invoke()
@@ -2219,7 +2196,7 @@ class WorkflowTests(unittest.TestCase):
         self.root.update()
         self.assertFalse(progress_grid.winfo_ismapped())
         self.assertTrue(usage_grid.winfo_ismapped())
-        self.assertGreater(q.tree.winfo_height(), expanded_height)
+        self.assertEqual(q.tree.winfo_height(), expanded_height)
         q.usage_toggle.invoke()
         self.root.update_idletasks()
         self.assertFalse(usage_grid.winfo_ismapped())
@@ -2263,8 +2240,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual((self.root.winfo_width(), self.root.winfo_height()), (900, 700))
         q = self.app.translation_queue
         self.assertFalse(q.bt_bars['OCR'].master.winfo_ismapped())
-        self.assertFalse(q.usage_frame.winfo_children()[0].winfo_ismapped())
-
+        self.assertFalse(q.usage_table.master.winfo_ismapped())
     @unittest.skipUnless(comic.os.name == 'nt', 'Windows maximized state')
     def test_maximized_window_keeps_normal_size_through_minimize_and_restart(self):
         self.root.geometry('900x700')
