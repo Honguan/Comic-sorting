@@ -15,6 +15,7 @@ TRANSLATIONS = {
     '章節整合': {'en': 'Merge chapters', 'ja': '章の結合'},
     '介面設定': {'en': 'Interface', 'ja': '表示設定'},
     '章節序號': {'en': 'Chapter index', 'ja': '章の順番'},
+    '已加入 {0} 項': {'en': 'Queued {0} items', 'ja': '{0} 件をキューに追加'},
     '加入區間': {'en': 'Add range', 'ja': '範囲を追加'},
     '加入選取': {'en': 'Add selected', 'ja': '選択を追加'},
     '進度': {'en': 'Progress', 'ja': '進捗'},

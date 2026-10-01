@@ -13,7 +13,7 @@ from translation_queue import TranslationQueue
 from app_logging import configure_logging, logger, log_path, redact
 from ui_language import LANGUAGES, set_language, tr
 from ui_theme import apply_theme
-from ui_interactions import LibraryTree, bind_table_shortcuts, copy_manga_names, details_text
+from ui_interactions import LibraryTree, bind_search_shortcuts, bind_table_shortcuts, copy_manga_names, details_text
 from comic_core import (
     IMAGE_EXTENSIONS, FOLDER_KINDS, chapter_number, folder_kind, image_files, translation_status,
     natural_sort_key, updated_at, folder_size, format_size, summarize_names,
@@ -134,8 +134,6 @@ class FileAggregatorApp:
         self.search_entry = ttk.Entry(search_row, textvariable=self.search_text)
         self.search_entry.pack(side="left", fill="x", expand=True)
         self.search_entry.configure(width=8)
-        self.root.bind("<Control-f>", lambda _event: self.search_entry.focus_set())
-        self.search_entry.bind("<Escape>", lambda _event: self.search_text.set(""))
         ttk.Button(search_row, text=tr("清除"), width=0, command=lambda: self.search_text.set("")).pack(side="left", padx=4)
         self.library_menu = library_menu = ttk.Menubutton(header, text=tr("工具"))
         menu = tk.Menu(library_menu, tearoff=False)
@@ -179,6 +177,8 @@ class FileAggregatorApp:
         self.folder_tree.bind("<<TreeviewSelect>>", self.on_tree_select)
         self.folder_tree.bind("<Double-1>", self.add_chapter_to_queue)
         copy_paths = bind_table_shortcuts(self.folder_tree, self.selected_chapters)
+        self.root.bind("<Control-f>", bind_search_shortcuts(
+            self.search_entry, self.search_text, self.apply_filter, self.folder_tree))
         self.folder_context_menu = tk.Menu(self.folder_tree, tearoff=False)
         self.folder_context_menu.add_command(label=tr("刪除章節資料夾…"))
         for label in ("全選所有資料夾", "全選單一章節", "全選整合資料夾"):
@@ -232,6 +232,11 @@ class FileAggregatorApp:
         self.add_range_button = ttk.Button(self.enqueue_actions, text=tr("加入佇列"), style="Accent.TButton",
                                           command=lambda: self.translation_queue.add_number_range())
         self.add_range_button.pack(side="right")
+        def add_range(_event=None):
+            self.add_range_button.invoke()
+            return "break"
+        for entry in (self.start_entry, self.end_entry):
+            entry.bind("<Return>", add_range)
         ttk.Label(panel, text=tr("從 1 起算；結束留白到最後"), style="Muted.TLabel").pack(anchor="w", pady=(2, 0))
 
 
@@ -726,6 +731,8 @@ class FileAggregatorApp:
         self.search_after = self.root.after(180, self.apply_filter)
 
     def apply_filter(self):
+        if self.search_after is not None:
+            self.root.after_cancel(self.search_after)
         self.search_after = None
         if self.scan_data:
             self.apply_scan_data(*self.scan_data)

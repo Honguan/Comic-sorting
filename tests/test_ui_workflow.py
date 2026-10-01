@@ -778,6 +778,98 @@ class WorkflowTests(unittest.TestCase):
         q.running = False
         self.assertEqual([job.path for job in q.jobs], paths[1:])
 
+    def test_enqueue_reveals_jobs_without_changing_selection_or_start_scope(self):
+        q = self.app.translation_queue
+        paths = [self.chapter(f'Chapter {i}') for i in range(1, 5)]
+        q.add_paths(paths[:2])
+        self.assertEqual(q.tree.selection(), ())
+        self.assertEqual(q.start_targets(), tuple(q.jobs))
+        first = str(id(q.jobs[0]))
+        q.tree.selection_set(first)
+        q.tree.focus(first)
+        q.tree.item(q.tree.parent(first), open=False)
+        q.add_paths([paths[2], paths[2]])
+        added = str(id(q.jobs[-1]))
+        self.assertEqual(q.label.get(), '已加入 1 項')
+        self.assertEqual(q.tree.selection(), (first,))
+        self.assertEqual(q.tree.focus(), first)
+        self.assertEqual(q.start_targets(), (q.jobs[0],))
+        parent = q.tree.parent(added)
+        while parent:
+            self.assertTrue(q.tree.item(parent, 'open'))
+            parent = q.tree.parent(parent)
+        q.search.set('Chapter 1')
+        q.add_paths([paths[3]])
+        self.assertEqual(q.search.get(), 'Chapter 1')
+        self.assertFalse(q.tree.exists(str(id(q.jobs[-1]))))
+        self.assertEqual(q.tree.selection(), (first,))
+        self.assertEqual(q.start_targets(), (q.jobs[0],))
+        self.assertEqual(len(q.jobs), 4)
+
+    def test_search_shortcuts_stay_in_the_current_list_and_flush_filters(self):
+        paths = [self.chapter(f'Chapter {i}') for i in (1, 2)]
+        base = self.folder / 'Comics'
+        self.app.apply_scan_data(base, self.app.scan_folder_data(base))
+        q = self.app.translation_queue
+        q.add_paths(paths)
+        self.root.deiconify()
+        self.root.update()
+        for entry, variable, tree, owner in (
+                (self.app.search_entry, self.app.search_text, self.app.folder_tree, self.app),
+                (q.search_entry, q.search, q.tree, q)):
+            with self.subTest(entry=str(entry)):
+                variable.set('Chapter 2')
+                scheduled = owner.search_after
+                tree.focus_force()
+                tree.event_generate('<Control-f>')
+                self.root.update()
+                self.assertEqual(self.root.focus_get(), entry)
+                self.assertTrue(entry.selection_present())
+                self.assertEqual(entry.index('sel.first'), 0)
+                self.assertEqual(entry.index('sel.last'), len(variable.get()))
+                entry.event_generate('<Return>')
+                self.root.update()
+                self.assertIsNone(owner.search_after)
+                self.assertNotIn(scheduled, self.root.tk.call('after', 'info'))
+                self.assertEqual(self.root.focus_get(), tree)
+                if owner is q:
+                    self.assertFalse(tree.exists(str(id(q.jobs[0]))))
+                    self.assertTrue(tree.exists(str(id(q.jobs[1]))))
+                else:
+                    children = tree.get_children(tree.get_children()[0])
+                    self.assertEqual([self.app.tree_items[item][1] for item in children], [paths[1]])
+                entry.focus_force()
+                entry.event_generate('<Escape>')
+                self.root.update()
+                self.assertEqual(variable.get(), '')
+                self.assertIsNone(owner.search_after)
+                self.assertEqual(self.root.focus_get(), tree)
+        self.assertEqual(len(q.jobs), 2)
+
+    def test_range_enter_enqueues_once_and_respects_busy_controls(self):
+        paths = [self.chapter(f'Chapter {i}') for i in (1, 2, 3)]
+        base = self.folder / 'Comics'
+        self.app.base_path.set(str(base))
+        self.app.apply_scan_data(base, self.app.scan_folder_data(base))
+        self.app.folder_tree.selection_set(self.app.folder_tree.get_children()[0])
+        self.app.on_tree_select()
+        self.app.range_start.set('2')
+        self.app.range_end.set('3')
+        command = self.app.end_entry.bind('<Return>').split('[', 1)[1].split()[0]
+        with mock.patch.object(self.app.translation_queue, 'add_number_range',
+                               wraps=self.app.translation_queue.add_number_range) as add:
+            self.assertEqual(self.root.tk.call(command), 'break')
+            add.assert_called_once()
+        self.assertEqual([job.path for job in self.app.translation_queue.jobs], paths[1:])
+        self.assertEqual(self.app.range_end.get(), '3')
+        self.app.manga_busy = True
+        self.app.translation_queue.update_controls()
+        with mock.patch.object(self.app.translation_queue, 'add_number_range') as add:
+            self.assertEqual(self.root.tk.call(command), 'break')
+            add.assert_not_called()
+        self.app.manga_busy = False
+
+
     def test_queue_search_batches_typing_and_flushes_before_selection_actions(self):
         q = self.app.translation_queue
         q.jobs = [Job(self.folder / 'Series' / name, 'export') for name in ('Chapter 1', 'Chapter 2')]

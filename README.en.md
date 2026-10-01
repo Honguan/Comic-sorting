@@ -44,6 +44,7 @@ Model statistics show scope, model, tokens, requests, and estimated cost by defa
 | More actions → Retry | With a selection: resets failed, warning, stopped, and blocked jobs in that scope. Without a selection: resets all failed/warning jobs. A completed job can only be requeued when its individual row is selected alone. |
 | Options → Translation pages | Select one translation job and set an inclusive page range. Pages start at 1 and follow natural image-filename order. |
 | Search and view | Search manga names or paths. Groups show single/merged chapter counts and translation page counts. Expand the queue for more space. |
+| Keyboard and feedback | Ctrl+F from a list or search box selects its search text. Enter applies the filter; Esc clears it and returns to the list. Enter in a chapter-range field enqueues it. Enqueueing reveals the item and preserves the existing selection. |
 | Names and paths | Export all manga names, or use the context menu to copy manga names or full paths. |
 
 - **Search only filters the display.** Select results to run only those jobs; starting without a selection still runs all pending jobs.

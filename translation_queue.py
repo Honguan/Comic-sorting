@@ -11,7 +11,7 @@ import subprocess
 import os
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk, font as tkfont
-from ui_interactions import bind_table_shortcuts, copy_manga_names, details_text
+from ui_interactions import bind_search_shortcuts, bind_table_shortcuts, copy_manga_names, details_text
 
 from queue_worker import BT_STAGES, Job, run_jobs, translator_command
 from app_logging import logger, log_path
@@ -186,6 +186,7 @@ class TranslationQueue:
         self.tree.bind("<<TreeviewSelect>>", lambda _event: self.update_controls())
         self.search.trace_add("write", lambda *_args: self.filter_jobs())
         copy_paths = bind_table_shortcuts(self.tree, self.selected_paths)
+        bind_search_shortcuts(self.search_entry, self.search, self.apply_queue_filter, self.tree)
         self.context_menu = tk.Menu(self.tree, tearoff=False)
         self.context_menu.add_command(label=tr("移除佇列項目"), command=lambda: self.remove(confirm=True))
         self.tree.bind("<Button-3>", self.show_context_menu)
@@ -970,6 +971,7 @@ class TranslationQueue:
         action = action or next(code for code, label in ACTIONS.items() if tr(label) == self.action.get())
         if action not in ACTIONS:
             raise ValueError(action)
+        affected = []
         for path in paths:
             path = Path(path).resolve()
             self.count_generation += 1
@@ -979,10 +981,17 @@ class TranslationQueue:
                 self.app.chapter_page_counts.pop(path, None)
                 existing.status, existing.error = "pending", ""
             else:
-                self.jobs.append(Job(path, action))
+                existing = Job(path, action)
+                self.jobs.append(existing)
+            affected.append(str(id(existing)))
         self.render()
-        self.update_controls()
         self.app.work_tabs.select(self.app.queue_tab)
+        visible = next((item for item in affected if self.tree.exists(item)), None)
+        if visible:
+            self.tree.see(visible)
+        if affected:
+            self.label.set(tr("已加入 {0} 項").format(len(set(affected))))
+        self.update_controls()
         self.app.save_settings()
 
     def add_selected(self):

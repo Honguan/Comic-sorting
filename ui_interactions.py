@@ -73,3 +73,28 @@ def bind_table_shortcuts(tree, selected_paths):
     tree.bind("<Escape>", clear_selection)
     tree.bind("<Control-c>", copy_paths)
     return copy_paths
+
+
+def bind_search_shortcuts(entry, variable, apply_filter, tree):
+    def focus_search(_event=None):
+        entry.focus_set()
+        entry.selection_range(0, 'end')
+        return 'break'
+
+    def search(_event=None):
+        apply_filter()
+        tree.focus_set()
+        return 'break'
+
+    def clear_search(_event=None):
+        if variable.get():
+            variable.set('')
+            apply_filter()
+        tree.focus_set()
+        return 'break'
+
+    for widget in (entry, tree):
+        widget.bind('<Control-f>', focus_search)
+    entry.bind('<Return>', search)
+    entry.bind('<Escape>', clear_search)
+    return focus_search
