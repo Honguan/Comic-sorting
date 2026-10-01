@@ -162,8 +162,8 @@ def usage_columns(records):
     tokens = format_tokens(sum(value['total_tokens'] for value in records)) if records else tr("尚未回報")
     requests = f"{sum(value['requests'] for value in records):,}" if records else '—'
     partial = any(value['cost'] is None or value['unpriced_requests'] or value.get('cost_incomplete') for value in records)
-    pricing = tr("僅含已知金額") if costs and partial else tr("完整") if costs else tr("尚未回報")
-    reporting = tr("回報不完整") if any(value['missing_usage_requests'] for value in records) else tr("完整") if records else tr("尚未回報")
+    pricing = tr("僅含已知金額") if costs and partial else tr("完整") if costs else tr("費用未知") if records else tr("尚未回報")
+    reporting = tr("用量不完整") if any(value['missing_usage_requests'] for value in records) else tr("完整") if records else tr("尚未回報")
     return tokens, cost, requests, pricing, reporting
 
 

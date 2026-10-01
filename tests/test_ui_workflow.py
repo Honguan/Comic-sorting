@@ -1110,7 +1110,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(q.usage_table.set('total', 'tokens'), '尚未回報')
         q.usage_records[0, 'total'] = dict(total_tokens=12345, cost='0.125', requests=4, unpriced_requests=1, missing_usage_requests=1)
         q.show_usage()
-        self.assertEqual(q.usage_table.item('total', 'values'), ('合計', '12.35K', 'US$0.13', '4', '僅含已知金額', '回報不完整'))
+        self.assertEqual(q.usage_table.item('total', 'values'), ('合計', '12.35K', 'US$0.13', '4', '僅含已知金額', '用量不完整'))
         q.show_usage()
         self.assertEqual(len(q.usage_table.get_children()), 3)
         self.assertEqual(q.elapsed_label.get(), '00:00:00')
@@ -1149,22 +1149,24 @@ class WorkflowTests(unittest.TestCase):
             q.pending_file_counts[str(id(job))] = None
             q.count_cache[job.path, job.start_page, job.end_page] = None
         q.update_summary()
-        self.assertEqual(q.summary_preview.get().splitlines()[0], '等待 2 · 完成 1 · 需處理 1')
+        self.assertEqual(q.summary_preview.get().splitlines()[0], '待執行 2 · 完成 1 · 需處理 1')
         self.assertIn('頁數尚未確認', q.summary_preview.get())
-        self.assertNotIn('0 張', q.summary_preview.get())
+        self.assertNotIn('待翻譯 0 頁', q.summary_preview.get())
+        self.assertIn('頁數尚未確認', q.summary.get())
+        self.assertNotIn('待翻譯 0 頁', q.summary.get())
         self.assertIn('尚未確認', q.selection_page_count(pending))
         self.assertIn('本次重試 7', q.summary.get())
         for job in pending:
             q.pending_file_counts[str(id(job))] = 0
             q.count_cache[job.path, job.start_page, job.end_page] = 0
         q.update_summary()
-        self.assertIn('待翻譯檔案 0 張', q.summary_preview.get())
+        self.assertIn('待翻譯 0 頁', q.summary_preview.get())
         self.assertEqual(q.selection_page_count(pending), '0 頁')
         for job, count in zip(pending, (3, 4)):
             q.pending_file_counts[str(id(job))] = count
             q.count_cache[job.path, job.start_page, job.end_page] = count
         q.update_summary()
-        self.assertIn('待翻譯檔案 7 張', q.summary_preview.get())
+        self.assertIn('待翻譯 7 頁', q.summary_preview.get())
         with mock.patch('translation_queue.messagebox.showinfo') as info:
             q.view_menu.invoke(4)
         self.assertIn('本次重試 7', info.call_args.args[1])
@@ -1172,10 +1174,10 @@ class WorkflowTests(unittest.TestCase):
         for job in pending:
             job.status = 'done'
         q.update_summary()
-        self.assertEqual(q.summary_preview.get(), '等待 0 · 完成 3 · 需處理 1')
+        self.assertEqual(q.summary_preview.get(), '待執行 0 · 完成 3 · 需處理 1')
         q.jobs[-1].status = 'done'
         q.update_summary()
-        self.assertEqual(q.summary_preview.get(), '等待 0 · 完成 4')
+        self.assertEqual(q.summary_preview.get(), '待執行 0 · 完成 4')
 
 
     def test_queue_columns_fit_window_and_selected_details_keep_full_path(self):
@@ -2032,7 +2034,7 @@ class WorkflowTests(unittest.TestCase):
         q = self.app.translation_queue
         q.add_paths([first, second], "translate")
         self.wait_counts(q)
-        self.assertIn("待翻譯檔案 10 張", q.summary.get())
+        self.assertIn("待翻譯 10 頁", q.summary.get())
         q.jobs[0].status = "done"
         q.tree.selection_set(str(id(q.jobs[0])))
         dialog = q.edit_page_range()
@@ -2051,14 +2053,14 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual((q.jobs[0].start_page, q.jobs[0].end_page, q.jobs[0].status), (2, 4, "pending"))
         self.assertEqual((q.jobs[1].start_page, q.jobs[1].end_page), (1, None))
         self.wait_counts(q)
-        self.assertIn("待翻譯檔案 8 張", q.summary.get())
+        self.assertIn("待翻譯 8 頁", q.summary.get())
         self.assertEqual([j.range_export for j in q.jobs], [True, False])
         self.assertIn("2", q.tree.set(str(id(q.jobs[0])), "pages"))
         self.assertEqual(load_json(self.settings, {})["bt_jobs"][0]["end_page"], 4)
         another = tk.Toplevel(self.root)
         restored = comic.FileAggregatorApp(another).translation_queue
         self.wait_counts(restored)
-        self.assertIn("待翻譯檔案 8 張", restored.summary.get())
+        self.assertIn("待翻譯 8 頁", restored.summary.get())
         self.assertEqual([(j.start_page, j.end_page) for j in restored.jobs], [(2, 4), (1, None)])
         self.assertEqual([j.range_export for j in restored.jobs], [True, False])
         another.destroy()
@@ -2078,7 +2080,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual((q.jobs[0].start_page, q.jobs[0].end_page), (1, None))
         self.assertFalse(q.jobs[0].range_export)
         self.wait_counts(q)
-        self.assertIn("待翻譯檔案 10 張", q.summary.get())
+        self.assertIn("待翻譯 10 頁", q.summary.get())
 
     def test_pending_file_total_tracks_jobs_retries_removal_and_rescan(self):
         first, second = self.chapter("Chapter 1"), self.chapter("Chapter 2")
@@ -2090,26 +2092,26 @@ class WorkflowTests(unittest.TestCase):
         q.add_paths([first, second], "translate")
         q.add_paths([first], "export")
         self.wait_counts(q)
-        self.assertIn("待翻譯檔案 5 張", q.summary.get())
+        self.assertIn("待翻譯 5 頁", q.summary.get())
         q.active_jobs = tuple(q.jobs)
         q.events.put(("status", 0, "running", ""))
         with mock.patch("translation_queue.image_count", side_effect=AssertionError("status must not rescan")):
             q.poll()
         self.wait_counts(q)
-        self.assertIn("待翻譯檔案 2 張", q.summary.get())
+        self.assertIn("待翻譯 2 頁", q.summary.get())
         q.events.put(("status", 0, "failed", "synthetic failure"))
         q.poll()
         q.tree.selection_set(str(id(q.jobs[0])))
         q.retry()
         self.wait_counts(q)
-        self.assertIn("待翻譯檔案 5 張", q.summary.get())
+        self.assertIn("待翻譯 5 頁", q.summary.get())
         q.tree.selection_set(str(id(q.jobs[1])))
         q.remove()
         self.wait_counts(q)
-        self.assertIn("待翻譯檔案 3 張", q.summary.get())
+        self.assertIn("待翻譯 3 頁", q.summary.get())
         q.add_paths([self.folder / "missing"], "translate")
         self.wait_counts(q)
-        self.assertIn("待翻譯檔案 3 張（1 項無法計數）", q.summary.get())
+        self.assertIn("待翻譯 3 頁（1 項無法計數）", q.summary.get())
         with mock.patch("translation_queue.image_count", side_effect=PermissionError("synthetic denied")):
             q.render(refresh_counts=True)
             self.wait_counts(q)
@@ -2119,7 +2121,7 @@ class WorkflowTests(unittest.TestCase):
         self.app.scan_events.put(("done", base, self.app.scan_folder_data(base)))
         self.app.poll_scan_events()
         self.wait_counts(q)
-        self.assertIn("待翻譯檔案 4 張（1 項無法計數）", q.summary.get())
+        self.assertIn("待翻譯 4 頁（1 項無法計數）", q.summary.get())
 
     def test_range_export_controls_output_validation_and_legacy_jobs_default_off(self):
         from comic_core import save_json

@@ -51,7 +51,7 @@ class TranslationQueueTests(unittest.TestCase):
         self.assertIn('第 3–7 頁', q.selection_details.get())
         q.count_cache.clear()
         q.update_selection_details()
-        self.assertIn('1 項計算中', q.selection_details.get())
+        self.assertIn('1 項計數中', q.selection_details.get())
         q.count_cache[first.path, 3, 7] = None
         q.update_selection_details()
         self.assertIn('1 項無法計數', q.selection_details.get())

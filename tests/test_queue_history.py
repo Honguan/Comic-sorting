@@ -179,6 +179,11 @@ class HistoryStorageTests(unittest.TestCase):
                     self.assertIn('僅含已知金額', text)
         self.assertIn('Token 回報不完整', usage_text([partial]))
         self.assertEqual(usage_text([], empty_text='無法預估'), '無法預估')
+        from queue_history import usage_columns
+        self.assertEqual(usage_columns([unknown])[1:4], ('無法預估', '10', '費用未知'))
+        self.assertEqual(usage_columns([dict(usage, cost='0')])[1:4], ('US$0.00', '10', '完整'))
+        self.assertEqual(usage_columns([partial])[3:], ('僅含已知金額', '用量不完整'))
+        self.assertEqual(usage_columns([])[3:], ('尚未回報', '尚未回報'))
 
     def test_legacy_subtotals_are_recovered_from_matching_saved_errors_without_writes(self):
         from queue_worker import parse_bt_usage

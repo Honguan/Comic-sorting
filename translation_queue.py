@@ -28,10 +28,10 @@ from queue_phases import MODES, READY, MARKER, prepared
 
 
 ACTIONS = {"translate": "翻譯", "export": "匯出", "cleanup": "清理"}
-STATUSES = {"pending": "等待", "running": "執行中", "done": "完成",
+STATUSES = {"pending": "待執行", "running": "執行中", "done": "完成",
             "prepared": "待翻譯", "skipped": "已略過",
             "done_warning": "完成需檢查",
-            "failed": "失敗", "cancelled": "已停止", "blocked": "前置工作失敗"}
+            "failed": "失敗", "cancelled": "已停止", "blocked": "未執行"}
 
 
 class TranslationQueue:
@@ -703,7 +703,7 @@ class TranslationQueue:
         calculating = sum(key not in self.count_cache for key in keys)
         unknown = counts.count(None) - calculating
         if calculating:
-            text += tr("（{0} 項計算中）").format(calculating)
+            text += tr("（{0} 項計數中）").format(calculating)
         if unknown:
             text += tr("（{0} 項無法計數）").format(unknown)
         return text
@@ -885,7 +885,7 @@ class TranslationQueue:
             key = (job.path, job.start_page, job.end_page)
             count = self.count_cache.get(key)
             if job.action == "translate":
-                pages = tr("{0} 頁").format(f"{count:,}") if count is not None else tr("估算中") if key not in self.count_cache else tr("無法計數")
+                pages = tr("{0} 頁").format(f"{count:,}") if count is not None else tr("計數中") if key not in self.count_cache else tr("無法計數")
                 self.tree.set(item, "pages", pages if job.start_page == 1 and job.end_page is None
                               else f"{pages}（{self.page_range_text(job)}）")
             for group in ("path:" + str(job.path.parent.parent), "series:" + str(job.path.parent)):
@@ -901,7 +901,7 @@ class TranslationQueue:
             calculating = sum(key not in self.count_cache for key in keys)
             unknown = counts.count(None) - calculating
             if calculating:
-                text += tr("（{0} 項計算中）").format(calculating)
+                text += tr("（{0} 項計數中）").format(calculating)
             if unknown:
                 text += tr("（{0} 項無法計數）").format(unknown)
             self.tree.set(group, "pages", text)
@@ -910,13 +910,15 @@ class TranslationQueue:
         counts = [self.pending_file_counts.get(str(id(job))) for job in self.jobs
                   if job.action == "translate" and job.status in READY]
         total_pages = sum(count for count in counts if count is not None)
-        files = tr("｜待翻譯檔案 {0} 張").format(f"{total_pages:,}")
+        files = tr("｜待翻譯 {0} 頁").format(f"{total_pages:,}")
+        if counts and all(count is None for count in counts):
+            files = "｜" + tr("頁數尚未確認")
         notes = ""
         unknown = counts.count(None)
         calculating = sum((j.path, j.start_page, j.end_page) not in self.count_cache for j in self.jobs
                           if j.action == "translate" and j.status in READY)
         if calculating:
-            notes += tr("（{0} 項計算中）").format(calculating)
+            notes += tr("（{0} 項計數中）").format(calculating)
         if unknown > calculating:
             notes += tr("（{0} 項無法計數）").format(unknown - calculating)
         failures = sum(j.status == "failed" for j in self.jobs)
@@ -924,9 +926,9 @@ class TranslationQueue:
         pending = sum(j.status in READY for j in self.jobs)
         done = sum(j.status in ("done", "done_warning") for j in self.jobs)
         attention = sum(j.status in ("failed", "cancelled", "blocked") for j in self.jobs)
-        self.summary.set(tr("佇列 {0} 項｜等待 {1}｜完成 {2}｜需處理 {3}").format(
+        self.summary.set(tr("佇列 {0} 項｜待執行 {1}｜完成 {2}｜需處理 {3}").format(
             len(self.jobs), pending, done, attention) + retries + files + notes)
-        preview = tr("等待 {0} · 完成 {1}").format(pending, done)
+        preview = tr("待執行 {0} · 完成 {1}").format(pending, done)
         if attention:
             preview += tr(" · 需處理 {0}").format(attention)
         if counts:

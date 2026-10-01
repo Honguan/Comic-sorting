@@ -62,7 +62,7 @@ OTHER_ERRORS = {
     'PIPELINE_STOPPED': '翻譯流程提前停止，未回報更明確原因',
     'PROCESS_EXIT': '翻譯程序以非零代碼結束',
     'RUN_INCOMPLETE': '翻譯程序未完成所有階段',
-    'QUEUE_BLOCKED': '同一資料夾的前置工作失敗，已略過此項',
+    'QUEUE_BLOCKED': '前置工作失敗',
     'RUN_INTERRUPTED': '上次執行中斷，需確認成果後重試',
     'USER_CANCELLED': '使用者或主佇列要求停止',
     'UNKNOWN_ERROR': '未能分類的錯誤，請查看原始訊息',

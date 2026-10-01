@@ -9,6 +9,15 @@ def tr(text):
     return TRANSLATIONS.get(text, {}).get(_language, text)
 
 TRANSLATIONS = {
+    '待執行': {'en': 'Pending', 'ja': '待機中'},
+    '未執行': {'en': 'Not run', 'ja': '未実行'},
+    '計數中': {'en': 'Counting', 'ja': '集計中'},
+    '（{0} 項計數中）': {'en': ' ({0} counting)', 'ja': '（{0} 件を集計中）'},
+    '｜待翻譯 {0} 頁': {'en': ' | {0} pages to translate', 'ja': '｜翻訳待ち {0} ページ'},
+    '待執行 {0} · 完成 {1}': {'en': 'Pending {0} · Done {1}', 'ja': '待機 {0} · 完了 {1}'},
+    '佇列 {0} 項｜待執行 {1}｜完成 {2}｜需處理 {3}': {'en': 'Queue {0} | Pending {1} | Done {2} | Needs attention {3}', 'ja': 'キュー {0} 件｜待機 {1}｜完了 {2}｜要確認 {3}'},
+    '用量不完整': {'en': 'Usage incomplete', 'ja': '使用量が不完全'},
+    '費用未知': {'en': 'Cost unknown', 'ja': '費用不明'},
     '排序': {'en': 'Sort', 'ja': '並べ替え'},
     '搜尋': {'en': 'Search', 'ja': '検索'},
     '漫畫庫': {'en': 'Comic library', 'ja': '漫画ライブラリ'},
@@ -655,7 +664,7 @@ TRANSLATIONS.update({
     "主佇列": {"en": "Queue", "ja": "キュー"},
     "設定": {"en": "Settings", "ja": "設定"},
     "整合時請只選擇同一系列的章節": {"en": "Select chapters from one series to merge", "ja": "結合する章は同じシリーズから選択してください"},
-    "前置工作失敗": {"en": "Blocked", "ja": "前の処理が失敗"},
+    "前置工作失敗": {"en": "Previous task failed", "ja": "前の処理が失敗"},
     "上移": {"en": "Move up", "ja": "上へ"},
     "下移": {"en": "Move down", "ja": "下へ"},
     "移到最上": {"en": "Move to top", "ja": "最上部へ"},
