@@ -44,7 +44,7 @@ class UILanguageTests(unittest.TestCase):
                 try:
                     with mock.patch.object(comic, "settings_path", return_value=settings_file):
                         app = comic.FileAggregatorApp(root)
-                        self.assertEqual(root.title(), tr("漫畫整合工具"))
+                        self.assertEqual(root.title(), tr("漫畫工作台"))
                         self.assertEqual(app.ui_language.get(), LANGUAGES[language])
                         chapter = Path(temp) / "Chapter 1"
                         work = chapter / "mask"
@@ -58,7 +58,7 @@ class UILanguageTests(unittest.TestCase):
                         self.assertTrue(app.save_settings())
                         self.assertEqual(comic.load_json(settings_file, {})["ui_language"], "ja")
                         # Choosing a language must not alter running queue action comparisons.
-                        self.assertEqual(root.title(), tr("漫畫整合工具"))
+                        self.assertEqual(root.title(), tr("漫畫工作台"))
                         root.update_idletasks()
                 finally:
                     root.destroy()

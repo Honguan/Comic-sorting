@@ -451,7 +451,7 @@ class UIImprovementsTests(unittest.TestCase):
                                              app.translation_queue.start_button, app.translation_queue.pause_button,
                                              app.translation_queue.stop_button,
                                              app.translation_queue.total,
-                                             app.translation_queue.history_button,
+                                             app.translation_queue.view_button,
                                              app.add_range_button, app.add_selected_button)),
                             (app.export_tab, (app.export_selected_button, app.export_all_button, app.cleanup_button)),
                             (app.settings_tab, (app.translation_queue.controls[0],))):

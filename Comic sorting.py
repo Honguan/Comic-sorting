@@ -51,7 +51,7 @@ class FileAggregatorApp:
         icon = resource_path("assets/comic-sorting.ico")
         if icon.is_file():
             self.root.iconbitmap(default=icon)
-        self.root.title(tr("漫畫整合工具"))
+        self.root.title(tr("漫畫工作台"))
         self.root.minsize(820, 640)
         size = settings.get("window_size")
         self.window_size = None
@@ -205,26 +205,35 @@ class FileAggregatorApp:
 
 
     def build_enqueue_panel(self, parent):
-        panel = ttk.LabelFrame(parent, text=tr("加入漫畫與章節"), padding=(8, 4))
-        panel.pack(fill="x", pady=(0, 4))
-        ttk.Label(panel, text=tr("漫畫")).grid(row=0, column=0, sticky="w", padx=(0, 8))
-        self.manga_choice = ttk.Combobox(panel, textvariable=self.current_series, state="readonly", width=8)
-        self.manga_choice.grid(row=0, column=1, columnspan=3, sticky="ew")
+        panel = ttk.Frame(parent)
+        panel.pack(fill="x", pady=(0, 8))
+        self.enqueue_header = ttk.Frame(panel)
+        self.enqueue_header.pack(fill="x", pady=(0, 4))
+        ttk.Label(self.enqueue_header, text=tr("加入漫畫與章節"), style="TLabelframe.Label").pack(side="left")
+        manga_row = ttk.Frame(panel)
+        manga_row.pack(fill="x", pady=(0, 4))
+        ttk.Label(manga_row, text=tr("漫畫")).pack(side="left", padx=(0, 8))
+        self.manga_choice = ttk.Combobox(manga_row, textvariable=self.current_series, state="readonly", width=8)
+        self.manga_choice.pack(side="left", fill="x", expand=True)
         self.manga_choice.bind("<<ComboboxSelected>>", self.choose_series)
-        ttk.Label(panel, text=tr("章節序號")).grid(row=1, column=0, sticky="w", padx=(0, 8), pady=2)
-        self.start_entry = ttk.Entry(panel, textvariable=self.range_start, width=5)
-        self.start_entry.grid(row=1, column=1, sticky="ew")
-        ttk.Label(panel, text="–").grid(row=1, column=2, padx=4)
-        self.end_entry = ttk.Entry(panel, textvariable=self.range_end, width=5)
-        self.end_entry.grid(row=1, column=3, sticky="ew")
-        panel.columnconfigure((1, 3), weight=1, uniform="range")
-        ttk.Label(panel, text=tr("從 1 起算；結束留白到最後"), style="Muted.TLabel").grid(
-            row=2, column=0, columnspan=4, sticky="w")
-        self.enqueue_actions = ttk.Frame(panel)
-        self.enqueue_actions.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(2, 0))
+        range_row = ttk.Frame(panel)
+        range_row.pack(fill="x")
+        range_row.columnconfigure(1, weight=1)
+        self.enqueue_range = ttk.Frame(range_row)
+        self.enqueue_range.grid(row=0, column=0, sticky="w", padx=(0, 8))
+        ttk.Label(self.enqueue_range, text=tr("章節序號")).pack(side="left", padx=(0, 8))
+        self.start_entry = ttk.Entry(self.enqueue_range, textvariable=self.range_start, width=5)
+        self.start_entry.pack(side="left")
+        ttk.Label(self.enqueue_range, text="–").pack(side="left", padx=4)
+        self.end_entry = ttk.Entry(self.enqueue_range, textvariable=self.range_end, width=5)
+        self.end_entry.pack(side="left")
+        self.enqueue_actions = ttk.Frame(range_row)
+        self.enqueue_actions.grid(row=0, column=1, sticky="ew")
         self.add_range_button = ttk.Button(self.enqueue_actions, text=tr("加入佇列"), style="Accent.TButton",
                                           command=lambda: self.translation_queue.add_number_range())
         self.add_range_button.pack(side="right")
+        ttk.Label(panel, text=tr("從 1 起算；結束留白到最後"), style="Muted.TLabel").pack(anchor="w", pady=(2, 0))
+
 
     def series_name(self, series):
         base = self.scan_data[0] if self.scan_data else None

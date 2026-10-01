@@ -2232,7 +2232,7 @@ class WorkflowTests(unittest.TestCase):
             self.assertEqual(self.root.clipboard_get(), content)
             text.yview_moveto(1)
             self.assertGreater(text.yview()[0], 0)
-        self.assertEqual(q.bt_toggle.winfo_rooty(), q.usage_toggle.winfo_rooty())
+        self.assertTrue(q.view_button.winfo_ismapped())
 
 
     def test_main_actions_fit_small_windows_in_each_language(self):
@@ -2244,12 +2244,18 @@ class WorkflowTests(unittest.TestCase):
                 try:
                     root, app = case.root, case.app
                     q = app.translation_queue
+                    q.add_paths([case.chapter(f'Chapter {i}') for i in range(1, 4)])
+                    q.jobs[0].status, q.jobs[0].error = 'failed', 'Selected model is at capacity'
+                    q.render()
+                    q.tree.selection_set(str(id(q.jobs[0])))
+                    q.update_controls()
                     root.geometry('820x640')
                     root.deiconify()
                     root.update()
                     widgets = (app.library_menu, app.manga_choice, q.action_choice, app.start_entry, app.end_entry, app.add_range_button,
                                app.add_selected_button, q.start_button, q.pause_button, q.stop_button,
-                               q.bt_toggle, q.usage_toggle, q.stats_button, q.history_button)
+                               q.operations_button, q.view_button)
+                    self.assertGreaterEqual(q.tree.winfo_height(), 180)
                     for widget in widgets:
                         self.assertTrue(widget.winfo_ismapped())
                         self.assertGreaterEqual(widget.winfo_width(), widget.winfo_reqwidth())
@@ -2266,7 +2272,7 @@ class WorkflowTests(unittest.TestCase):
                     app.panes.sashpos(0, 430)
                     root.update()
                     for widget in (app.manga_choice, app.start_entry, app.end_entry, app.add_range_button, q.action_choice,
-                                   q.bt_toggle, q.usage_toggle, q.stats_button, q.history_button):
+                                   q.view_button):
                         self.assertGreaterEqual(widget.winfo_width(), widget.winfo_reqwidth())
                         self.assertLessEqual(widget.winfo_rootx() + widget.winfo_width(),
                                              root.winfo_rootx() + root.winfo_width())
@@ -2280,7 +2286,7 @@ class WorkflowTests(unittest.TestCase):
         self.app.work_tabs.select(self.app.queue_tab)
         self.root.update()
         self.root.update_idletasks()
-        footer = self.app.translation_queue.usage_frame
+        footer = self.app.translation_queue.view_button
         self.assertTrue(footer.winfo_ismapped())
         self.assertLessEqual(footer.winfo_rooty() - self.root.winfo_rooty() + footer.winfo_reqheight(), 780)
         self.assertEqual(len(self.app.work_tabs.tabs()), 4)
@@ -2454,8 +2460,8 @@ class WorkflowTests(unittest.TestCase):
         self.root.update()
         initial = (panes.sashpos(0), q.tree.winfo_width(), q.tree.winfo_height())
         for _ in range(2):
-            q.bt_toggle.invoke()
-            q.usage_toggle.invoke()
+            q.view_menu.invoke(0)
+            q.view_menu.invoke(1)
             self.root.update()
             self.assertTrue(q.bt_bars['OCR'].master.winfo_ismapped())
             self.assertTrue(q.usage_table.master.winfo_ismapped())
@@ -2465,6 +2471,10 @@ class WorkflowTests(unittest.TestCase):
             q.usage_toggle.invoke()
             self.root.update()
             self.assertEqual((panes.sashpos(0), q.tree.winfo_width(), q.tree.winfo_height()), initial)
+        q.view_menu.invoke(2)
+        self.root.update()
+        self.assertTrue(q.history_window.winfo_exists())
+        self.assertEqual(q.view_menu.entrycget(3, 'menu'), str(q.stats_menu))
 
 
     def test_queue_sections_collapse_independently_and_keep_receiving_updates(self):
@@ -2500,8 +2510,7 @@ class WorkflowTests(unittest.TestCase):
         q.usage_toggle.invoke()
         self.root.update_idletasks()
         self.assertFalse(usage_grid.winfo_ismapped())
-        self.assertTrue(q.bt_toggle.winfo_ismapped())
-        self.assertTrue(q.usage_toggle.winfo_ismapped())
+        self.assertTrue(q.view_button.winfo_ismapped())
         for event in [('bt_progress', 'OCR', 50, 24, 48, '01:00'),
                       ('stage_time', 0, 'OCR', 60),
                       ('usage', 0, parse_bt_usage(usage_line())),
