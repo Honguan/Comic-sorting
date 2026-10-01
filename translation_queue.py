@@ -11,7 +11,7 @@ import subprocess
 import os
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk, font as tkfont
-from ui_interactions import bind_table_shortcuts, copy_manga_names
+from ui_interactions import bind_table_shortcuts, copy_manga_names, details_text
 
 from queue_worker import BT_STAGES, Job, run_jobs, translator_command
 from app_logging import logger, log_path
@@ -141,7 +141,7 @@ class TranslationQueue:
         self.search_entry = ttk.Entry(search_row, textvariable=self.search)
         self.search_entry.pack(side="left", fill="x", expand=True)
         self.search_entry.configure(width=8)
-        ttk.Button(search_row, text=tr("清除"), width=4, command=lambda: self.search.set("")).pack(side="left", padx=4)
+        ttk.Button(search_row, text=tr("清除"), width=0, command=lambda: self.search.set("")).pack(side="left", padx=4)
         self.search_count = tk.StringVar()
         ttk.Label(search_row, textvariable=self.search_count).pack(side="left")
         self.queue_restore_ratio = None
@@ -173,8 +173,8 @@ class TranslationQueue:
         tree_frame.rowconfigure(0, weight=1)
         tree_frame.columnconfigure(0, weight=1)
         self.selection_details = tk.StringVar()
-        self.selection_label = ttk.Label(tree_frame, textvariable=self.selection_details, anchor="w", justify="left", wraplength=700)
-        self.selection_label.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+        details, self.selection_label = details_text(tree_frame, self.selection_details)
+        details.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(4, 0))
         self.clear_selection_button = ttk.Button(search_row, text=tr("取消選取"), command=self.clear_selection)
         self.clear_selection_button.pack(side="left", padx=(4, 0))
         self.tree.bind("<Configure>", self.fit_columns)
@@ -255,9 +255,13 @@ class TranslationQueue:
         self.total.pack(fill="x")
         self.label = tk.StringVar(value=tr("BallonsTranslator：待命"))
         self.stage = ttk.Progressbar(footer)
-        self.bt_frame, progress_grid, self.bt_toggle = self.collapsible_frame(footer, tr("各階段進度"))
-        stage_label = ttk.Label(self.bt_toggle.master, textvariable=self.label, wraplength=500)
-        stage_label.pack(side="left", fill="x", expand=True, padx=(8, 0))
+        elapsed_row = ttk.Frame(footer)
+        elapsed_row.pack(fill="x", pady=(4, 0))
+        details_row = ttk.Frame(footer)
+        details_row.pack(fill="x", pady=(2, 0))
+        self.bt_frame, progress_grid, self.bt_toggle = self.collapsible_frame(details_row, tr("各階段進度"))
+        stage_label = ttk.Label(elapsed_row, textvariable=self.label, width=1, wraplength=300)
+        stage_label.pack(side="left", fill="x", expand=True, padx=(0, 8))
         stage_label.bind("<Configure>", lambda event: stage_label.configure(wraplength=event.width)
                          if event.width > 100 and self.sash_after is None else None)
         self.resize_widgets = (app.folder_tree, self.tree, app.scan_status_label, summary_label, stage_label)
@@ -282,23 +286,25 @@ class TranslationQueue:
         self.model_window = None
         self.usage_labels = {}
         self.usage_frame, usage_grid, self.usage_toggle = self.collapsible_frame(
-            footer, tr("本次佇列 LLM 消耗（非實際帳單）"))
-        elapsed_row = ttk.Frame(footer)
-        elapsed_row.pack(fill="x", pady=(4, 0))
+            details_row, tr("本次佇列 LLM 消耗（非實際帳單）"), tr("LLM 用量"))
         self.elapsed_label = tk.StringVar(value='00:00:00')
         ttk.Label(elapsed_row, text=tr("本次耗時") + "：").pack(side="left")
         ttk.Label(elapsed_row, textvariable=self.elapsed_label).pack(side="left")
         self.jev_elapsed_label = tk.StringVar(value='—')
         ttk.Label(elapsed_row, text=tr("Jev 耗時") + "：", style="Muted.TLabel").pack(side="left", padx=(12, 0))
         ttk.Label(elapsed_row, textvariable=self.jev_elapsed_label, style="Muted.TLabel").pack(side="left")
-        self.history_button = ttk.Button(elapsed_row, text=tr("歷史紀錄"), command=self.open_history)
-        self.history_button.pack(side="right")
-        stats_button = ttk.Menubutton(elapsed_row, text=tr("統計"))
-        stats_button.pack(side="right", padx=4)
+        self.history_button = ttk.Button(details_row, text=tr("歷史紀錄"), command=self.open_history)
+        self.stats_button = stats_button = ttk.Menubutton(details_row, text=tr("統計"))
         self.stats_menu = tk.Menu(stats_button, tearoff=False)
         self.stats_menu.add_command(label=tr("模型統計"), command=self.open_model_stats)
         self.stats_menu.add_command(label=tr("Jev 統計"), command=self.open_jev_stats)
         stats_button.configure(menu=self.stats_menu)
+        self.detail_buttons = (self.bt_frame, self.usage_frame, stats_button, self.history_button)
+        for widget in self.detail_buttons:
+            widget.pack_forget()
+        for widget, column in zip(self.detail_buttons, (0, 1, 3, 4)):
+            widget.grid(row=0, column=column, sticky="w" if column < 2 else "e", padx=2, pady=(2, 0))
+        details_row.columnconfigure(2, weight=1)
 
         columns = ('scope', 'tokens', 'cost', 'requests', 'pricing', 'reporting')
         self.usage_table = ttk.Treeview(usage_grid, columns=columns, show='headings', height=3)
@@ -394,7 +400,8 @@ class TranslationQueue:
             self.sash_after = self.app.root.after(delay, step)
         step()
 
-    def collapsible_frame(self, parent, title):
+    def collapsible_frame(self, parent, title, button_title=None):
+        button_title = button_title or title
         frame = ttk.Frame(parent)
         frame.pack(fill="x", pady=(2, 0))
         header = ttk.Frame(frame)
@@ -409,13 +416,13 @@ class TranslationQueue:
             if content.winfo_manager():
                 content.pack_forget()
                 popup.withdraw()
-                button.configure(text=f"▶ {title}")
+                button.configure(text=f"▶ {button_title}")
             else:
                 content.pack(fill="both", expand=True)
                 popup.deiconify()
                 popup.lift()
-                button.configure(text=f"▼ {title}")
-        button = ttk.Button(header, text=f"▶ {title}", command=toggle)
+                button.configure(text=f"▼ {button_title}")
+        button = ttk.Button(header, text=f"▶ {button_title}", command=toggle)
         button.pack(side="left")
         popup.protocol("WM_DELETE_WINDOW", toggle)
         return frame, content, button
@@ -606,6 +613,12 @@ class TranslationQueue:
         if width < 100 or getattr(self, "_queue_width", None) == width:
             return
         self._queue_width = width
+        wrapped = width < sum(widget.winfo_reqwidth() for widget in self.detail_buttons) + 16
+        positions = ((0, 0), (1, 0), (0, 1), (1, 1)) if wrapped else ((0, 0), (0, 1), (0, 3), (0, 4))
+        for widget, (row, column) in zip(self.detail_buttons, positions):
+            widget.grid_configure(row=row, column=column)
+        self.bt_frame.master.columnconfigure(1, weight=1 if wrapped else 0)
+        self.bt_frame.master.columnconfigure(2, weight=0 if wrapped else 1)
         font = tkfont.nametofont("TkDefaultFont", root=self.app.root)
         self.tree.configure(displaycolumns=("action", "pages", "status") if width >= 650 else ("pages", "status"))
         fixed = {"action": font.measure(tr("翻譯")) + 24,
@@ -615,7 +628,6 @@ class TranslationQueue:
             self.tree.column(column, width=size, minwidth=size, stretch=False)
         self.tree.column("#0", width=max(200, width - sum(fixed[key] for key in self.tree["displaycolumns"])),
                          minwidth=200, stretch=False)
-        self.selection_label.configure(wraplength=width)
 
 
     def update_selection_details(self):
@@ -1413,7 +1425,7 @@ class TranslationQueue:
             elif event[0] == "stage":
                 if phase is None:
                     self.label.set(f"{tr(event[1])}: {event[2]}%")
-                self.stage.pack(fill="x", before=self.bt_frame)
+                self.stage.pack(fill="x", after=self.total)
                 self.stage.configure(value=event[2])
             elif event[0] == "total":
                 self.total.configure(value=event[1])

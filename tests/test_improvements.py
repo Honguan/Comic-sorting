@@ -444,7 +444,8 @@ class UIImprovementsTests(unittest.TestCase):
                         app.translation_queue.bt_progress[name] = (60, 582, 960, "4:00:04", True)
                         app.translation_queue.bt_elapsed[name] = 90061
                         app.translation_queue.show_bt_progress(name)
-                    app.translation_queue.stage.pack(fill="x", before=app.translation_queue.bt_frame)
+                    app.translation_queue.events.put(("stage", "匯出", 50))
+                    app.translation_queue.poll()
                     for tab, controls in (
                             (app.queue_tab, (app.translation_queue.workflow_choice,
                                              app.translation_queue.start_button, app.translation_queue.pause_button,

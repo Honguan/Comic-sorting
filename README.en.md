@@ -23,6 +23,9 @@ Select a manga in the left Comic library, enter its chapter list indices startin
 
 Larger default text and fewer visible columns keep names, pages, and status readable. Selecting a row still shows its full path and metadata. Stage progress and queue LLM usage open in separate windows, while the main view keeps the list and elapsed time. Queue expansion/restoration preserves velocity: rapid reversal decelerates before changing direction, resizing during animation retains the original proportion, and dragging the divider takes control immediately. Columns and text wrapping update after the animation settles to reduce repeated layout jumps. The library creates chapter rows on expansion and reuses directory entries for page counts and translation status during scanning, avoiding per-page path construction and showing progress counts and elapsed time.
 
+Selection details use a read-only area with a fixed height. Scroll through long paths and errors, use Ctrl+A to select all, and Ctrl+C to copy. Library tools sit beside the title. Chapter-range fields have equal widths, and add buttons stack in narrow panes. Status and elapsed time share a row; progress, LLM usage, statistics, and history share a footer toolbar that wraps when space is limited.
+
+
 | Operation | Behavior |
 |---|---|
 | Merge chapters | Use the Merge chapters tab to select chapters and a range within one series. Already merged folders are skipped. |

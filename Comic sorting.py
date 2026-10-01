@@ -13,7 +13,7 @@ from translation_queue import TranslationQueue
 from app_logging import configure_logging, logger, log_path, redact
 from ui_language import LANGUAGES, set_language, tr
 from ui_theme import apply_theme
-from ui_interactions import LibraryTree, bind_table_shortcuts, copy_manga_names
+from ui_interactions import LibraryTree, bind_table_shortcuts, copy_manga_names, details_text
 from comic_core import (
     IMAGE_EXTENSIONS, FOLDER_KINDS, chapter_number, folder_kind, image_files, translation_status,
     natural_sort_key, updated_at, folder_size, format_size, summarize_names,
@@ -110,7 +110,10 @@ class FileAggregatorApp:
         self.panes = ttk.Panedwindow(self.root, orient="horizontal")
         self.panes.pack(fill="both", expand=True, padx=10, pady=8)
         self.panes.bind("<Map>", self.initialize_panes)
-        manga = ttk.LabelFrame(self.panes, text=tr("漫畫庫"), padding=8)
+        manga = ttk.Frame(self.panes, padding=8)
+        header = ttk.Frame(manga)
+        header.pack(fill="x", pady=(0, 6))
+        ttk.Label(header, text=tr("漫畫庫"), style="TLabelframe.Label").pack(side="left")
         self.panes.add(manga, weight=0)
         path_row = ttk.Frame(manga)
         path_row.pack(fill="x")
@@ -132,8 +135,8 @@ class FileAggregatorApp:
         self.search_entry.configure(width=8)
         self.root.bind("<Control-f>", lambda _event: self.search_entry.focus_set())
         self.search_entry.bind("<Escape>", lambda _event: self.search_text.set(""))
-        ttk.Button(search_row, text=tr("清除"), width=4, command=lambda: self.search_text.set("")).pack(side="left", padx=4)
-        library_menu = ttk.Menubutton(search_row, text=tr("工具"))
+        ttk.Button(search_row, text=tr("清除"), width=0, command=lambda: self.search_text.set("")).pack(side="left", padx=4)
+        self.library_menu = library_menu = ttk.Menubutton(header, text=tr("工具"))
         menu = tk.Menu(library_menu, tearoff=False)
         menu.add_command(label=tr("匯出漫畫名稱"), command=self.export_manga_names)
         sort_menu = tk.Menu(menu, tearoff=False)
@@ -168,9 +171,8 @@ class FileAggregatorApp:
         list_frame.rowconfigure(0, weight=1)
         list_frame.columnconfigure(0, weight=1)
         self.folder_details = tk.StringVar()
-        self.folder_details_label = ttk.Label(list_frame, textvariable=self.folder_details, anchor="w",
-                                             justify="left", wraplength=300, style="Muted.TLabel")
-        self.folder_details_label.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        details, self.folder_details_label = details_text(list_frame, self.folder_details)
+        details.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(6, 0))
         self.folder_tree.bind("<Configure>", self.fit_folder_columns)
         self.folder_tree.bind("<<TreeviewSelect>>", self.on_tree_select)
         self.folder_tree.bind("<Double-1>", self.add_chapter_to_queue)
@@ -194,15 +196,16 @@ class FileAggregatorApp:
         self.scan_status_label.pack(side="left", fill="x", expand=True)
         self.scan_status_label.bind("<Configure>", lambda event: self.scan_status_label.configure(wraplength=event.width)
                                     if event.width > 100 and self.translation_queue.sash_after is None else None)
-        ttk.Label(manga_footer, textvariable=self.current_series, wraplength=300).pack(anchor="w", pady=(8, 4))
+        ttk.Label(manga_footer, textvariable=self.current_series, width=1, anchor="w").pack(fill="x", pady=(8, 4))
         range_row = ttk.Frame(manga_footer)
         range_row.pack(fill="x")
-        ttk.Label(range_row, text=tr("章節序號")).pack(side="left")
+        ttk.Label(range_row, text=tr("章節序號")).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 4))
         self.start_entry = ttk.Entry(range_row, textvariable=self.range_start, width=5)
-        self.start_entry.pack(side="left", padx=(6, 0))
-        ttk.Label(range_row, text="–").pack(side="left", padx=4)
+        self.start_entry.grid(row=1, column=0, sticky="ew")
+        ttk.Label(range_row, text="–").grid(row=1, column=1, padx=4)
         self.end_entry = ttk.Entry(range_row, textvariable=self.range_end, width=5)
-        self.end_entry.pack(side="left")
+        self.end_entry.grid(row=1, column=2, sticky="ew")
+        range_row.columnconfigure((0, 2), weight=1, uniform="range")
         buttons = ttk.Frame(manga_footer)
         buttons.pack(fill="x", pady=(6, 0))
         self.add_range_button = ttk.Button(buttons, text=tr("加入區間"), style="Accent.TButton",
@@ -357,7 +360,7 @@ class FileAggregatorApp:
         messagebox.showinfo(tr("匯出漫畫名稱"), tr("已匯出 {0} 個漫畫名稱：\n{1}").format(len(names), target), parent=self.root)
 
     def update_sort_headings(self):
-        for column, field, title in (("#0", "name", tr("序號｜系列 / 章節")),
+        for column, field, title in (("#0", "name", tr("漫畫 / 章節")),
                                      ("status", "chapters", tr("狀態")),
                                      ("size", "size", tr("資料夾大小")),
                                      ("updated", "updated", tr("更新時間"))):
@@ -723,8 +726,13 @@ class FileAggregatorApp:
         font = tkfont.nametofont("TkDefaultFont", root=self.root)
         pages = max(65, font.measure(tr("頁數")) + 16)
         self.folder_tree.column("pages", width=pages, minwidth=pages, stretch=False)
-        self.folder_tree.column("#0", width=max(180, width - pages), minwidth=180, stretch=False)
-        self.folder_details_label.configure(wraplength=width)
+        self.folder_tree.column("#0", width=max(100, width - pages), minwidth=100, stretch=False)
+        buttons = (self.add_range_button, self.add_selected_button)
+        stacked = buttons[0].master.winfo_width() < sum(button.winfo_reqwidth() for button in buttons) + 6
+        for index, button in enumerate(buttons):
+            button.pack_configure(side="top" if stacked else "left", expand=not stacked,
+                                  padx=(0, 0) if stacked or index == 0 else (6, 0),
+                                  pady=(4, 0) if stacked and index == 1 else (0, 0))
 
 
     def on_tree_select(self, _event=None):

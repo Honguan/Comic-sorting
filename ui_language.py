@@ -296,6 +296,8 @@ TRANSLATIONS = {
     '平均：{0} 秒／頁': {'en': 'Average: {0} s/page', 'ja': '平均：{0} 秒／ページ'},
     '總耗時：{0}': {'en': 'Total time: {0}', 'ja': '総時間：{0}'},
     '本次佇列 LLM 消耗（非實際帳單）': {'en': 'LLM usage for this queue run (not a bill)', 'ja': '今回のキューの LLM 使用量（請求額ではありません）'},
+    'LLM 用量': {'en': 'LLM usage', 'ja': 'LLM 使用量'},
+    '漫畫 / 章節': {'en': 'Manga / chapter', 'ja': '漫画 / 章'},
     '合計': {'en': 'Total', 'ja': '合計'},
     '累計本次所有資料夾已回報用量；金額依翻譯器估算。': {'en': 'Reported usage across all folders in this queue; cost estimated by the translator.', 'ja': '今回の全フォルダーの報告済み使用量を合計。金額は翻訳ツールの推定です。'},
     '尚未回報': {'en': 'Not reported yet', 'ja': '未報告'},

@@ -2066,6 +2066,74 @@ class WorkflowTests(unittest.TestCase):
         q.retry()
         self.assertEqual((q.jobs[0].status, q.jobs[0].error), ("pending", ""))
 
+    def test_long_selection_details_keep_lists_stable_and_allow_copy(self):
+        self.root.geometry('1024x780')
+        self.root.deiconify()
+        q = self.app.translation_queue
+        self.app.folder_details.set('short')
+        q.selection_details.set('short')
+        self.root.update()
+        heights = (self.app.folder_tree.winfo_height(), q.tree.winfo_height())
+        content = '漫畫 / Manga / 漫画 ' * 100 + '\n' + '錯誤原因 ' * 200
+        self.app.folder_details.set(content)
+        q.selection_details.set(content)
+        self.root.update()
+        self.assertEqual((self.app.folder_tree.winfo_height(), q.tree.winfo_height()), heights)
+        self.assertTrue(self.app.folder_tree.winfo_ismapped())
+        self.assertTrue(q.tree.winfo_ismapped())
+        for text in (self.app.folder_details_label, q.selection_label):
+            self.assertEqual(str(text.cget('state')), 'disabled')
+            self.assertEqual(text.get('1.0', 'end-1c'), content)
+            text.insert('end', 'must not edit')
+            self.assertEqual(text.get('1.0', 'end-1c'), content)
+            text.focus_force()
+            text.event_generate('<Control-a>')
+            text.event_generate('<Control-c>')
+            self.root.update()
+            self.assertEqual(self.root.clipboard_get(), content)
+            text.yview_moveto(1)
+            self.assertGreater(text.yview()[0], 0)
+        self.assertEqual(q.bt_toggle.winfo_rooty(), q.usage_toggle.winfo_rooty())
+
+
+    def test_main_actions_fit_small_windows_in_each_language(self):
+        for language in ('zh-TW', 'en', 'ja'):
+            with self.subTest(language=language):
+                case = WorkflowTests()
+                with mock.patch.object(comic, 'load_json', return_value={'ui_language': language}):
+                    case.setUp()
+                try:
+                    root, app = case.root, case.app
+                    q = app.translation_queue
+                    root.geometry('820x640')
+                    root.deiconify()
+                    root.update()
+                    widgets = (app.library_menu, app.start_entry, app.end_entry, app.add_range_button,
+                               app.add_selected_button, q.start_button, q.pause_button, q.stop_button,
+                               q.bt_toggle, q.usage_toggle, q.stats_button, q.history_button)
+                    for widget in widgets:
+                        self.assertTrue(widget.winfo_ismapped())
+                        self.assertGreaterEqual(widget.winfo_width(), widget.winfo_reqwidth())
+                        self.assertGreaterEqual(widget.winfo_rootx(), root.winfo_rootx())
+                        self.assertLessEqual(widget.winfo_rootx() + widget.winfo_width(),
+                                             root.winfo_rootx() + root.winfo_width())
+                        self.assertLessEqual(widget.winfo_rooty() + widget.winfo_height(),
+                                             root.winfo_rooty() + root.winfo_height())
+                    self.assertLessEqual(app.folder_tree.column('#0', 'width') + app.folder_tree.column('pages', 'width'),
+                                         app.folder_tree.winfo_width())
+                    app.panes.sashpos(0, 180)
+                    root.update()
+                    self.assertGreater(app.add_selected_button.winfo_rooty(), app.add_range_button.winfo_rooty())
+                    app.panes.sashpos(0, 430)
+                    root.update()
+                    for widget in (q.bt_toggle, q.usage_toggle, q.stats_button, q.history_button):
+                        self.assertGreaterEqual(widget.winfo_width(), widget.winfo_reqwidth())
+                        self.assertLessEqual(widget.winfo_rootx() + widget.winfo_width(),
+                                             root.winfo_rootx() + root.winfo_width())
+                finally:
+                    case.tearDown()
+
+
     def test_layout_fits_standard_desktop(self):
         self.root.geometry('1024x780')
         self.root.deiconify()
