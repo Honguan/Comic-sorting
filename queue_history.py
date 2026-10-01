@@ -10,6 +10,7 @@ from tkinter import font as tkfont, messagebox, ttk
 
 from queue_worker import BT_STAGES, parse_bt_usage
 from queue_errors import error_details, error_info
+from queue_stats import used_models
 from ui_language import tr
 
 JEV_FIELDS = {'requests': '請求數', 'input_tokens': '輸入 Token', 'missing_input_usage_requests': '未回報請求數',
@@ -66,6 +67,9 @@ def usage_text(records, *, empty_text=None):
         text += tr("（僅含已知金額）")
     if any(value['missing_usage_requests'] for value in records):
         text += tr("（Token 回報不完整）")
+    models = sorted(set().union(*(used_models(record) for record in records)))
+    if models:
+        text += '｜' + tr('模型') + '：' + ', '.join(models)
     return text
 
 
@@ -413,6 +417,10 @@ class HistoryWindow(tk.Toplevel):
                 if value.get('price_basis'):
                     fields.append((label + ' / ' + tr("估價依據"), value['price_basis']))
                     fields.append((label + ' / ' + tr("費率日期"), value.get('rates_date') or '—'))
+        for scope, label in (('OCR', 'OCR'), ('translation', tr('翻譯')), ('total', tr('合計'))):
+            models = sorted(set().union(*(used_models(item.get('usage', {}).get(scope, {})) for item in jobs)))
+            if models:
+                fields.append((label + ' / ' + tr('模型'), ', '.join(models)))
         for label, value in fields:
             self.detail_tables['basic'].insert('', 'end', values=(label, value))
         self.fill_usage(self.detail_tables['usage'], {

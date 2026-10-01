@@ -16,6 +16,7 @@ from queue_worker import BT_STAGES, Job, run_jobs, translator_command
 from app_logging import logger, log_path
 from ui_language import tr
 from queue_stats import SnapshotTotals
+from model_pricing import open_pricing
 from comic_core import FOLDER_KINDS, folder_kind, image_files, image_count
 from queue_history import HistoryWindow, elapsed_text, save_run, usage_text, usage_columns, JEV_FIELDS, jev_totals, jev_columns
 from queue_errors import error_details, error_info
@@ -59,6 +60,7 @@ class TranslationQueue:
         self.phase_jobs = {}
         self.editor = None
         self.controls = []
+        self.token_rates = dict(settings.get('bt_token_rates', {}))
         default = settings.get("bt_path", "")
         self.installation = tk.StringVar(value=settings.get("bt_path", default))
         self.config = tk.StringVar(value=settings.get("bt_config", str(Path(default) / "config" / "config.json") if default else ""))
@@ -93,6 +95,7 @@ class TranslationQueue:
         settings_actions.pack(fill="x", pady=(6, 0))
         self.button(settings_actions, tr("開啟原生設定介面"), self.open_settings)
         self.button(settings_actions, tr("開啟紀錄資料夾"), self.open_logs)
+        self.button(settings_actions, tr('模型單價'), lambda: open_pricing(app.root, self.token_rates, app.save_settings))
         self.notifications = NtfyNotifications(app, settings)
         self.scheduler = QueueSchedule(self)
 
@@ -432,6 +435,7 @@ class TranslationQueue:
 
     def settings(self):
         return dict(bt_path=self.installation.get(), bt_config=self.config.get(),
+                    bt_token_rates=dict(self.token_rates),
                     bt_workflow=self.workflow_mode(),
                     bt_python=self.python.get(), bt_export=self.export.get(), bt_cleanup=self.cleanup.get(),
                     bt_open_after_completion=self.open_after_completion.get(),

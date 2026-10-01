@@ -9,6 +9,15 @@ def tr(text):
     return TRANSLATIONS.get(text, {}).get(_language, text)
 
 TRANSLATIONS = {
+    '模型': {'en': 'Model', 'ja': 'モデル'},
+    '模型單價': {'en': 'Model token rates', 'ja': 'モデル単価'},
+    '快取讀取': {'en': 'Cache read', 'ja': 'キャッシュ読み取り'},
+    '快取寫入': {'en': 'Cache write', 'ja': 'キャッシュ書き込み'},
+    '輸出 Token': {'en': 'Output tokens', 'ja': '出力 Token'},
+    '恢復預設': {'en': 'Restore default', 'ja': '既定値に戻す'},
+    '每百萬 Token 的美元單價；自訂單價優先。快取留白使用輸入單價。': {'en': 'USD per million tokens. Custom rates take precedence; blank cache rates use the input rate.', 'ja': '100万 Token あたりの米ドル単価。カスタム単価を優先し、空のキャッシュ単価には入力単価を使用します。'},
+    '單價必須是大於或等於零的有限數字。': {'en': 'Rates must be finite nonnegative numbers.', 'ja': '単価にはゼロ以上の有限数を入力してください。'},
+    '其他模型會自動查詢 OpenRouter 公開費率；查無單價時可在此新增任何模型。': {'en': 'Other models use the public OpenRouter catalog automatically. Add custom rates here for any unlisted model.', 'ja': '他のモデルは OpenRouter 公開単価を自動取得します。未掲載モデルの単価もここで追加できます。'},
     '上一頁': {'en': 'Previous', 'ja': '前のページ'},
     '下一頁': {'en': 'Next', 'ja': '次のページ'},
     '第 {0} 頁｜顯示 {1} 筆（每頁 200 筆）；日期 YYYY-MM-DD，留白不限。展開批次與章節載入用量，選取後查看明細。': {'en': 'Page {0} | {1} records (200 per page). Dates: YYYY-MM-DD; blank means no limit. Expand batches and chapters for usage; select a row for details.', 'ja': '{0} ページ｜{1} 件（1 ページ 200 件）。日付は YYYY-MM-DD、空欄は制限なし。バッチと章を展開して使用量を、選択して詳細を表示します。'},

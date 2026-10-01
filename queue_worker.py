@@ -22,6 +22,7 @@ from comic_core import (clear_work_folders, export_chapter, image_files,
 from ui_language import tr
 from queue_errors import error_info
 from queue_stats import merge_snapshots
+from model_pricing import DEFAULT_RATES as BT_TOKEN_RATES, effective_rates, get_price
 
 
 BT_STAGES = {"Text Detection": "enable_detect", "OCR": "enable_ocr",
@@ -48,41 +49,26 @@ def parse_bt_usage(line):
                 rates_date=fields.get('rates_date'), **counts)
 
 
-# Standard USD per million tokens, verified 2026-10-01 on each model's page:
-# https://developers.openai.com/api/docs/models/<model>
-# Input, cached input, cache writes, output. Cache writes replace input pricing.
-BT_TOKEN_RATES = {
-    'gpt-6.1-sol': ('2', '0.10', '2.50', '10'),
-    'gpt-6-astra': ('10', '1', '12.50', '50'),
-    'gpt-6-sol': ('2', '0.20', '2.50', '10'),
-    'gpt-6-luna': ('0.10', '0.01', '0.125', '0.50'),
-    'gpt-5.6-sol': ('4', '0.40', '5', '20'),
-    'gpt-5.6-terra': ('2', '0.20', '2.50', '12'),
-    'gpt-5.6-luna': ('0.20', '0.02', '0.25', '1.20'),
-    'gpt-5.5': ('5', '0.50', None, '30'),
-}
-
-
-def estimate_bt_cost(counts, model):
-    rates = BT_TOKEN_RATES.get(model)
-    if rates is None or not all(key in counts for key in ('prompt', 'completion')):
+def estimate_bt_cost(counts, model, price=None):
+    price = price or get_price(model or '')
+    if price is None:
         return None
+    if not all(key in counts for key in ('prompt', 'completion')):
+        return Decimal(0) if price.get('source') == 'local' else None
     prompt, output = counts['prompt'], counts['completion']
     hit, write = counts.get('cache_hit', 0), counts.get('cache_write', 0)
-    if (hit + write > prompt or (write and rates[2] is None)
+    rates = effective_rates(price, prompt)
+    if (hit + write > prompt or (hit and rates[1] is None) or (write and rates[2] is None)
             or counts.get('total', prompt + output) != prompt + output):
         return None
-    input_rate, hit_rate, write_rate, output_rate = (
-        Decimal(rate) if rate is not None else Decimal(0) for rate in rates)
-    # Reasoning is already included in completion; cache counts partition prompt.
-    input_cost = (prompt - hit - write) * input_rate + hit * hit_rate + write * write_rate
-    if prompt > 272_000:
-        input_cost *= 2
-        output_rate *= Decimal('1.5')
-    return (input_cost + output * output_rate) / 1_000_000
+    input_rate, hit_rate, write_rate, output_rate = (rate or Decimal(0) for rate in rates)
+    return ((prompt - hit - write) * input_rate + hit * hit_rate +
+            write * write_rate + output * output_rate) / 1_000_000
 
 
-def parse_bt_request_usage(line, model=None):
+
+
+def parse_bt_request_usage(line, model=None, price=None):
     """Read per-response usage and estimate Standard API equivalent cost."""
     match = re.search(r"\[(?:DEBUG|INFO)\s*\]\s+(ocr_llm|trans_llm|llm_chat):\w+:\d+ - (.*)", line)
     if not match:
@@ -108,14 +94,18 @@ def parse_bt_request_usage(line, model=None):
             total = counts['prompt'] + counts['completion']
     else:
         return None
-    cost = estimate_bt_cost(counts, model)
+    price = price or get_price(model or '')
+    cost = estimate_bt_cost(counts, model, price)
     record = dict(scope=scope, requests=1, total_tokens=total if total is not None else 0,
                   missing_usage_requests=int(total is None), unpriced_requests=int(cost is None),
-                  cost=cost, **{key: value for key, value in counts.items() if key != 'total'})
+                  cost=cost, model=model, models=[model] if model else [],
+                  **{key: value for key, value in counts.items() if key != 'total'})
     if cost is not None:
-        record.update(model=model, rates_date='2026-10-01',
-                      price_basis='Self-estimated OpenAI Standard API equivalent (not a bill; unreported cache=0)',
-                      price_source='https://developers.openai.com/api/docs/models/' + model)
+        record.update(rates_date=price['date'],
+                      price_basis='Self-estimated ' + price['source'] + ' (not a bill; unreported cache=0)',
+                      price_source=price.get('url'),
+                      model_rates={model: [str(rate) if rate is not None else None
+                                           for rate in effective_rates(price, counts.get('prompt', 0))]})
     return record
 
 
@@ -322,7 +312,7 @@ class TranslationSession:
             self.process = None
 
 
-def run_translation(command, root, env, stop, progress, log_context="", usage=None, timing=None, *, session=None, request=None, jev=None, retry=None):
+def run_translation(command, root, env, stop, progress, log_context="", usage=None, timing=None, *, session=None, request=None, jev=None, retry=None, pricing=None, usage_context=None):
     completed = False
     native_completed = None
     failures = deque(maxlen=5)
@@ -332,7 +322,8 @@ def run_translation(command, root, env, stop, progress, log_context="", usage=No
     stages = {}
     jev_seen, jev_totals = set(), {}
     usage_records, summary_scopes = {}, set()
-    usage_models = {}
+    usage_models = {scope: value.get('model') for scope, value in (usage_context or {}).items()}
+    bridge_usage = False
     request_usage_seen = False
     ansi = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\))")
     owned = session is None
@@ -358,6 +349,8 @@ def run_translation(command, root, env, stop, progress, log_context="", usage=No
             if line:
                 logger.info("[%s] BT %s", log_context, line)
             recent.append(line)
+            if 'COMIC_SORTING_USAGE_READY' in line:
+                bridge_usage = True
             model_info = re.search(r"\[INFO\s*\]\s+(?:module_manager|trans_llm|ocr_llm):\w+:\d+ - LLM (translation|OCR) run: .*?model='([^']+)'", line)
             if model_info:
                 usage_models[model_info[1]] = model_info[2]
@@ -365,14 +358,35 @@ def run_translation(command, root, env, stop, progress, log_context="", usage=No
             if consumption is not None:
                 summary_scopes.add(consumption['scope'])
                 previous = usage_records.get(consumption['scope'], {})
+                for key in ('model', 'models', 'model_rates'):
+                    if key in previous:
+                        consumption[key] = previous[key]
                 if (consumption['cost'] is None and previous.get('cost') is not None
                         and all(previous.get(key) == consumption[key] for key in
                                 ('requests', 'total_tokens', 'missing_usage_requests'))):
                     consumption = dict(previous)
             else:
-                response_usage = parse_bt_request_usage(line)
+                response_usage = None if bridge_usage else parse_bt_request_usage(line)
+                marker = 'COMIC_SORTING_USAGE:'
+                metadata = {}
+                if marker in line:
+                    try:
+                        metadata, _ = json.JSONDecoder().raw_decode(line.split(marker, 1)[1])
+                        if metadata['scope'] not in ('OCR', 'translation') or not isinstance(metadata['model'], str) or not isinstance(metadata['usage'], str):
+                            raise ValueError('Invalid usage metadata')
+                        bridge_usage = True  # Persistent sessions emit READY only at startup.
+                        module = 'ocr_llm' if metadata['scope'] == 'OCR' else 'trans_llm'
+                        line_usage = f"[INFO] {module}:bridge:0 - LLM token usage: {metadata['usage']}"
+                        response_usage = parse_bt_request_usage(line_usage)
+                    except (ValueError, KeyError, TypeError):
+                        response_usage = None
                 if response_usage is not None and response_usage['scope'] not in summary_scopes:
-                    response_usage = parse_bt_request_usage(line, usage_models.get(response_usage['scope']))
+                    scope = response_usage['scope']
+                    model = metadata.get('model') or usage_models.get(scope)
+                    context = (usage_context or {}).get(scope, {})
+                    price = get_price(model or '', pricing, local=context.get('local', False), catalog=pricing is not None)
+                    response_usage = parse_bt_request_usage(line_usage if metadata else line, model, price)
+                    response_usage['profile_id'] = metadata.get('profile_id') or context.get('profile_id')
                     request_usage_seen = True
                     previous = usage_records.get(response_usage['scope'], {})
                     consumption = merge_snapshots((previous, response_usage))
@@ -552,6 +566,13 @@ def run_jobs(jobs, settings, output, skip, stop, emit, *, pause=None, checkpoint
                             break
                         continue
                     module = load_json(settings["bt_config"], {}, strict=True).get("module", {})
+                    profiles = {profile.get('id'): profile for profile in module.get('llm_profiles', [])}
+                    usage_context = {}
+                    for scope, key, vision in (('OCR', 'ocr_llm_id', True),
+                                                ('translation', 'translator_llm_id', module.get('llm_translate_vision', False))):
+                        profile = profiles.get(module.get(key), {})
+                        usage_context[scope] = dict(model=(profile.get('vision_model') if vision else '') or profile.get('model'),
+                                                    profile_id=profile.get('id'), local=profile.get('id') in ('ollama', 'lmstudio'))
                     enabled = {name: module.get(flag, True) is not False for name, flag in BT_STAGES.items()}
                     if not any(enabled.values()):
                         raise ValueError(tr("請至少啟用一個 BallonsTranslator 處理階段"))
@@ -575,11 +596,16 @@ def run_jobs(jobs, settings, output, skip, stop, emit, *, pause=None, checkpoint
                             page_manifest = Path(temporary) / "session.json"
                             save_json(page_manifest, request)
                         command_options = {"page_manifest": page_manifest} if page_manifest else {}
+                        if page_manifest is None:
+                            page_manifest = Path(temporary) / 'usage.json'
+                            save_json(page_manifest, None)
+                            command_options['page_manifest'] = page_manifest
                         session_options = dict(session=session, request=request) if session is not None else {}
                         diagnostic = run_translation(*translator_command(settings["bt_path"], settings["bt_config"],
                                                             settings.get("bt_python", ""), path, **command_options), stop,
                                         lambda *values: emit(("bt_progress", *values)), log_context=job_id,
                                         usage=lambda values: emit(("usage", index, values)),
+                                        pricing=settings.get('bt_token_rates', {}), usage_context=usage_context,
                                         retry=lambda: emit(("retry",)),
                                         jev=lambda values: emit(("jev_stats", index, values)),
                                         timing=lambda name, seconds: emit(("stage_time", index, name, seconds)), **session_options)
