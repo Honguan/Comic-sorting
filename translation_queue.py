@@ -108,11 +108,12 @@ class TranslationQueue:
         app = self.app
         box = ttk.Frame(app.queue_tab, padding=8)
         box.pack(fill="both", expand=True)
+        app.build_enqueue_panel(box)
         row = ttk.Frame(box)
         row.pack(fill="x", pady=(0, 6))
-        self.action_choice = ttk.Combobox(row, textvariable=self.action,
-            values=tuple(tr(value) for value in ACTIONS.values()), state="readonly", width=10)
-        self.action_choice.pack(side="left", padx=(0, 4))
+        self.action_choice = ttk.Combobox(app.enqueue_actions, textvariable=self.action,
+            values=tuple(tr(value) for value in ACTIONS.values()), state="readonly", width=8)
+        self.action_choice.pack(side="left", fill="x", expand=True, padx=(0, 8))
         self.button(row, tr("加入指定路徑"), self.add_directory)
         self.range_button = self.button(row, tr("翻譯頁數"), self.edit_page_range)
         self.range_button.pack_forget()
@@ -125,6 +126,7 @@ class TranslationQueue:
                                ("成功後清理 mask / inpainted", self.cleanup),
                                ("完成後開啟資料夾", self.open_after_completion)):
             options_menu.add_checkbutton(label=tr(text), variable=variable, command=app.save_settings)
+        options_menu.add_command(label=tr("章節整合"), command=app.open_aggregate)
         options.configure(menu=options_menu)
         self.options_menu = options_menu
         self.controls.extend((options, app.add_range_button, app.add_selected_button, app.aggregate_translate_button))
@@ -683,6 +685,10 @@ class TranslationQueue:
         for control in self.controls:
             control.configure(state="disabled" if busy else "normal")
         self.action_choice.configure(state="disabled" if busy else "readonly")
+        self.app.manga_choice.configure(state="disabled" if busy else "readonly")
+        selection = self.app.folder_tree.selection()
+        self.app.add_range_button.configure(state="normal" if not busy and len(selection) == 1 else "disabled")
+        self.app.add_selected_button.configure(state="normal" if not busy and selection else "disabled")
         self.workflow_choice.configure(state="disabled" if busy else "normal")
         for index in range(len(MODES)):
             self.workflow_menu.entryconfigure(index, state="disabled" if busy else "normal")

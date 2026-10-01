@@ -19,19 +19,19 @@ The EXE includes this tool's dependencies; no separate Python or archive utility
 
 ## Common operations
 
-Select a manga in the left Comic library, enter its chapter list indices starting at 1, and click Add range. Use multi-selection and Add selected for specific chapters. Choose the action and workflow on the right, then click Start. Merge chapters is a separate tab; Options contains export/cleanup preferences, and More actions contains reordering, retry, and scheduling.
+The Add manga and chapters panel at the top of the main queue is the primary entry point: choose a manga, enter chapter list indices starting at 1, choose translation, export, or cleanup, and click Add to queue. A blank end includes all remaining chapters; adding does not merge or start execution. The left library retains multi-selection, Add selected, and double-clicking chapters. Merging is a secondary tool available from library Tools or queue Options in a separate window that preserves the selection and range when reopened.
 
 Larger default text and fewer visible columns keep names, pages, and status readable. Selecting a row still shows its full path and metadata. Stage progress and queue LLM usage open in separate windows, while the main view keeps the list and elapsed time. Queue expansion/restoration preserves velocity: rapid reversal decelerates before changing direction, resizing during animation retains the original proportion, and dragging the divider takes control immediately. Columns and text wrapping update after the animation settles to reduce repeated layout jumps. The library creates chapter rows on expansion and reuses directory entries for page counts and translation status during scanning, avoiding per-page path construction and showing progress counts and elapsed time.
 
-Selection details use a read-only area with a fixed height. Scroll through long paths and errors, use Ctrl+A to select all, and Ctrl+C to copy. Library tools sit beside the title. Chapter-range fields have equal widths, and add buttons stack in narrow panes. Status and elapsed time share a row; progress, LLM usage, statistics, and history share a footer toolbar that wraps when space is limited.
+Selection details use a read-only area with a fixed height. Scroll through long paths and errors, use Ctrl+A to select all, and Ctrl+C to copy. Library tools sit beside the title. The manga picker and equal-width chapter-range fields stay in the main queue, including when it is expanded. Status and elapsed time share a row; progress, LLM usage, statistics, and history share a footer toolbar that wraps when space is limited.
 
 Model statistics show models, tokens and shares, requests, costs, and per-request averages by default. Select All fields for input, output, cache, and completeness details. Positive costs below US$0.01 use six decimal places without changing stored amounts. Stage progress, accumulated time, and seconds per page appear on separate lines. ETA uses HH:MM:SS, retaining hours beyond 24; failed or stopped stages show their status instead.
 
 | Operation | Behavior |
 |---|---|
-| Merge chapters | Use the Merge chapters tab to select chapters and a range within one series. Already merged folders are skipped. |
-| Add to queue | Choose translation, export, or cleanup, then use Add selected in the library or add a specific path. Double-clicking a chapter also adds it. |
-| Add range | Uses list start/end indices; a blank end means the last item. Adds jobs without merging or starting them. |
+| Merge chapters | Secondary tool: open the merge window from Tools or Options and use chapters or a range in one series. Already merged folders are skipped. |
+| Add to queue | Primary action: choose a manga, action, and chapter range in the main queue, then click Add to queue. Library multi-selection and adding a specific path are also available. |
+| Chapter range | Use list indices starting at 1; a blank end includes the remaining chapters. Existing entries with the same path and action are skipped. |
 | Merge and queue | Adds the merged output as a pending translation job. Start it manually. |
 | Start | With a selection: runs pending jobs within the selected chapters or groups. Without a selection: runs all pending jobs in queue order. |
 | Reorder | Move up, down, to the top, or to the bottom. Selected jobs retain their relative order. |

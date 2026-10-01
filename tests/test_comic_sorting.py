@@ -541,6 +541,7 @@ class ComicSortingTests(unittest.TestCase):
                     for number in (1, 2, 3)]
         app = comic.FileAggregatorApp.__new__(comic.FileAggregatorApp)
         app.manga_busy = False
+        app.scan_data = None
         app.selection_text = mock.Mock()
         app.folder_details = mock.Mock()
         app.start_entry, app.end_entry = Entry(), Entry()
@@ -588,6 +589,7 @@ class ComicSortingTests(unittest.TestCase):
             app.current_series = mock.Mock()
             app.folder_details = mock.Mock()
             app.start_entry, app.end_entry = mock.Mock(), mock.Mock()
+            app.manga_choice = mock.Mock()
             app.tree_items = {}
             app.search_text = type("Value", (), {"get": lambda self: ""})()
             app.scan_status_text = type("Value", (), {"set": lambda self, value: None})()

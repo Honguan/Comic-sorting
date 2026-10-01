@@ -669,6 +669,82 @@ class WorkflowTests(unittest.TestCase):
         q.context_menu.invoke('複製漫畫名稱')
         self.assertEqual(q.tree.clipboard_get(), 'Series\n另一部 Manga')
 
+    def test_primary_manga_picker_adds_a_range_even_when_library_is_filtered(self):
+        app, q = self.app, self.app.translation_queue
+        base = self.folder / "Comics"
+        paths = []
+        for group in ("A", "B"):
+            for number in (1, 5, 10, 30):
+                path = base / group / "Series" / f"Chapter {number}"
+                path.mkdir(parents=True)
+                (path / "1.png").write_bytes(b"image")
+                if group == "B":
+                    paths.append(path)
+        app.base_path.set(str(base))
+        app.apply_scan_data(base, app.scan_folder_data(base))
+        self.assertEqual(set(app.manga_choice.cget("values")), {str(Path("A/Series")), str(Path("B/Series"))})
+        app.search_text.set(str(base / "A/Series"))
+        time.sleep(.22)
+        self.root.update()
+        self.assertEqual(len(app.folder_tree.get_children()), 1)
+        app.search_text.set("not yet applied")
+        app.work_tabs.select(app.settings_tab)
+        app.manga_choice.set(str(Path("B/Series")))
+        app.manga_choice.event_generate("<<ComboboxSelected>>")
+        self.root.update()
+        self.assertEqual(app.search_text.get(), "")
+        self.assertIsNone(app.search_after)
+        self.assertEqual(app.selected_tree_item()[1], base / "B/Series")
+        self.assertEqual(app.work_tabs.select(), str(app.queue_tab))
+        app.range_start.set("2")
+        app.range_end.set("3")
+        time.sleep(.22)
+        self.root.update()
+        self.assertEqual((app.range_start.get(), app.range_end.get()), ("2", "3"))
+        q.action.set(comic.tr("匯出"))
+        with mock.patch.object(q, "start") as start:
+            app.add_range_button.invoke()
+            app.add_range_button.invoke()
+            self.assertEqual([(job.path, job.action) for job in q.jobs], [(path, "export") for path in paths[1:3]])
+            app.range_start.set("4")
+            app.range_end.set("")
+            app.add_range_button.invoke()
+            self.assertEqual([job.path for job in q.jobs], paths[1:])
+            start.assert_not_called()
+        q.running = True
+        q.update_controls()
+        for widget in (app.manga_choice, app.add_range_button, app.add_selected_button):
+            self.assertTrue(widget.instate(["disabled"]))
+        q.running = False
+        q.update_controls()
+        self.assertTrue(app.manga_choice.instate(["readonly"]))
+        self.assertFalse(app.add_range_button.instate(["disabled"]))
+
+    def test_merge_is_a_reusable_tool_window_outside_main_tabs(self):
+        app, q = self.app, self.app.translation_queue
+        self.root.geometry("820x640")
+        self.root.deiconify()
+        self.root.update()
+        tabs = app.work_tabs.tabs()
+        self.assertNotIn(str(app.aggregate_tab), tabs)
+        self.assertEqual(app.aggregate_window.state(), "withdrawn")
+        menu = self.root.nametowidget(app.library_menu.cget("menu"))
+        index = next(i for i in range(menu.index("end") + 1) if menu.entrycget(i, "label") == comic.tr("章節整合"))
+        menu.invoke(index)
+        self.root.update()
+        popup = app.aggregate_window
+        self.assertTrue(app.aggregate_button.winfo_ismapped())
+        app.range_start.set("2")
+        self.root.tk.call(popup.protocol("WM_DELETE_WINDOW"))
+        self.assertEqual(popup.state(), "withdrawn")
+        q.options_menu.invoke("end")
+        self.root.update()
+        self.assertIs(app.aggregate_window, popup)
+        self.assertEqual(app.range_start.get(), "2")
+        self.assertEqual(app.work_tabs.tabs(), tabs)
+        self.assertEqual(app.work_tabs.select(), str(app.queue_tab))
+
+
     def test_add_number_range_uses_series_indices_and_open_end(self):
         q = self.app.translation_queue
         paths = [self.chapter(name) for name in ('Chapter 1', 'Chapter 5', 'Chapter 10-20', 'Chapter 30')]
@@ -2167,7 +2243,7 @@ class WorkflowTests(unittest.TestCase):
                     root.geometry('820x640')
                     root.deiconify()
                     root.update()
-                    widgets = (app.library_menu, app.start_entry, app.end_entry, app.add_range_button,
+                    widgets = (app.library_menu, app.manga_choice, q.action_choice, app.start_entry, app.end_entry, app.add_range_button,
                                app.add_selected_button, q.start_button, q.pause_button, q.stop_button,
                                q.bt_toggle, q.usage_toggle, q.stats_button, q.history_button)
                     for widget in widgets:
@@ -2182,10 +2258,11 @@ class WorkflowTests(unittest.TestCase):
                                          app.folder_tree.winfo_width())
                     app.panes.sashpos(0, 180)
                     root.update()
-                    self.assertGreater(app.add_selected_button.winfo_rooty(), app.add_range_button.winfo_rooty())
+                    self.assertTrue(app.add_selected_button.winfo_ismapped())
                     app.panes.sashpos(0, 430)
                     root.update()
-                    for widget in (q.bt_toggle, q.usage_toggle, q.stats_button, q.history_button):
+                    for widget in (app.manga_choice, app.start_entry, app.end_entry, app.add_range_button, q.action_choice,
+                                   q.bt_toggle, q.usage_toggle, q.stats_button, q.history_button):
                         self.assertGreaterEqual(widget.winfo_width(), widget.winfo_reqwidth())
                         self.assertLessEqual(widget.winfo_rootx() + widget.winfo_width(),
                                              root.winfo_rootx() + root.winfo_width())
@@ -2202,7 +2279,7 @@ class WorkflowTests(unittest.TestCase):
         footer = self.app.translation_queue.usage_frame
         self.assertTrue(footer.winfo_ismapped())
         self.assertLessEqual(footer.winfo_rooty() - self.root.winfo_rooty() + footer.winfo_reqheight(), 780)
-        self.assertEqual(len(self.app.work_tabs.tabs()), 5)
+        self.assertEqual(len(self.app.work_tabs.tabs()), 4)
         n = self.app.translation_queue.notifications
         self.app.work_tabs.select(n.tab)
         self.root.update()

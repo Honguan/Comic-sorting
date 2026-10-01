@@ -453,8 +453,6 @@ class UIImprovementsTests(unittest.TestCase):
                                              app.translation_queue.total,
                                              app.translation_queue.history_button,
                                              app.add_range_button, app.add_selected_button)),
-                            (app.aggregate_tab, (app.aggregate_button, app.aggregate_translate_button,
-                                                 app.remove_sources_checkbox, app.keep_last_source_checkbox)),
                             (app.export_tab, (app.export_selected_button, app.export_all_button, app.cleanup_button)),
                             (app.settings_tab, (app.translation_queue.controls[0],))):
                         app.work_tabs.select(tab)
@@ -464,6 +462,15 @@ class UIImprovementsTests(unittest.TestCase):
                             self.assertGreater(widget.winfo_width(), 1)
                             self.assertLessEqual(widget.winfo_rootx() - window.winfo_rootx() + widget.winfo_reqwidth(), 820, str(widget))
                             self.assertLessEqual(widget.winfo_rooty() - window.winfo_rooty() + widget.winfo_reqheight(), 640, str(widget))
+                    app.open_aggregate()
+                    self.pump(.04)
+                    for widget in (app.aggregate_button, app.aggregate_translate_button,
+                                   app.remove_sources_checkbox, app.keep_last_source_checkbox):
+                        self.assertTrue(widget.winfo_ismapped(), str(widget))
+                        self.assertLessEqual(widget.winfo_rootx() + widget.winfo_reqwidth(),
+                                             app.aggregate_window.winfo_rootx() + app.aggregate_window.winfo_width(), str(widget))
+                        self.assertLessEqual(widget.winfo_rooty() + widget.winfo_reqheight(),
+                                             app.aggregate_window.winfo_rooty() + app.aggregate_window.winfo_height(), str(widget))
                     for content in (app.translation_queue.bt_bars['OCR'].master,
                                     app.translation_queue.usage_table.master):
                         popup = content.winfo_toplevel()
