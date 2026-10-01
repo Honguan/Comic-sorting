@@ -54,14 +54,19 @@ def format_tokens(tokens):
     return str(tokens)
 
 
+def cost_text(amount):
+    places = 6 if 0 < amount < Decimal('0.01') else 2
+    rounded = amount.quantize(Decimal(1).scaleb(-places), rounding=ROUND_CEILING)
+    return f'US${rounded:,.{places}f}'
+
+
 def usage_text(records, *, empty_text=None):
     if not records:
         return empty_text if empty_text is not None else tr("尚未回報")
     tokens = sum(value['total_tokens'] for value in records)
     token_text = format_tokens(tokens)
     costs = [Decimal(value['cost']) for value in records if value['cost'] is not None]
-    cost = (tr("預估 {0}").format(f"US${sum(costs).quantize(Decimal('0.01'), rounding=ROUND_CEILING):,.2f}")
-            if costs else tr("無法預估"))
+    cost = tr("預估 {0}").format(cost_text(sum(costs))) if costs else tr("無法預估")
     text = tr("{0} tokens｜{1}｜{2} 次請求").format(token_text, cost, sum(value['requests'] for value in records))
     if costs and any(value['cost'] is None or value['unpriced_requests'] or value.get('cost_incomplete') for value in records):
         text += tr("（僅含已知金額）")
@@ -153,7 +158,7 @@ def history_totals(path):
 
 def usage_columns(records):
     costs = [Decimal(value['cost']) for value in records if value['cost'] is not None]
-    cost = f"US${sum(costs).quantize(Decimal('0.01'), rounding=ROUND_CEILING):,.2f}" if costs else tr("無法預估")
+    cost = cost_text(sum(costs)) if costs else tr("無法預估")
     tokens = format_tokens(sum(value['total_tokens'] for value in records)) if records else tr("尚未回報")
     requests = f"{sum(value['requests'] for value in records):,}" if records else '—'
     partial = any(value['cost'] is None or value['unpriced_requests'] or value.get('cost_incomplete') for value in records)
@@ -171,16 +176,25 @@ MODEL_COLUMNS = dict(scope='項目', model='模型', total_tokens='Token 數', t
 
 
 def create_model_table(parent):
-    note = ttk.Label(parent, text=tr('佔比依 OCR／翻譯／合計分別計算；Token 僅含已回報用量，費用僅含已知金額。平均值以每次請求計算；平均 Token 排除未回報請求，金額不完整時不顯示平均費用。') + '\n' + tr('合計已包含 OCR 與翻譯；Jev 另列。快取屬於輸入 Token，分項只累加已回報資料；舊資料不推算模型分項。'), wraplength=950)
-    note.grid(row=0, column=0, columnspan=2, sticky='ew', padx=4, pady=4)
+    toolbar = ttk.Frame(parent)
+    toolbar.grid(row=0, column=0, columnspan=2, sticky='ew', padx=4, pady=4)
+    note = ttk.Label(toolbar, width=1, text=tr('佔比依 OCR／翻譯／合計分別計算；Token 僅含已回報用量，費用僅含已知金額。平均值以每次請求計算；平均 Token 排除未回報請求，金額不完整時不顯示平均費用。') + '\n' + tr('合計已包含 OCR 與翻譯；Jev 另列。快取屬於輸入 Token，分項只累加已回報資料；舊資料不推算模型分項。'), wraplength=950)
+    note.pack(side='left', fill='x', expand=True)
     note.bind('<Configure>', lambda event: note.configure(wraplength=event.width) if event.width > 100 else None)
-    table = ttk.Treeview(parent, columns=tuple(MODEL_COLUMNS), show='headings', height=8)
+    overview = ('scope', 'model', 'total_tokens', 'token_share', 'requests', 'cost', 'avg_tokens', 'avg_cost')
+    table = ttk.Treeview(parent, columns=tuple(MODEL_COLUMNS), displaycolumns=overview, show='headings', height=8)
+    detailed = tk.BooleanVar(parent, value=False)
+    def toggle_columns():
+        table.configure(displaycolumns=tuple(MODEL_COLUMNS) if detailed.get() else overview)
+        table.xview_moveto(0)
+    table.column_toggle = ttk.Checkbutton(toolbar, text=tr('全部欄位'), variable=detailed, command=toggle_columns)
+    table.column_toggle.pack(side='right', padx=(8, 0))
     widths = dict(scope=60, model=180, total_tokens=100, token_share=85, requests=70, request_share=85,
                   cost=135, cost_share=115, avg_tokens=110, avg_cost=145, pricing=145)
     for key, title in MODEL_COLUMNS.items():
         table.heading(key, text=tr(title))
         table.column(key, width=max(widths.get(key, 110), tkfont.nametofont('TkHeadingFont').measure(tr(title)) + 16),
-                     minwidth=55, stretch=False, anchor='w' if key in ('scope', 'model', 'pricing') else 'e')
+                     minwidth=180 if key == 'model' else 55, stretch=key == 'model', anchor='w' if key in ('scope', 'model', 'pricing') else 'e')
     vertical = ttk.Scrollbar(parent, command=table.yview)
     horizontal = ttk.Scrollbar(parent, orient='horizontal', command=table.xview)
     table.configure(yscrollcommand=vertical.set, xscrollcommand=horizontal.set)

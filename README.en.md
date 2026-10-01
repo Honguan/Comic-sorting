@@ -25,6 +25,7 @@ Larger default text and fewer visible columns keep names, pages, and status read
 
 Selection details use a read-only area with a fixed height. Scroll through long paths and errors, use Ctrl+A to select all, and Ctrl+C to copy. Library tools sit beside the title. Chapter-range fields have equal widths, and add buttons stack in narrow panes. Status and elapsed time share a row; progress, LLM usage, statistics, and history share a footer toolbar that wraps when space is limited.
 
+Model statistics show models, tokens and shares, requests, costs, and per-request averages by default. Select All fields for input, output, cache, and completeness details. Positive costs below US$0.01 use six decimal places without changing stored amounts. Stage progress, accumulated time, and seconds per page appear on separate lines. ETA uses HH:MM:SS, retaining hours beyond 24; failed or stopped stages show their status instead.
 
 | Operation | Behavior |
 |---|---|

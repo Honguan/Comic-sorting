@@ -54,6 +54,21 @@ class HistoryStorageTests(unittest.TestCase):
             self.assertEqual(record['total_tokens'], tokens)
         self.assertEqual(usage_columns([])[0], '尚未回報')
 
+    def test_subcent_costs_stay_precise_without_changing_stored_values(self):
+        for amount, expected in (('0.000021', 'US$0.000021'), ('0.008', 'US$0.008000'),
+                                 ('0.0000001', 'US$0.000001'), ('0', 'US$0.00'),
+                                 ('0.125', 'US$0.13'), (None, '無法預估')):
+            with self.subTest(amount=amount):
+                record = dict(total_tokens=120, requests=1, cost=amount,
+                              missing_usage_requests=0, unpriced_requests=0)
+                self.assertEqual(usage_columns([record])[1], expected)
+                self.assertIn(expected, usage_text([record]))
+                self.assertEqual(record['cost'], amount)
+        partial = dict(record, cost='0.000021', unpriced_requests=1)
+        self.assertIn('僅含已知金額', usage_text([partial]))
+
+
+
     def test_grand_totals_include_all_runs_and_known_costs_without_double_counting(self):
         from queue_worker import parse_bt_usage
         from test_bt_usage import usage_line
@@ -153,7 +168,7 @@ class HistoryStorageTests(unittest.TestCase):
         partial = dict(usage, cost='0.008', missing_usage_requests=1, unpriced_requests=1)
         unknown = dict(usage, cost=None, unpriced_requests=10)
         for records, expected in (([usage, partial, unknown], 'US$1.01'),
-                                  ([partial], 'US$0.01'), ([usage, unknown], 'US$1.01'),
+                                  ([partial], 'US$0.008000'), ([usage, unknown], 'US$1.01'),
                                   ([dict(usage, cost='0'), unknown], 'US$0.00'),
                                   ([unknown], '無法預估')):
             with self.subTest(expected=expected, records=records):

@@ -322,6 +322,8 @@ TRANSLATIONS = {
     '未啟用': {'en': 'Disabled', 'ja': '無効'},
     '估算中': {'en': 'Estimating', 'ja': '計算中'},
     '{0}%｜{1}/{2} 頁｜剩餘 {3}': {'en': '{0}% | {1}/{2} pages | ETA {3}', 'ja': '{0}%｜{1}/{2} ページ｜残り {3}'},
+    '{0}%｜{1}/{2} 頁｜狀態 {3}': {'en': '{0}% | {1}/{2} pages | Status {3}', 'ja': '{0}%｜{1}/{2} ページ｜状態 {3}'},
+
     '編輯 BallonsTranslator 設定檔': {'en': 'Edit BallonsTranslator configuration', 'ja': 'BallonsTranslator 設定ファイルを編集'},
     '設定檔含有重複欄位': {'en': 'Configuration contains duplicate fields', 'ja': '設定に重複する項目があります'},
     '數值必須是有限數字': {'en': 'The value must be a finite number', 'ja': '有限の数値を入力してください'},

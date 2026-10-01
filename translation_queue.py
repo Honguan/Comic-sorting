@@ -272,13 +272,18 @@ class TranslationQueue:
         self.bt_elapsed = {}
         self.time_labels = {}
         for row, name in enumerate(BT_STAGES):
-            ttk.Label(progress_grid, text=tr(name)).grid(row=row, column=0, sticky="w", padx=(0, 8))
+            line = row * 3
+            ttk.Label(progress_grid, text=tr(name)).grid(row=line, column=0, sticky="w", padx=(0, 8))
             self.bt_bars[name] = ttk.Progressbar(progress_grid)
-            self.bt_bars[name].grid(row=row, column=1, sticky="ew", padx=(0, 8), pady=1)
+            self.bt_bars[name].grid(row=line + 1, column=0, columnspan=2, sticky="ew", pady=(2, 0))
             self.bt_labels[name] = tk.StringVar()
-            ttk.Label(progress_grid, textvariable=self.bt_labels[name]).grid(row=row, column=2, sticky="w")
+            detail = ttk.Label(progress_grid, textvariable=self.bt_labels[name], width=1, wraplength=700)
+            detail.grid(row=line + 2, column=0, columnspan=2, sticky="ew", pady=(0, 8))
+            detail.bind("<Configure>", lambda event, label=detail: label.configure(wraplength=event.width)
+                        if event.width > 100 else None)
             self.time_labels[name] = tk.StringVar(value=tr("累計耗時：{0}").format('—'))
-            ttk.Label(progress_grid, textvariable=self.time_labels[name]).grid(row=row, column=3, sticky="w", padx=(8, 0))
+            ttk.Label(progress_grid, textvariable=self.time_labels[name], style="Muted.TLabel").grid(
+                row=line, column=1, sticky="e", padx=(8, 0))
         self.reset_bt_progress()
         self.usage_records = SnapshotTotals(lambda key: key[1])
         self.jev_records = SnapshotTotals()
@@ -408,8 +413,8 @@ class TranslationQueue:
         header.pack(fill="x")
         popup = tk.Toplevel(self.app.root)
         popup.title(title)
-        popup.geometry("1200x360")
-        popup.minsize(900, 260)
+        popup.geometry("1000x380")
+        popup.minsize(760, 340)
         popup.withdraw()
         content = ttk.Frame(popup, padding=12)
         def toggle():
@@ -593,11 +598,16 @@ class TranslationQueue:
         if not active:
             text = tr("未啟用")
         else:
-            remaining = eta if eta is not None else tr("估算中")
+            remaining = eta or tr("估算中")
+            if eta and all(part.isdigit() for part in eta.split(':')):
+                remaining = elapsed_text(sum(int(part) * 60 ** index
+                                             for index, part in enumerate(reversed(eta.split(':')))))
+            template = tr("{0}%｜{1}/{2} 頁｜剩餘 {3}")
             if terminal and (current is None or total is None or current < total):
                 remaining = tr(terminal)
-            text = tr("{0}%｜{1}/{2} 頁｜剩餘 {3}").format(
-                percent, current if current is not None else "—", total if total is not None else "—", remaining)
+                template = tr("{0}%｜{1}/{2} 頁｜狀態 {3}")
+            text = template.format(percent, f"{current:,}" if current is not None else "—",
+                                   f"{total:,}" if total is not None else "—", remaining)
             seconds = self.bt_elapsed[name]
             average = '—'
             if current and seconds is not None:

@@ -29,7 +29,7 @@ class WorkflowTests(unittest.TestCase):
         q.stats_menu.invoke(0)
         table = q.model_usage_table
         q.model_window.update_idletasks()
-        self.assertLessEqual(sum(table.column(key, 'width') for key in table['columns'][:10]) + 2,
+        self.assertLessEqual(sum(table.column(key, 'width') for key in table['displaycolumns']) + 2,
                              table.winfo_width())
 
         a = record('a', 2, 300, '0.0000001')
@@ -2066,6 +2066,65 @@ class WorkflowTests(unittest.TestCase):
         q.retry()
         self.assertEqual((q.jobs[0].status, q.jobs[0].error), ("pending", ""))
 
+    def test_statistics_overview_and_progress_times_fit_each_language(self):
+        import json
+        from ui_language import tr
+        from queue_history import MODEL_COLUMNS
+        for language in ('zh-TW', 'en', 'ja'):
+            with self.subTest(language=language):
+                case = WorkflowTests()
+                with mock.patch.object(comic, 'load_json', return_value={'ui_language': language}):
+                    case.setUp()
+                try:
+                    root, q = case.root, case.app.translation_queue
+                    root.deiconify()
+                    q.usage_records[0, 'OCR'] = dict(model='demo', total_tokens=12345, prompt=12000,
+                                                    requests=2, cost='0.000021', missing_usage_requests=0,
+                                                    unpriced_requests=0)
+                    q.open_model_stats()
+                    root.update()
+                    table = q.model_usage_table
+                    overview = ('scope', 'model', 'total_tokens', 'token_share', 'requests', 'cost', 'avg_tokens', 'avg_cost')
+                    self.assertEqual(table['displaycolumns'], overview)
+                    self.assertLessEqual(sum(table.column(key, 'width') for key in overview), table.winfo_width())
+                    row = json.dumps(['OCR', 'demo'])
+                    table.selection_set(row)
+                    values = table.item(row, 'values')
+                    table.column_toggle.invoke()
+                    self.assertEqual(table['displaycolumns'], tuple(MODEL_COLUMNS))
+                    table.xview_moveto(1)
+                    table.column_toggle.invoke()
+                    self.assertEqual(table.item(row, 'values'), values)
+                    self.assertEqual(table.selection(), (row,))
+                    self.assertEqual(table.xview()[0], 0)
+                    self.assertEqual(q.usage_table.set('OCR', 'cost'), 'US$0.000021')
+                    q.bt_toggle.invoke()
+                    popup = q.bt_bars['OCR'].winfo_toplevel()
+                    popup.geometry('760x340')
+                    for name, eta in zip(q.bt_bars, ('12:34', '25:01:01', None, '00:00')):
+                        q.bt_progress[name] = (10, 1234, 12340, eta, True)
+                        q.bt_elapsed[name] = 100
+                        q.time_labels[name].set(tr('累計耗時：{0}').format('25:01:01'))
+                        q.show_bt_progress(name)
+                    root.update()
+                    self.assertIn('00:12:34', q.bt_labels['Text Detection'].get())
+                    self.assertIn('25:01:01', q.bt_labels['OCR'].get())
+                    self.assertIn(tr('估算中'), q.bt_labels['Inpaint'].get())
+                    self.assertIn('1,234/12,340', q.bt_labels['Translation'].get())
+                    q.show_bt_progress('Translation', '失敗')
+                    self.assertIn(tr('{0}%｜{1}/{2} 頁｜狀態 {3}').format(10, '1,234', '12,340', tr('失敗')),
+                                  q.bt_labels['Translation'].get())
+                    for widget in q.bt_bars['OCR'].master.winfo_children():
+                        self.assertTrue(widget.winfo_ismapped())
+                        self.assertLessEqual(widget.winfo_rootx() + widget.winfo_width(),
+                                             popup.winfo_rootx() + popup.winfo_width())
+                        self.assertLessEqual(widget.winfo_rooty() + widget.winfo_height(),
+                                             popup.winfo_rooty() + popup.winfo_height())
+                finally:
+                    case.tearDown()
+
+
+
     def test_long_selection_details_keep_lists_stable_and_allow_copy(self):
         self.root.geometry('1024x780')
         self.root.deiconify()
@@ -2473,7 +2532,7 @@ class WorkflowTests(unittest.TestCase):
         self.root.update()
         expected = [window.totals.item(row, 'values') for row in window.totals.get_children()]
         self.assertEqual({key: var.get() for key, var in window.total_counts.items()}, {'runs': '2', 'jobs': '2', 'elapsed': '02:00:00'})
-        self.assertEqual(window.totals.item('total', 'values'), ('合計', '2.00K', 'US$0.01', '2', '完整', '完整'))
+        self.assertEqual(window.totals.item('total', 'values'), ('合計', '2.00K', 'US$0.008000', '2', '完整', '完整'))
         window.tree.selection_set('run-0')
         window.show_details()
         self.assertEqual([window.totals.item(row, 'values') for row in window.totals.get_children()], expected)
@@ -2784,7 +2843,7 @@ class WorkflowTests(unittest.TestCase):
             self.assertIsNone(q.paused_at)
             self.assertFalse(self.app.manga_busy)
             self.assertIn('2.00K', q.usage_labels['total'].get())
-            self.assertIn('US$0.01', q.usage_labels['total'].get())
+            self.assertIn('US$0.008000', q.usage_labels['total'].get())
             self.assertIn('00:00:10', q.elapsed_label.get())
             self.assertEqual(q.total['value'], 2)
             notify.assert_called_once()

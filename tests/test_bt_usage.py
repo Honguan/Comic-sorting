@@ -34,7 +34,7 @@ class UsageTests(unittest.TestCase):
         self.assertIn('Standard API equivalent', latest['translation']['price_basis'])
         self.assertEqual(latest['translation']['rates_date'], '2026-10-01')
         from queue_history import usage_columns
-        self.assertEqual(usage_columns([latest['total']])[1:4], ('US$0.01', '3', '完整'))
+        self.assertEqual(usage_columns([latest['total']])[1:4], ('US$0.003990', '3', '完整'))
 
     def test_estimates_require_known_model_and_consistent_usage(self):
         prefix = '[DEBUG] trans_llm:_log_token_usage:1182 - LLM token usage: '
