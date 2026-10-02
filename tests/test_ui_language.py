@@ -50,8 +50,14 @@ class UILanguageTests(unittest.TestCase):
                         work = chapter / "mask"
                         work.mkdir(parents=True)
                         (work / "1.png").touch()
+                        (chapter / "1.png").write_bytes(b"source")
+                        (chapter / "result").mkdir()
+                        (chapter / "result/1.png").write_bytes(b"translated")
+                        output, state = Path(temp) / "Komga", {}
+                        comic.export_chapter(chapter.parent, chapter, output, state)
+                        comic.save_json(output / ".comic-sorting-state.json", state)
                         app.translation_queue.add_paths([chapter], action="cleanup")
-                        run_jobs(app.translation_queue.jobs, app.translation_queue.settings(), "", True,
+                        run_jobs(app.translation_queue.jobs, app.translation_queue.settings(), str(output), True,
                                  app.translation_queue.stop, app.translation_queue.events.put)
                         self.assertFalse((work / "1.png").exists())
                         app.ui_language.set(LANGUAGES["ja"])

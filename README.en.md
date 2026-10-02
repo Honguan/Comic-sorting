@@ -21,7 +21,7 @@ The EXE includes this tool's dependencies; no separate Python or archive utility
 
 The Add manga and chapters panel at the top of the main queue is the primary entry point: choose a manga, enter chapter list indices starting at 1, choose translation, export, or cleanup, and click Add to queue. A blank end includes all remaining chapters; adding does not merge or start execution. The left library retains multi-selection, Add selected, and double-clicking chapters. Merging is a secondary tool available from library Tools or queue Options in a separate window that preserves the selection and range when reopened.
 
-Chapter range, action, and Add to queue share a row when space permits and wrap in narrower panes. Options contains page ranges, follow-up processing, Add path, and chapter merging. Actions manages queue items; View opens progress, LLM usage, history, statistics, and queue expansion/restoration. Start, Pause, and Stop remain direct buttons. The main view keeps execution status and elapsed time, with Jev elapsed time under View → Statistics → Jev statistics.
+The add form wraps in narrow panes. Options contains page ranges, follow-up processing, Add path, and chapter merging. History, Model statistics, and Progress open directly from the footer. Actions manages queue items; View provides LLM usage, Jev statistics, the full summary, and queue expansion/restoration. Common controls wrap when space is limited.
 
 The main summary shows pending and completed items, plus attention counts when needed. View → Queue summary provides full totals, failures, and retries. The library shows manga/folder counts; selection details start with names, status, and pages, with full paths, sizes, and timestamps still available by scrolling. Unconfirmed page counts are not displayed as zero.
 
@@ -50,7 +50,7 @@ Model statistics show scope, model, tokens, requests, and estimated cost by defa
 | Names and paths | Export all manga names, or use the context menu to copy manga names or full paths. |
 
 - **Search only filters the display.** Select results to run only those jobs; starting without a selection still runs all pending jobs.
-- Starting one selected manga with multiple pending single chapters asks for a chapter range, defaulting to all; merged chapters remain included. Selecting chapter rows directly skips this question. Multiple manga instead show a draggable priority list with up/down controls. The default preserves queue order; changes apply only to this batch, and Cancel does not start it.
+- Start runs the selected scope directly, or all pending jobs when nothing is selected. For a temporary chapter range or manga order, use Actions → Adjust range and order…; changes affect only that batch, and Cancel does not start it.
 - Adding the same path and action again resets the existing job to pending. Requeuing does not start work automatically. Adding and reordering jobs are disabled while running or paused.
 - Lists support Ctrl/Shift selection, Ctrl+A to select all, Esc to clear selection, and Ctrl+C to copy paths. Selecting a group while searching includes only visible matches.
 - Click the manga name header to sort by name, or use Tools → Sort for updated time, name, size, or chapter count. Selecting the same field again reverses its direction. Drag the divider to resize the left and right areas.
@@ -58,7 +58,7 @@ Model statistics show scope, model, tokens, requests, and estimated cost by defa
 ### Translation, export, and records
 
 - Main queue → More actions → Scheduled start supports multiple one-shot schedules. Countdown accepts hours/minutes with shortcuts; Date and time has separate date/hour/minute fields and Today/Tomorrow buttons. Preview the local start time and confirm scope, chapters, and order when adding. Only unchanged, still-pending selected jobs run; busy or paused queues wait until idle. Changes to translation/cleanup/output settings require rescheduling. Keep the app open: closing cancels schedules; schedules do not wake or boot the computer.
-The **▼ menu beside Start** offers five workflows. Choose a mode, then click Start; selection scope is unchanged.
+The **Workflow selector beside Start** shows the current mode. Choose one of five workflows, then click Start; selection scope is unchanged.
 
 | Workflow | Processing |
 | --- | --- |
@@ -99,7 +99,8 @@ The **▼ menu beside Start** offers five workflows. Choose a mode, then click S
 
 - Keep settings and history when moving the app. Only one Windows instance may use the same settings file; launching again activates the existing window. Close all older versions before switching: they do not enforce this guard. Separate installations can still run independently; do not process the same manga or export directory simultaneously.
 - Removing queue items keeps manga files. Deleting folders through the upper list's context menu moves them to the Windows Recycle Bin.
-- **Removing merge sources and cleaning `mask`/`inpainted` permanently deletes data.** Merging can preserve the last source. Manual Komga export cleans successful chapters' working data after saving export state; queued jobs follow their cleanup option.
+- **Completed preprocessing does not authorize cleanup.** Manual Komga export retains `mask`/`inpainted`; use Clean exported caches when needed. Automatic queue cleanup requires CBZ export to be enabled. Every cleanup entry point requires complete translation, a matching export record, unchanged results and CBZ metadata, and a successful archive-content and CRC check. Source or preprocessing files newer than the archive are also retained. Re-export chapters with missing legacy verification records before cleanup.
+- **Removing merge sources and cleaning `mask`/`inpainted` permanently deletes data.** Source removal is off by default and can retain the last chapter. Cleanup still requires confirmation.
 - Types are inferred from names: `Chapter 1` is a single chapter; `Chapter 1-30` is a merged folder. Renaming may affect classification.
 - Invalid settings or state files stop related operations and remain untouched; repair them or restore a backup. Logs may contain paths and translator output, so review them before sharing.
 

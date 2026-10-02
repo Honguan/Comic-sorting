@@ -26,7 +26,7 @@ class WorkflowTests(unittest.TestCase):
                         missing_usage_requests=missing, unpriced_requests=unpriced)
 
         q = self.app.translation_queue
-        q.stats_menu.invoke(0)
+        q.stats_button.invoke()
         table = q.model_usage_table
         q.model_window.update_idletasks()
         self.assertLessEqual(sum(table.column(key, 'width') for key in table['displaycolumns']) + 2,
@@ -92,7 +92,7 @@ class WorkflowTests(unittest.TestCase):
         q.usage_records[0, 'OCR'] = ocr
         q.usage_records[0, 'translation'] = translation
         q.usage_records[0, 'total'] = dict(merge_snapshots((ocr, translation)), scope='total')
-        q.stats_menu.invoke(0)
+        q.stats_button.invoke()
         table = q.model_usage_table
         ocr_row = json.dumps(['OCR', 'gpt-4o-mini'])
         translation_row = json.dumps(['translation', 'private-model'])
@@ -198,8 +198,8 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn('編輯設定檔', labels)
         self.assertIn('開啟原生設定介面', labels)
         self.assertIn('開啟紀錄資料夾', labels)
-        self.assertEqual(q.stats_menu.entrycget(1, 'label'), 'Jev 統計')
-        q.stats_menu.invoke(1)
+        self.assertEqual(q.view_menu.entrycget(1, 'label'), 'Jev 統計')
+        q.view_menu.invoke(1)
         self.assertTrue(q.jev_window.winfo_exists())
         command = ['python.exe', '-u', '-m', 'ballontranslator', '--config', 'native.json']
         with mock.patch.object(q, 'command', return_value=(command, self.folder, {})), \
@@ -494,6 +494,7 @@ class WorkflowTests(unittest.TestCase):
     def test_queue_checkpoint_failure_never_starts_second_job(self):
         from comic_core import load_json
         q = self.app.translation_queue
+        self.app.komga_path.set(str(self.folder / 'Komga'))
         for fail_at in ('settings', 'history'):
             q.jobs = [Job(self.chapter(f'Checkpoint {fail_at} 1'), 'cleanup'), Job(self.chapter(f'Checkpoint {fail_at} 2'), 'cleanup')]
             q.render()
@@ -953,7 +954,7 @@ class WorkflowTests(unittest.TestCase):
             dialog.return_value.result = None
             self.assertEqual(q.configure_start(targets), ())
             with mock.patch('translation_queue.threading.Thread') as worker:
-                q.start()
+                q.start(configure=True)
                 worker.assert_not_called()
                 self.assertFalse(q.running)
                 self.assertIsNone(q.history_run)
@@ -971,7 +972,7 @@ class WorkflowTests(unittest.TestCase):
             with mock.patch.object(q, 'validate', return_value=True), \
                     mock.patch.object(q, 'confirm_cleanup', return_value=True), \
                     mock.patch('translation_queue.threading.Thread') as worker:
-                q.start()
+                q.start(configure=True)
                 self.assertEqual(worker.call_args.kwargs['args'][0], (jobs[1], jobs[0], jobs[2], jobs[3], jobs[5]))
                 self.assertEqual(q.history_run['jobs'][0]['path'], str(jobs[1].path))
             q.running = self.app.manga_busy = False
@@ -984,6 +985,40 @@ class WorkflowTests(unittest.TestCase):
             q.tree.selection_set('series:' + str(a))
             self.assertEqual(q.configure_start(q.start_targets()), tuple(q.jobs))
             dialog.assert_not_called()
+
+    def test_start_runs_selected_manga_without_extra_range_dialog(self):
+        q = self.app.translation_queue
+        q.add_paths([self.chapter('Chapter 1'), self.chapter('Chapter 2')])
+        q.tree.selection_set('series:' + str(q.jobs[0].path.parent))
+        q.update_controls()
+        with mock.patch.object(q, 'command'), mock.patch.object(q, 'confirm_cleanup', return_value=True), \
+                mock.patch('translation_queue.QueueStartDialog') as dialog, \
+                mock.patch('translation_queue.threading.Thread') as worker:
+            q.start_button.invoke()
+            dialog.assert_not_called()
+            self.assertEqual(worker.call_args.kwargs['args'][0], tuple(q.jobs))
+        q.running = self.app.manga_busy = False
+
+    def test_cleanup_requires_export_and_direct_windows_reopen(self):
+        q = self.app.translation_queue
+        q.export.set(True)
+        q.cleanup.set(True)
+        q.options_menu.invoke(1)  # Turning off export also turns off automatic cleanup.
+        self.assertFalse(q.cleanup.get())
+        q.jobs = [Job(self.chapter('Chapter 1'), 'cleanup')]
+        self.app.komga_path.set('')
+        with mock.patch('translation_queue.messagebox.showerror') as error:
+            self.assertFalse(q.validate())
+        self.assertIn('Komga', error.call_args.args[1])
+        for button, window_name in ((q.history_button, 'history_window'), (q.stats_button, 'model_window')):
+            button.invoke()
+            window = getattr(q, window_name)
+            window.withdraw()
+            button.invoke()
+            self.root.update_idletasks()
+            self.assertIs(getattr(q, window_name), window)
+            self.assertEqual(window.state(), 'normal')
+            window.destroy()
 
     def test_start_dialog_range_validation_drag_and_cancel(self):
         from queue_start_dialog import QueueStartDialog
@@ -1019,6 +1054,7 @@ class WorkflowTests(unittest.TestCase):
 
     def test_start_uses_selected_scope_and_clear_restores_full_order(self):
         q = self.app.translation_queue
+        self.app.komga_path.set(str(self.folder / 'Komga'))
         paths = [self.chapter(f'Chapter {i}') for i in range(3)]
         jobs = [Job(paths[0], 'cleanup'), Job(paths[1], 'cleanup'),
                 Job(paths[2], 'cleanup', 'done'),
@@ -1168,7 +1204,7 @@ class WorkflowTests(unittest.TestCase):
         q.update_summary()
         self.assertIn('待翻譯 7 頁', q.summary_preview.get())
         with mock.patch('translation_queue.messagebox.showinfo') as info:
-            q.view_menu.invoke(4)
+            q.view_menu.invoke(2)
         self.assertIn('本次重試 7', info.call_args.args[1])
         self.assertNotIn('｜', info.call_args.args[1])
         for job in pending:
@@ -2014,6 +2050,7 @@ class WorkflowTests(unittest.TestCase):
     def test_cancelled_predecessor_cannot_be_bypassed(self):
         chapter = self.chapter("Chapter 1")
         q = self.app.translation_queue
+        self.app.komga_path.set(str(self.folder / 'Komga'))
         q.jobs = [Job(chapter, "export", "cancelled"), Job(chapter, "cleanup")]
         with mock.patch.object(comic.messagebox, "showerror") as error:
             self.assertTrue(q.validate())
@@ -2395,7 +2432,8 @@ class WorkflowTests(unittest.TestCase):
                     root.update()
                     widgets = (app.library_menu, app.manga_choice, q.action_choice, app.start_entry, app.end_entry, app.add_range_button,
                                app.add_selected_button, q.start_button, q.pause_button, q.stop_button,
-                               q.operations_button, q.view_button)
+                               q.operations_button, q.view_button, q.workflow_choice,
+                               q.history_button, q.stats_button, q.progress_button)
                     self.assertGreaterEqual(q.tree.winfo_height(), 180)
                     for widget in widgets:
                         self.assertTrue(widget.winfo_ismapped())
@@ -2407,6 +2445,14 @@ class WorkflowTests(unittest.TestCase):
                                              root.winfo_rooty() + root.winfo_height())
                     self.assertLessEqual(app.folder_tree.column('#0', 'width') + app.folder_tree.column('pages', 'width'),
                                          app.folder_tree.winfo_width())
+                    for index in range(5):
+                        q.workflow_menu.invoke(index)
+                        root.update()
+                        for widget in (q.workflow_choice, q.start_button, q.pause_button, q.stop_button):
+                            self.assertTrue(widget.winfo_ismapped())
+                            self.assertGreaterEqual(widget.winfo_width(), widget.winfo_reqwidth())
+                            self.assertLessEqual(widget.winfo_rootx() + widget.winfo_width(),
+                                                 root.winfo_rootx() + root.winfo_width())
                     app.panes.sashpos(0, 180)
                     root.update()
                     self.assertTrue(app.add_selected_button.winfo_ismapped())
@@ -2601,8 +2647,8 @@ class WorkflowTests(unittest.TestCase):
         self.root.update()
         initial = (panes.sashpos(0), q.tree.winfo_width(), q.tree.winfo_height())
         for _ in range(2):
+            q.progress_button.invoke()
             q.view_menu.invoke(0)
-            q.view_menu.invoke(1)
             self.root.update()
             self.assertTrue(q.bt_bars['OCR'].master.winfo_ismapped())
             self.assertTrue(q.usage_table.master.winfo_ismapped())
@@ -2612,10 +2658,10 @@ class WorkflowTests(unittest.TestCase):
             q.usage_toggle.invoke()
             self.root.update()
             self.assertEqual((panes.sashpos(0), q.tree.winfo_width(), q.tree.winfo_height()), initial)
-        q.view_menu.invoke(2)
+        q.history_button.invoke()
         self.root.update()
         self.assertTrue(q.history_window.winfo_exists())
-        self.assertEqual(q.view_menu.entrycget(3, 'menu'), str(q.stats_menu))
+        self.assertTrue(q.stats_button.winfo_ismapped())
 
 
     def test_queue_sections_collapse_independently_and_keep_receiving_updates(self):
@@ -3015,6 +3061,7 @@ class WorkflowTests(unittest.TestCase):
     def test_pause_resume_keeps_one_batch_usage_and_excludes_waiting_time(self):
         from queue_history import find_runs
         q = self.app.translation_queue
+        self.app.komga_path.set(str(self.folder / 'Komga'))
         q.add_paths([self.chapter('Chapter 1'), self.chapter('Chapter 2')], 'cleanup')
         usage = dict(scope='total', total_tokens=1000, requests=1, cost='0.004',
                      missing_usage_requests=0, unpriced_requests=0)

@@ -199,8 +199,8 @@ class ComicSortingTests(unittest.TestCase):
             app.export_worker([str(chapter)], str(output_root), True)
 
             self.assertTrue((output_root / "Killer Shark" / "Chapter 10-42.cbz").is_file())
-            self.assertEqual(list((chapter / "mask").iterdir()), [])
-            self.assertEqual(list((chapter / "inpainted").iterdir()), [])
+            self.assertTrue((chapter / "mask" / "1.png").is_file())
+            self.assertTrue((chapter / "inpainted" / "1.png").is_file())
 
     def test_clear_work_folders_preserves_folders_and_other_data(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -217,7 +217,14 @@ class ComicSortingTests(unittest.TestCase):
             (inpainted / "1.png").write_bytes(b"inpainted")
             (result / "1.png").write_bytes(b"result")
 
-            folders, removed, errors = comic.clear_work_folders(root)
+            output, state = root / 'Komga', {}
+            for chapter in (mask.parent, inpainted.parent):
+                (chapter / '1.png').write_bytes(b'source')
+                (chapter / 'result').mkdir(exist_ok=True)
+                (chapter / 'result/1.png').write_bytes(b'result')
+                comic.export_chapter(chapter.parent, chapter, output, state)
+            comic.save_json(output / '.comic-sorting-state.json', state)
+            folders, removed, errors = comic.clear_work_folders(root, output)
 
             self.assertEqual((folders, removed, errors), (2, 3, []))
             self.assertTrue(mask.is_dir())
@@ -240,7 +247,7 @@ class ComicSortingTests(unittest.TestCase):
 
             self.assertTrue((mask / "1.png").is_file())
 
-    def test_export_cleanup_does_not_touch_unselected_chapters(self):
+    def test_manual_export_preserves_work_files_until_explicit_cleanup(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             selected = root / "Mangas" / "Series" / "Chapter 1"
@@ -255,7 +262,9 @@ class ComicSortingTests(unittest.TestCase):
 
             app.export_worker([selected], root / "Komga", True)
 
-            self.assertEqual(list((selected / "mask").iterdir()), [])
+            self.assertTrue((selected / "mask" / "1.png").is_file())
+            self.assertTrue((unselected / "mask" / "1.png").is_file())
+            self.assertEqual(comic.clear_work_folders(selected, root / "Komga"), (1, 1, []))
             self.assertTrue((unselected / "mask" / "1.png").is_file())
 
     def test_export_rejects_output_inside_source(self):

@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from comic_core import clear_work_folders, create_cbz, delete_manga_folder, load_json, save_json, validate_cbz
+from comic_core import clear_work_folders, create_cbz, delete_manga_folder, export_chapter, load_json, save_json, validate_cbz
 
 if os.name == "nt":
     from _winapi import CreateJunction
@@ -238,15 +238,22 @@ class CleanupJunctionTests(unittest.TestCase):
             (result / "keep.png").write_bytes(b"result")
             CreateJunction(str(external), str(link))
             try:
-                folders, removed, errors = clear_work_folders(root)
+                output, state = base / 'Komga', {}
+                for chapter in (inpainted.parent, mask.parent):
+                    (chapter / '1.png').write_bytes(b'source')
+                    (chapter / 'result').mkdir(exist_ok=True)
+                    (chapter / 'result/1.png').write_bytes(b'translated')
+                    export_chapter(chapter.parent, chapter, output, state)
+                save_json(output / '.comic-sorting-state.json', state)
+                folders, removed, errors = clear_work_folders(root, output)
 
-                self.assertEqual((folders, removed), (2, 2))
+                self.assertEqual((folders, removed), (2, 1))
                 self.assertEqual(len(errors), 1)
                 self.assertIn(str(link), errors[0])
                 self.assertTrue(link.lstat().st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT)
                 self.assertEqual(sentinel.read_bytes(), b"keep")
                 self.assertEqual((nested / "preserved.png").read_bytes(), b"preserved")
-                self.assertFalse((inpainted / "remove.png").exists())
+                self.assertTrue((inpainted / "remove.png").exists())
                 self.assertTrue(mask.is_dir())
                 self.assertEqual(list(mask.iterdir()), [])
                 self.assertEqual((result / "keep.png").read_bytes(), b"result")

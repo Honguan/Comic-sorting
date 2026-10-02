@@ -7,7 +7,7 @@ from dataclasses import asdict
 from pathlib import Path
 from unittest import mock
 
-from comic_core import output_path_for
+from comic_core import export_chapter, output_path_for, save_json
 from queue_worker import BT_STAGES, Job, parse_bt_progress, run_jobs, run_translation
 
 
@@ -60,8 +60,8 @@ class QueueWorkerTests(unittest.TestCase):
                 with mock.patch('queue_worker.translator_command', return_value=(
                         [sys.executable, '-u', '-c', script], self.root, None)):
                     run_jobs([Job(chapter, 'translate')],
-                             dict(bt_path='installed', bt_config=str(config), bt_cleanup=True),
-                             '', True, threading.Event(), events.append)
+                             dict(bt_path='installed', bt_config=str(config), bt_cleanup=True, bt_export=True),
+                             str(self.root / 'output'), True, threading.Event(), events.append)
                 statuses = [event[2] for event in events if event[0] == 'status']
                 self.assertEqual(statuses, ['running', 'done' if complete else 'failed'])
                 self.assertEqual((chapter / 'mask/keep.png').exists(), not complete)
@@ -111,7 +111,7 @@ class QueueWorkerTests(unittest.TestCase):
             run_jobs([Job(self.root / 'missing', 'cleanup'), Job(chapter, 'cleanup')], {}, '', True,
                      threading.Event(), events.append)
         self.assertEqual([event[2] for event in events if event[0] == 'status'], ['running', 'failed', 'running', 'done'])
-        cleanup.assert_called_once_with(chapter)
+        cleanup.assert_called_once_with(chapter, '')
 
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
@@ -196,7 +196,7 @@ class QueueWorkerTests(unittest.TestCase):
     def test_pause_on_last_item_does_not_prevent_queue_completion(self):
         pause = threading.Event()
         events = []
-        def cleanup(_path):
+        def cleanup(_path, _output):
             pause.set()
             return 0, 0, []
         with mock.patch('queue_worker.clear_work_folders', side_effect=cleanup):
@@ -210,7 +210,7 @@ class QueueWorkerTests(unittest.TestCase):
         first, second = self.chapter(), self.chapter('Chapter 2')
         pause, stop = threading.Event(), threading.Event()
         events = []
-        def cleanup(path):
+        def cleanup(path, _output):
             if path == first:
                 pause.set()
                 raise RuntimeError('synthetic failure')
@@ -298,19 +298,19 @@ class QueueWorkerTests(unittest.TestCase):
     def test_completed_translation_reports_final_location_after_cleanup(self):
         chapter = self.chapter("Chapter 1, 測試")
         output = self.root / "output"
-        settings = dict(bt_path="installed", bt_config="", bt_cleanup=True)
+        settings = dict(bt_path="installed", bt_config="")
         for exporting in (False, True, True):  # Include an unchanged CBZ reused on the second export.
             with self.subTest(exporting=exporting), \
                     mock.patch("queue_worker.translator_command", return_value=([], self.root, None)), \
                     mock.patch("queue_worker.run_translation"):
                 events = []
-                run_jobs([Job(chapter, "translate")], dict(settings, bt_export=exporting),
+                run_jobs([Job(chapter, "translate")], dict(settings, bt_export=exporting, bt_cleanup=exporting),
                          str(output), True, threading.Event(), events.append)
                 expected = output_path_for(output, chapter.parent, chapter) if exporting else chapter / "result"
                 self.assertTrue(expected.exists())
                 self.assertEqual([e for e in events if e[0] == "result"], [("result", expected)])
                 self.assertGreater(events.index(("result", expected)), events.index(("status", 0, "done", "")))
-                self.assertFalse((chapter / "mask" / "keep.png").exists())
+                self.assertEqual((chapter / "mask" / "keep.png").exists(), not exporting)
 
     def test_subprocess_failure_keeps_twenty_clean_diagnostic_lines(self):
         script = ("print('\\x1b[31mERROR\\x1b[0m'); "
@@ -403,6 +403,9 @@ class QueueWorkerTests(unittest.TestCase):
 
     def test_failure_blocks_same_path_but_continues_other_path_without_mutating_jobs(self):
         chapter, other = self.chapter(), self.chapter("Chapter 2")
+        state = {}
+        export_chapter(other.parent, other, self.root / 'output', state)
+        save_json(self.root / 'output/.comic-sorting-state.json', state)
         jobs = (Job(chapter, "translate"), Job(chapter, "cleanup"), Job(other, "cleanup"))
         before = [asdict(job) for job in jobs]
         events = []

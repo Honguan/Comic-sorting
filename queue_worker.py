@@ -658,7 +658,7 @@ def run_jobs(jobs, settings, output, skip, stop, emit, *, pause=None, checkpoint
                 if stop.is_set():
                     raise RuntimeError(tr("已停止，未執行後續清理"))
                 if action == "cleanup" or (whole_chapter and settings.get("bt_cleanup", False) and action in ("translate", "export")):
-                    folders, removed, errors = clear_work_folders(path)
+                    folders, removed, errors = clear_work_folders(path, output)
                     logger.info("[%s] cleanup_result folders=%s removed=%s errors=%s", job_id, folders, removed, errors)
                     if errors:
                         raise RuntimeError("\n".join(errors))

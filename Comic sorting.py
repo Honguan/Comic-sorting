@@ -347,7 +347,7 @@ class FileAggregatorApp:
         self.export_all_button = ttk.Button(buttons, text=tr("匯出所有已翻譯項目"), command=self.export_all)
         self.export_all_button.pack(fill="x", pady=6)
         self.cleanup_button = ttk.Button(
-            buttons, text=tr("清理所有 mask / inpainted"), command=self.confirm_cleanup)
+            buttons, text=tr("清理已匯出快取"), command=self.confirm_cleanup)
         self.cleanup_button.pack(fill="x")
         self.progress = ttk.Progressbar(export, mode="determinate")
         self.progress.pack(fill="x", pady=(8, 2))
@@ -1022,7 +1022,6 @@ class FileAggregatorApp:
             return
         errors = []
         output_folders = set()
-        exported_chapters = []
         for chapter in chapters:
             chapter = Path(chapter)
             name = chapter.name
@@ -1033,7 +1032,6 @@ class FileAggregatorApp:
                         ("progress", chapter_name, current, total)))
                 counts[action] += 1
                 output_folders.add(output.parent)
-                exported_chapters.append(chapter)
                 logger.info("export_%s source=%s output=%s", action, chapter, output)
                 self.events.put(("chapter", action, name))
             except Exception as error:
@@ -1041,27 +1039,14 @@ class FileAggregatorApp:
                 counts["failed"] += 1
                 errors.append(f"{name}: {error}")
                 self.events.put(("chapter", "failed", name))
-        state_saved = True
         try:
             save_json(state_file, state)
         except Exception as error:
             logger.exception("export_state_save_failed path=%s", state_file)
-            state_saved = False
             errors.append(tr("狀態檔: {0}").format(error))
-        cleanup = None
-        if state_saved and exported_chapters:
-            folders = removed = 0
-            cleanup_errors = []
-            for chapter in exported_chapters:
-                result = clear_work_folders(chapter)
-                folders += result[0]
-                removed += result[1]
-                cleanup_errors.extend(result[2])
-            cleanup = folders, removed, cleanup_errors
-            errors.extend(tr("清理失敗：{0}").format(error) for error in cleanup_errors)
         output_folder = output_folders.pop() if len(output_folders) == 1 else root
-        logger.info("export_end counts=%s errors=%s cleanup=%s", counts, errors, cleanup)
-        self.events.put(("done", counts, errors, str(output_folder), cleanup))
+        logger.info("export_end counts=%s errors=%s", counts, errors)
+        self.events.put(("done", counts, errors, str(output_folder), None))
 
     def confirm_cleanup(self):
         if self.manga_busy:
@@ -1073,21 +1058,26 @@ class FileAggregatorApp:
         if not value or not root.is_dir():
             messagebox.showwarning(tr("警告"), tr("請選擇有效的漫畫路徑"))
             return
+        output = self.komga_path.get().strip()
+        if not output or not Path(output).is_dir():
+            messagebox.showwarning(tr("清理已匯出快取"), tr("請設定 Komga 輸出路徑"), parent=self.root)
+            self.work_tabs.select(self.export_tab)
+            return
         if not messagebox.askyesno(
                 tr("確認清理"),
-                tr("將清空目前漫畫路徑下所有 mask 與 inpainted 資料夾內容。\n資料夾本身會保留，此操作無法復原。確定繼續嗎？") + "\n\n" + str(root.resolve())):
+                tr("只清理已完整匯出且 CBZ 驗證通過的 mask / inpainted。\n未匯出、檔案已變更或驗證失敗的章節會保留。\n清理無法復原，確定繼續？") + "\n\n" + str(root.resolve()), parent=self.root):
             return
         self.set_manga_busy(True)
         self.show_export_progress("indeterminate")
         self.progress.start(12)
         self.status_text.set(tr("正在清理 mask / inpainted…"))
-        threading.Thread(target=self.cleanup_worker, args=(root,), daemon=True).start()
+        threading.Thread(target=self.cleanup_worker, args=(root, output), daemon=True).start()
         self.root.after(50, self.poll_events)
 
-    def cleanup_worker(self, root):
+    def cleanup_worker(self, root, output):
         try:
             logger.info("cleanup_start path=%s", root)
-            result = clear_work_folders(root)
+            result = clear_work_folders(root, output)
             logger.info("cleanup_end path=%s result=%s", root, result)
             self.events.put(("cleanup_done", result))
         except Exception as error:

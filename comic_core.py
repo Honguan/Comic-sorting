@@ -196,7 +196,51 @@ def delete_manga_folder(folder, root):
     recycle_folder(folder)
 
 
-def clear_work_folders(root):
+def validate_cleanup_export(chapter, komga_root, state):
+    """Require a complete, unchanged export before removing preprocessing data."""
+    if not komga_root:
+        raise ValueError(tr("請先匯出並驗證 CBZ，再清理前處理資料"))
+    chapter, komga_root = Path(chapter), Path(komga_root).resolve()
+    status, images = translation_status(chapter)
+    if status != tr("可匯出"):
+        raise ValueError(tr("尚未完整翻譯，保留前處理資料"))
+    archive = output_path_for(komga_root, chapter.parent, chapter)
+    record = state.get(f"{chapter.parent.name}/{chapter.name}", {})
+    if (not isinstance(record, dict) or not isinstance(record.get("source"), str)
+            or not isinstance(record.get("output"), str)
+            or Path(record["source"]).resolve() != images[0].parent.resolve()
+            or Path(record["output"]).resolve() != archive.resolve()
+            or record.get("fingerprint") != source_fingerprint(images)["fingerprint"]):
+        raise ValueError(tr("未找到相符的匯出紀錄，保留前處理資料"))
+    _check_cleanup_path(archive, komga_root)
+    info = archive.stat()
+    archive_stat = [info.st_size, info.st_mtime_ns]
+    if record.get("outputStat") != archive_stat:
+        raise ValueError(tr("CBZ 已變更，請重新匯出後再清理"))
+    if any(source.stat().st_mtime_ns > info.st_mtime_ns for source in image_files(chapter)):
+        raise ValueError(tr("來源或前處理資料已更新，請重新匯出後再清理"))
+    def fail(error):
+        raise error
+
+    for folder in chapter.iterdir():
+        if folder.name.casefold() not in WORK_FOLDER_NAMES:
+            continue
+        _check_cleanup_path(folder, chapter.resolve())
+        for current, directories, files in os.walk(folder, onerror=fail):
+            for name in directories + files:
+                candidate = Path(current) / name
+                _check_cleanup_path(candidate, chapter.resolve())
+                if candidate.stat().st_mtime_ns > info.st_mtime_ns:
+                    raise ValueError(tr("來源或前處理資料已更新，請重新匯出後再清理"))
+    validate_cbz(archive, images)
+    current = archive.stat()
+    if ([current.st_size, current.st_mtime_ns] != archive_stat
+            or source_fingerprint(images)["fingerprint"] != record["fingerprint"]):
+        raise ValueError(tr("匯出資料在檢查期間變更，已停止清理"))
+    return info.st_mtime_ns
+
+
+def clear_work_folders(root, komga_root=None):
     root = Path(root)
     root_resolved = root.resolve()
     targets = []
@@ -225,10 +269,26 @@ def clear_work_folders(root):
                 continue
             if matched:
                 directory_names.remove(name)
+    try:
+        state = load_json(Path(komga_root) / ".comic-sorting-state.json", {}, strict=True) if komga_root else {}
+    except (OSError, ValueError) as error:
+        return len(targets), 0, [str(error)]
+    checked = {}
     for folder in targets:
         try:
             _check_cleanup_path(folder, root_resolved)
             children = list(folder.iterdir())
+            if not children:
+                continue
+            chapter = folder.parent
+            if chapter not in checked:
+                try:
+                    checked[chapter] = validate_cleanup_export(chapter, komga_root, state)
+                except (OSError, ValueError, zipfile.BadZipFile) as error:
+                    checked[chapter] = None
+                    errors.append(f"{chapter}: {error}")
+            if checked[chapter] is None:
+                continue
         except (OSError, ValueError) as error:
             errors.append(f"{folder}: {error}")
             continue

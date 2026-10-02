@@ -9,6 +9,20 @@ def tr(text):
     return TRANSLATIONS.get(text, {}).get(_language, text)
 
 TRANSLATIONS = {
+    '流程': {'en': 'Workflow', 'ja': '処理モード'},
+    '調整範圍與順序…': {'en': 'Adjust range and order…', 'ja': '範囲と順序を調整…'},
+    '清理已匯出快取': {'en': 'Clean exported caches', 'ja': '出力済みキャッシュを削除'},
+    '匯出驗證後清理快取': {'en': 'Clean caches after verified export', 'ja': '出力検証後にキャッシュを削除'},
+    '請先勾選匯出 CBZ，再啟用清理': {'en': 'Enable CBZ export before cleanup.', 'ja': '先に CBZ 出力を有効にしてください。'},
+    '請先匯出並驗證 CBZ，再清理前處理資料': {'en': 'Export and verify the CBZ before cleaning preprocessing data.', 'ja': 'CBZ を出力・検証してから前処理データを削除してください。'},
+    '尚未完整翻譯，保留前處理資料': {'en': 'Translation is incomplete; preprocessing data retained.', 'ja': '翻訳が未完了のため、前処理データを保持しました。'},
+    '未找到相符的匯出紀錄，保留前處理資料': {'en': 'No matching export record; preprocessing data retained.', 'ja': '一致する出力記録がないため、前処理データを保持しました。'},
+    'CBZ 已變更，請重新匯出後再清理': {'en': 'The CBZ has changed. Export again before cleanup.', 'ja': 'CBZ が変更されています。再出力してから削除してください。'},
+    '來源或前處理資料已更新，請重新匯出後再清理': {'en': 'Source or preprocessing data changed. Export again before cleanup.', 'ja': '元画像または前処理データが更新されています。再出力してから削除してください。'},
+    '匯出資料在檢查期間變更，已停止清理': {'en': 'Export data changed during verification. Cleanup stopped.', 'ja': '検証中に出力データが変更されたため、削除を中止しました。'},
+    '只清理已完整匯出且 CBZ 驗證通過的 mask / inpainted。\n未匯出、檔案已變更或驗證失敗的章節會保留。\n清理無法復原，確定繼續？': {
+        'en': 'Clear mask / inpainted only after a complete, verified CBZ export.\nUnexported, changed or unverified chapters are kept.\nThis cannot be undone. Continue?',
+        'ja': '完全に出力され、CBZ 検証に合格した章の mask / inpainted のみ削除します。\n未出力・変更あり・検証失敗の章は保持します。\n元に戻せません。続行しますか？'},
     '待執行': {'en': 'Pending', 'ja': '待機中'},
     '未執行': {'en': 'Not run', 'ja': '未実行'},
     '計數中': {'en': 'Counting', 'ja': '集計中'},

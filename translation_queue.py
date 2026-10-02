@@ -69,7 +69,7 @@ class TranslationQueue:
         self.action = tk.StringVar(value=tr("翻譯"))
         self.workflow = tk.StringVar(value=tr(MODES.get(settings.get("bt_workflow"), MODES["normal"])))
         self.export = tk.BooleanVar(value=settings.get("bt_export", False))
-        self.cleanup = tk.BooleanVar(value=settings.get("bt_cleanup", False))
+        self.cleanup = tk.BooleanVar(value=settings.get("bt_cleanup", False) and self.export.get())
         self.open_after_completion = tk.BooleanVar(value=settings.get("bt_open_after_completion") is True)
         self.build_settings_panel(settings)
         self.build_queue_panel()
@@ -119,11 +119,14 @@ class TranslationQueue:
         options.pack(side="right")
         options_menu = tk.Menu(options, tearoff=False)
         options_menu.add_command(label=tr("翻譯頁數"), command=self.range_button.invoke)
-        options_menu.configure(postcommand=lambda: options_menu.entryconfigure(0, state=self.range_button.cget("state")))
+        def sync_options():
+            options_menu.entryconfigure(0, state=self.range_button.cget("state"))
+            options_menu.entryconfigure(2, state="normal" if self.export.get() else "disabled")
+        options_menu.configure(postcommand=sync_options)
         for text, variable in (("翻譯成功後匯出 CBZ", self.export),
-                               ("成功後清理 mask / inpainted", self.cleanup),
+                               ("匯出驗證後清理快取", self.cleanup),
                                ("完成後開啟資料夾", self.open_after_completion)):
-            options_menu.add_checkbutton(label=tr(text), variable=variable, command=app.save_settings)
+            options_menu.add_checkbutton(label=tr(text), variable=variable, command=self.output_options_changed)
         options_menu.add_separator()
         options_menu.add_command(label=tr("加入指定路徑"), command=self.add_directory)
         options_menu.add_command(label=tr("章節整合"), command=app.open_aggregate)
@@ -192,6 +195,11 @@ class TranslationQueue:
         self.tree.bind("<Button-3>", self.show_context_menu)
         row = ttk.Frame(footer)
         row.pack(fill="x")
+        details_row = ttk.Frame(footer)
+        self.workflow_group = workflow_row = ttk.Frame(row)
+        ttk.Label(workflow_row, text=tr("流程")).pack(side="left", padx=(0, 8))
+        self.workflow_choice = ttk.Menubutton(workflow_row, textvariable=self.workflow)
+        self.workflow_choice.pack(side="left", fill="x", expand=True)
         self.selection_buttons = {}
         for text, command in (("移除選取", self.remove), ("上移", lambda: self.move(-1)),
                               ("下移", lambda: self.move(1)),
@@ -200,7 +208,7 @@ class TranslationQueue:
                               ("清除已完成", self.clear_completed)):
             self.selection_buttons[text] = self.button(row, tr(text), command)
         self.clear_selection_button.pack_forget()
-        self.operations_button = ttk.Menubutton(row, text=tr("操作"))
+        self.operations_button = ttk.Menubutton(details_row, text=tr("操作"))
         self.operations_button.pack(side="left")
         self.operations_buttons = [*self.selection_buttons.values(), self.clear_selection_button]
         self.operations_menu = tk.Menu(self.operations_button, tearoff=False)
@@ -221,17 +229,13 @@ class TranslationQueue:
         self.context_menu.add_command(label=tr("複製完整路徑"), accelerator="Ctrl+C", command=copy_paths)
         self.start_button = self.button(row, tr("開始執行"), self.start)
         self.start_button.configure(style="Accent.TButton")
-        style = ttk.Style(row)
-        style.layout("Accent.TMenubutton", style.layout("Accent.TButton"))
-        style.configure("Accent.TMenubutton", **style.configure("Accent.TButton"), padding=(3, 1))
-        style.map("Accent.TMenubutton", **style.map("Accent.TButton"))
-        self.workflow_choice = ttk.Menubutton(row, text="▼", width=2, style="Accent.TMenubutton")
+
         self.workflow_menu = tk.Menu(self.workflow_choice, tearoff=False)
         for value in MODES.values():
             self.workflow_menu.add_radiobutton(label=tr(value), value=tr(value), variable=self.workflow,
                                                command=self.workflow_changed)
         self.workflow_choice.configure(menu=self.workflow_menu)
-        self.workflow_choice.pack(side="left")
+
         self.context_menu.add_command(label=tr("執行選取項目"), command=self.start)
         self.run_menu_index = self.context_menu.index("end")
         self.context_menu.add_command(label=tr("取消選取"), command=self.clear_selection)
@@ -244,17 +248,21 @@ class TranslationQueue:
         self.schedule_button = ttk.Button(row, text=tr("排程啟動"), command=self.scheduler.show, width=0)
         self.schedule_button.pack(side="left", padx=2)
         # Execution remains accessible when the window is narrow.
-        for button in (self.stop_button, self.pause_button, self.workflow_choice, self.start_button):
-            button.pack_configure(side="right", before=self.operations_button)
         self.schedule_button.pack_forget()
         self.operations_menu.add_command(label=self.schedule_button.cget("text"), command=self.schedule_button.invoke)
         self.operations_buttons.append(self.schedule_button)
+        self.start_options_button = ttk.Button(row, text=tr("調整範圍與順序…"),
+                                               command=lambda: self.start(configure=True))
+        self.controls.append(self.start_options_button)
+        self.operations_menu.add_command(label=self.start_options_button.cget("text"),
+                                         command=self.start_options_button.invoke)
+        self.operations_buttons.append(self.start_options_button)
         self.context_menu.add_command(label=tr("清除已完成"), command=self.clear_completed)
         self.clear_completed_menu_index = self.context_menu.index("end")
         self.summary = tk.StringVar()
         self.summary_preview = tk.StringVar()
         summary_label = ttk.Label(footer, textvariable=self.summary_preview, wraplength=650, style="Muted.TLabel")
-        summary_label.pack(fill="x", pady=(4, 2))
+        summary_label.pack(fill="x", pady=(2, 0))
         summary_label.bind("<Configure>", lambda event: summary_label.configure(wraplength=event.width)
                            if event.width > 100 and self.sash_after is None else None)
         self.total = ttk.Progressbar(footer)
@@ -262,8 +270,8 @@ class TranslationQueue:
         self.label = tk.StringVar(value=tr("BallonsTranslator：待命"))
         self.stage = ttk.Progressbar(footer)
         elapsed_row = ttk.Frame(footer)
-        elapsed_row.pack(fill="x", pady=(4, 0))
-        details_row = ttk.Frame(footer)
+        elapsed_row.pack(fill="x", pady=(2, 0))
+        details_row.pack(fill="x")
         self.bt_frame, progress_grid, self.bt_toggle = self.collapsible_frame(details_row, tr("各階段進度"), tr("進度"))
         stage_label = ttk.Label(elapsed_row, textvariable=self.label, width=1, wraplength=300)
         stage_label.pack(side="left", fill="x", expand=True, padx=(0, 8))
@@ -301,24 +309,20 @@ class TranslationQueue:
         ttk.Label(elapsed_row, text=tr("本次耗時") + "：").pack(side="left")
         ttk.Label(elapsed_row, textvariable=self.elapsed_label).pack(side="left")
         self.jev_elapsed_label = tk.StringVar(value='—')
-        self.history_button = ttk.Button(details_row, text=tr("歷史紀錄"), command=self.open_history)
-        self.stats_button = stats_button = ttk.Menubutton(details_row, text=tr("統計"))
-        self.stats_menu = tk.Menu(stats_button, tearoff=False)
-        self.stats_menu.add_command(label=tr("模型統計"), command=self.open_model_stats)
-        self.stats_menu.add_command(label=tr("Jev 統計"), command=self.open_jev_stats)
-        stats_button.configure(menu=self.stats_menu)
+        self.history_button = ttk.Button(details_row, text=tr("歷史紀錄"), command=self.open_history, width=0)
+        self.stats_button = ttk.Button(details_row, text=tr("模型統計"), command=self.open_model_stats, width=0)
+        self.progress_button = ttk.Button(details_row, text=tr("進度"), command=self.bt_toggle.invoke, width=0)
         self.bt_frame.pack_forget()
         self.usage_frame.pack_forget()
-        self.view_button = ttk.Menubutton(self.operations_button.master, text=tr("檢視"))
-        self.footer_buttons = (self.operations_button, self.view_button, self.start_button,
-                               self.workflow_choice, self.pause_button, self.stop_button)
-        for button in self.footer_buttons:
+        self.view_button = ttk.Menubutton(details_row, text=tr("檢視"))
+        self.navigation_buttons = (self.operations_button, self.history_button, self.stats_button,
+                                   self.progress_button, self.view_button)
+        self.footer_buttons = (self.workflow_group, self.start_button, self.pause_button, self.stop_button)
+        for button in (*self.footer_buttons, self.operations_button):
             button.pack_forget()
         self.view_menu = tk.Menu(self.view_button, tearoff=False)
-        self.view_menu.add_command(label=tr("各階段進度"), command=self.bt_toggle.invoke)
         self.view_menu.add_command(label=tr("LLM 用量"), command=self.usage_toggle.invoke)
-        self.view_menu.add_command(label=tr("歷史紀錄"), command=self.history_button.invoke)
-        self.view_menu.add_cascade(label=tr("統計"), menu=self.stats_menu)
+        self.view_menu.add_command(label=tr("Jev 統計"), command=self.open_jev_stats)
         self.view_menu.add_command(label=tr("佇列摘要"), command=lambda: messagebox.showinfo(
             tr("佇列摘要"), self.summary.get().replace("｜", "\n").replace(" | ", "\n")))
         self.view_menu.add_separator()
@@ -459,6 +463,7 @@ class TranslationQueue:
             frame.pack(fill='both', expand=True)
             self.model_usage_table = create_model_table(frame)
         self.show_usage()
+        self.model_window.deiconify()
         self.model_window.lift()
 
 
@@ -473,6 +478,7 @@ class TranslationQueue:
                 self.jev_table.column(key, width=200, minwidth=80)
             self.jev_table.pack(fill='both', expand=True, padx=8, pady=8)
         self.show_usage()
+        self.jev_window.deiconify()
         self.jev_window.lift()
 
     def show_usage(self):
@@ -504,6 +510,7 @@ class TranslationQueue:
     def open_history(self):
         if self.history_window and self.history_window.winfo_exists():
             self.history_window.refresh()
+            self.history_window.deiconify()
             self.history_window.lift()
         else:
             self.history_window = HistoryWindow(self.app.root, self.app.history_path, ACTIONS, STATUSES)
@@ -556,8 +563,15 @@ class TranslationQueue:
     def workflow_mode(self):
         return next((key for key, value in MODES.items() if tr(value) == self.workflow.get()), "normal")
 
+    def output_options_changed(self):
+        if not self.export.get():
+            self.cleanup.set(False)
+        self.app.save_settings()
+
     def workflow_changed(self):
         self.update_controls()
+        self._queue_width = None
+        self.app.root.after_idle(self.finish_sash_layout)
         self.app.save_settings()
 
     def notify_job(self, index):
@@ -644,11 +658,19 @@ class TranslationQueue:
         app.enqueue_actions.grid_configure(row=1 if wrapped else 0, column=0 if wrapped else 1,
                                           columnspan=2 if wrapped else 1, pady=(4, 0) if wrapped else 0)
         wrapped = width < sum(button.winfo_reqwidth() for button in self.footer_buttons) + 24
-        positions = ((0, 0), (0, 1), (1, 0), (1, 1), (1, 2), (1, 3)) if wrapped else tuple((0, i) for i in range(6))
+        positions = ((0, 0), (1, 0), (1, 1), (1, 2)) if wrapped else tuple((0, i) for i in range(4))
         for button, (row, column) in zip(self.footer_buttons, positions):
             button.grid(row=row, column=column, sticky="w", padx=2, pady=2)
-        self.view_button.master.columnconfigure(1, weight=0 if wrapped else 1)
-        self.view_button.master.columnconfigure(4, weight=1 if wrapped else 0)
+        self.workflow_group.grid_configure(columnspan=3 if wrapped else 1, sticky="ew")
+        self.start_button.master.columnconfigure(0, weight=0 if wrapped else 1)
+        self.start_button.master.columnconfigure(3, weight=1 if wrapped else 0)
+        row = column = used = 0
+        for button in self.navigation_buttons:
+            size = button.winfo_reqwidth() + 4
+            if used and used + size > width:
+                row, column, used = row + 1, 0, 0
+            button.grid(row=row, column=column, sticky="w", padx=2, pady=2)
+            column, used = column + 1, used + size
         font = tkfont.nametofont("TkDefaultFont", root=self.app.root)
         name_min = min(180, width // 2)
         fixed = {"status": min(max(font.measure(tr(value)) for value in STATUSES.values()) + 20, width - name_min),
@@ -1240,7 +1262,7 @@ class TranslationQueue:
             return True
         needs_cleanup = self.cleanup.get() or any(j.action == "cleanup" for j in self.active_jobs)
         return not needs_cleanup or messagebox.askyesno(
-            tr("確認清理"), tr("佇列將清空指定路徑的 mask / inpainted 內容，無法復原。繼續？"))
+            tr("確認清理"), tr("只清理已完整匯出且 CBZ 驗證通過的 mask / inpainted。\n未匯出、檔案已變更或驗證失敗的章節會保留。\n清理無法復原，確定繼續？"))
 
     def integrate(self):
         if not self.app.manga_busy:
@@ -1260,7 +1282,11 @@ class TranslationQueue:
             exporting = (translate and self.export.get()) or any(job.should_export(self.export.get()) for job in pending)
             if self.workflow_mode() == "prepare":
                 exporting = False
-            if exporting and not self.app.komga_path.get().strip():
+            cleaning = self.workflow_mode() != "prepare" and (
+                (translating and self.cleanup.get()) or any(job.action == "cleanup" for job in pending))
+            if cleaning and translating and self.cleanup.get() and not self.export.get():
+                raise ValueError(tr("請先勾選匯出 CBZ，再啟用清理"))
+            if (exporting or cleaning) and not self.app.komga_path.get().strip():
                 error_tab = self.app.export_tab
                 raise ValueError(tr("請設定 Komga 輸出路徑"))
             return True
@@ -1313,7 +1339,7 @@ class TranslationQueue:
                 return tuple(job for job in jobs if job.path not in excluded)
         return jobs
 
-    def start(self, cleanup_confirmed=False, *, scheduled_jobs=None):
+    def start(self, cleanup_confirmed=False, *, scheduled_jobs=None, configure=False):
         if self.running and self.pause_requested.is_set() and not self.stop.is_set():
             self.pause_requested.clear()
             self.label.set(tr("佇列繼續處理"))
@@ -1324,8 +1350,9 @@ class TranslationQueue:
         if self.history_save_failed and not self.save_history(refresh=False):
             return
         self.render()
-        self.active_jobs = (self.configure_start(self.start_targets()) if scheduled_jobs is None
-                            else tuple(scheduled_jobs))
+        self.active_jobs = self.start_targets() if scheduled_jobs is None else tuple(scheduled_jobs)
+        if configure:
+            self.active_jobs = self.configure_start(self.active_jobs)
         if not self.active_jobs or not self.validate(jobs=self.active_jobs):
             return
         if not cleanup_confirmed and not self.confirm_cleanup():
