@@ -37,6 +37,7 @@ class QueueLogCleanupTests(unittest.TestCase):
 
     def test_locked_old_log_is_not_a_completion_anomaly(self):
         for line in (LOG_LOCK, '\x1b[31m' + LOG_LOCK + '\x1b[0m',
+                     LOG_LOCK.replace('WinError 32', 'WinError 2'),
                      '2026-10-03 19:42:13 ' + LOG_LOCK,
                      LOG_LOCK.replace("'D:\\AI\\logs\\old.log'", '"D:/AI/logs/old.log"')):
             with self.subTest(line=line):
@@ -77,7 +78,7 @@ class QueueLogCleanupTests(unittest.TestCase):
                 with self.subTest(line=line), \
                         mock.patch('queue_worker.TranslationSession', return_value=self.session([line])), \
                         mock.patch('queue_worker.translator_command', return_value=([], chapter.parent, None)), \
-                        mock.patch('queue_phases.prepared', return_value=False), \
+                        mock.patch('queue_phases.prepared', return_value=True), \
                         mock.patch('queue_phases.mark_prepared') as mark:
                     run_jobs([Job(chapter, 'translate')], settings, '', True,
                              threading.Event(), events.append)

@@ -398,6 +398,7 @@ class PhaseTests(unittest.TestCase):
         install_session(Window, SimpleNamespace(pbar={}), request)
         window = Window()
         window.imgtrans_proj = Mock()
+        window.imgtrans_proj.idx2pagename.return_value = '[1].png'
         window.on_pagtrans_finished(0)
         window.imgtrans_proj.save.assert_called_once()
         for native in ('', 'COMIC_SORTING_FINISHED:job:0\n', 'COMIC_SORTING_FINISHED:job:1\n'):

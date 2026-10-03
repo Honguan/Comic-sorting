@@ -39,14 +39,26 @@ def page_record(path, source, project):
     return dict(source=signature(source), ocr=digest, assets=assets)
 
 
-def prepared(path, selected):
+def prepared_pages(path, selected):
     try:
         marker = load_json(path / MARKER, {}, strict=True)
         project = load_json(path / f"imgtrans_{path.name}.json", {}, strict=True)
-        return bool(selected) and marker.get("version") == 1 and all(
-            marker.get("pages", {}).get(source.name) == page_record(path, source, project) for source in selected)
+        if marker.get("version") != 1:
+            return []
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
-        return False
+        return []
+    ready = []
+    for source in selected:
+        try:
+            if marker.get("pages", {}).get(source.name) == page_record(path, source, project):
+                ready.append(source)
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            continue
+    return ready
+
+
+def prepared(path, selected):
+    return bool(selected) and prepared_pages(path, selected) == list(selected)
 
 
 def mark_prepared(path, selected):

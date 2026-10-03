@@ -73,6 +73,16 @@ def install_session(window_class, shared, request):
         def save_preprocessing(window, *args, **kwargs):
             return None
         window_class.saveCurrentPage = save_preprocessing
+        original_page = window_class.on_pagtrans_finished
+
+        def page_finished(window, index):
+            original_page(window, index)
+            page = window.imgtrans_proj.idx2pagename(index)
+            if window.imgtrans_proj.get_page_progress(page):
+                print('COMIC_SORTING_PREPARED:' + json.dumps(
+                    dict(token=request['token'], page=page)), flush=True)
+
+        window_class.on_pagtrans_finished = page_finished
 
     def run_selected(window, *args, **kwargs):
         pages = request['pages']
