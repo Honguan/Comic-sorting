@@ -46,13 +46,55 @@ class HistoryStorageTests(unittest.TestCase):
 
     def test_token_units_match_in_text_and_columns(self):
         for tokens, expected in ((0, '0'), (999, '999'), (1000, '1.00K'),
-                                 (22721625, '22.72M'), (1000000000, '1.00B')):
+                                 (999994, '999.99K'), (999995, '1.00M'),
+                                 (22721625, '22.72M'), (999995000, '1.00B'),
+                                 (1000000000, '1.00B')):
             record = dict(total_tokens=tokens, requests=1, cost='0',
                           unpriced_requests=0, missing_usage_requests=0)
             self.assertEqual(usage_columns([record])[0], expected)
             self.assertTrue(usage_text([record]).startswith(expected + ' tokens'))
             self.assertEqual(record['total_tokens'], tokens)
         self.assertEqual(usage_columns([])[0], '尚未回報')
+
+    def test_model_and_jev_tokens_use_compact_units_without_changing_usage(self):
+        from unittest.mock import Mock
+        from queue_history import fill_model_usage, jev_columns, JEV_FIELDS, MODEL_COLUMNS
+        record = dict(model='model', total_tokens=1999990, requests=3, cost=None,
+                      unpriced_requests=3, missing_usage_requests=1,
+                      prompt=999995, completion=999995, cache_hit=1200)
+        original = copy.deepcopy(record)
+        table = Mock()
+        table.get_children.return_value = ()
+        table.exists.return_value = False
+        fill_model_usage(table, {'total': [record]})
+        fields = dict(zip(MODEL_COLUMNS, table.insert.call_args.kwargs['values']))
+        self.assertEqual({key: fields[key] for key in
+                          ('total_tokens', 'avg_tokens', 'prompt', 'completion', 'cache_hit', 'cache_write')},
+                         dict(total_tokens='2.00M', avg_tokens='1.00M', prompt='1.00M',
+                              completion='1.00M', cache_hit='1.20K', cache_write='—'))
+        self.assertEqual(fields['pricing'], '費用未知')
+        self.assertEqual(fields['missing_usage_requests'], '1')
+        self.assertEqual(record, original)
+        stats = dict(input_tokens=999995, missing_input_usage_requests=1)
+        self.assertEqual(dict(zip(JEV_FIELDS, jev_columns(stats)))['input_tokens'], '1.00M')
+        self.assertEqual(stats['input_tokens'], 999995)
+
+    def test_average_tokens_keep_two_decimal_places_and_unknown_marker(self):
+        from decimal import Decimal
+        from unittest.mock import Mock
+        from queue_history import format_tokens, fill_model_usage, MODEL_COLUMNS
+        for tokens, expected in ((Decimal(500) / 3, '166.67'),
+                                 (Decimal('999.994'), '999.99'),
+                                 (Decimal('999.995'), '1.00K'), (Decimal(0), '0.00')):
+            self.assertEqual(format_tokens(tokens, decimals=2), expected)
+        table = Mock()
+        table.get_children.return_value = ()
+        table.exists.return_value = False
+        record = dict(total_tokens=0, requests=1, cost=None,
+                      unpriced_requests=1, missing_usage_requests=1)
+        fill_model_usage(table, {'total': [record]})
+        fields = dict(zip(MODEL_COLUMNS, table.insert.call_args.kwargs['values']))
+        self.assertEqual(fields['avg_tokens'], '—')
 
     def test_subcent_costs_stay_precise_without_changing_stored_values(self):
         for amount, expected in (('0.000021', 'US$0.000021'), ('0.008', 'US$0.008000'),

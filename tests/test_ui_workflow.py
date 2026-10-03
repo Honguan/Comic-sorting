@@ -3146,6 +3146,63 @@ class WorkflowTests(unittest.TestCase):
             q.poll()
         self.assertIn('01:01:01', q.elapsed_label.get())
 
+    def test_cancelled_pending_jobs_do_not_overwrite_stage_owner_or_terminal(self):
+        q = self.app.translation_queue
+        q.jobs = [Job(self.folder / 'Chapter 1', 'translate'),
+                  Job(self.folder / 'Chapter 2', 'translate')]
+        q.active_jobs = tuple(q.jobs)
+        q.render()
+        for event in [('status', 0, 'running', ''), ('bt_reset', 10, {}),
+                      ('bt_progress', 'Text Detection', 100, 10, 10, '00:00'),
+                      ('bt_progress', 'OCR', 50, 5, 10, '00:30'),
+                      ('status', 0, 'cancelled', 'stop'),
+                      ('stage_time', 0, 'OCR', 20),
+                      ('status', 1, 'cancelled', 'stop')]:
+            q.events.put(event)
+        q.poll()
+        self.assertIn('狀態 完成', q.bt_labels['Text Detection'].get())
+        self.assertIn('狀態 已停止', q.bt_labels['OCR'].get())
+        self.assertNotIn('剩餘', q.bt_labels['OCR'].get())
+        self.assertIn('狀態 未執行', q.bt_labels['Translation'].get())
+        # A late report for this same stopped worker must not restore its ETA.
+        q.events.put(('bt_progress', 'OCR', 60, 6, 10, '00:20'))
+        q.poll()
+        self.assertIn('狀態 已停止', q.bt_labels['OCR'].get())
+
+    def test_parallel_cancel_and_pause_preserve_independent_progress(self):
+        q = self.app.translation_queue
+        q.jobs = [Job(self.folder / 'Chapter 1', 'translate'),
+                  Job(self.folder / 'Chapter 2', 'translate'),
+                  Job(self.folder / 'Chapter 3', 'translate')]
+        q.active_jobs = tuple(q.jobs)
+        q.render()
+        q.running, q.started_at = True, 100
+        for phase, index, name in [('translate', 0, 'Translation'), ('prepare', 1, 'OCR')]:
+            for event in [('status', index, 'running', ''), ('bt_reset', 10, {}),
+                          ('bt_progress', name, 50, 5, 10, '00:30')]:
+                q.events.put(('phase_event', phase, event))
+        q.events.put(('phase_event', 'prepare', ('status', 2, 'cancelled', 'stop')))
+        q.poll()
+        self.assertIn('剩餘 00:00:30', q.bt_labels['OCR'].get())
+        q.events.put(('phase_event', 'prepare', ('status', 1, 'failed', 'error')))
+        q.poll()
+        self.assertIn('狀態 失敗', q.bt_labels['OCR'].get())
+        self.assertIn('剩餘 00:00:30', q.bt_labels['Translation'].get())
+        q.events.put(('paused', 130))
+        q.poll()
+        self.assertIn('狀態 已暫停', q.bt_labels['Translation'].get())
+        self.assertIn('狀態 失敗', q.bt_labels['OCR'].get())
+        q.events.put(('resumed', 30))
+        q.poll()
+        self.assertIn('剩餘 00:00:30', q.bt_labels['Translation'].get())
+        self.assertIn('狀態 失敗', q.bt_labels['OCR'].get())
+        q.request_stop()
+        self.assertIn('停止中', q.label.get())
+        q.events.put(('stage', 'Translation', 60))
+        q.poll()
+        self.assertIn('停止中', q.label.get())
+
+
     def test_four_stage_progress_remains_independent_and_resets_per_job(self):
         from queue_worker import BT_STAGES
         from ui_language import tr

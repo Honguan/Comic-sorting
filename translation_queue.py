@@ -283,6 +283,8 @@ class TranslationQueue:
         self.bt_labels = {}
         self.bt_progress = {}
         self.bt_elapsed = {}
+        self.bt_terminal = {}
+        self.bt_job_indices = {}
         self.time_labels = {}
         for row, name in enumerate(BT_STAGES):
             line = row * 3
@@ -620,9 +622,13 @@ class TranslationQueue:
             active = enabled is None or enabled.get(name, True)
             self.bt_progress[name] = (0, 0 if total is not None else None, total, None, active)
             self.bt_elapsed[name] = None
+            self.bt_terminal[name] = None
             self.show_bt_progress(name)
 
     def show_bt_progress(self, name, terminal=None):
+        if terminal is not None:
+            self.bt_terminal[name] = terminal
+        terminal = self.bt_terminal.get(name)
         percent, current, total, eta, active = self.bt_progress[name]
         self.bt_bars[name].configure(value=percent)
         if not active:
@@ -633,8 +639,13 @@ class TranslationQueue:
                 remaining = elapsed_text(sum(int(part) * 60 ** index
                                              for index, part in enumerate(reversed(eta.split(':')))))
             template = tr("{0}%｜{1}/{2} 頁｜剩餘 {3}")
-            if terminal and (current is None or total is None or current < total):
-                remaining = tr(terminal)
+            complete = percent >= 100 and (current is None or total is None or current >= total)
+            waiting = not percent and not current
+            state = "完成" if complete else terminal
+            if waiting:
+                state = "未執行" if terminal in ("已停止", "失敗") else "待執行"
+            if state:
+                remaining = tr(state)
                 template = tr("{0}%｜{1}/{2} 頁｜狀態 {3}")
             text = template.format(percent, f"{current:,}" if current is not None else "—",
                                    f"{total:,}" if total is not None else "—", remaining)
@@ -1304,6 +1315,8 @@ class TranslationQueue:
 
     def request_stop(self):
         self.stop.set()
+        if self.running:
+            self.label.set(tr("佇列停止中"))
         self.update_controls()
 
     def clear_selection(self):
@@ -1361,6 +1374,7 @@ class TranslationQueue:
             return
         self.retry_count = 0
         self.phase_jobs.clear()
+        self.bt_job_indices.clear()
         self.update_summary()
         self.stage_times.clear()
         self.usage_records.clear()
@@ -1463,20 +1477,25 @@ class TranslationQueue:
                     self.stage.configure(value=0)
                     self.stage.pack_forget()
                     self.reset_bt_progress(names=names)
+                    self.bt_job_indices.update(dict.fromkeys(names, event[1]))
                     if phase is None:
-                        self.label.set(tr("正在處理：{0}").format(job.path.name))
+                        self.label.set(tr("佇列停止中") if self.stop.is_set() else tr("正在處理：{0}").format(job.path.name))
                 elif job.status in ("failed", "cancelled"):
                     for name in names:
-                        self.show_bt_progress(name, STATUSES[job.status])
-                if phase:
+                        if self.bt_job_indices.get(name) == event[1]:
+                            self.show_bt_progress(name, STATUSES[job.status])
+                if phase and any(self.bt_job_indices.get(name) == event[1] for name in names):
                     self.phase_jobs[phase] = str(job.path.parent.name + '/' + job.path.name) if job.status == "running" else '—'
-                    self.label.set(tr("前處理：{0}｜翻譯：{1}").format(
+                    self.label.set(tr("佇列停止中") if self.stop.is_set() else tr("前處理：{0}｜翻譯：{1}").format(
                         self.phase_jobs.get('prepare', '—'), self.phase_jobs.get('translate', '—')))
             elif event[0] == "paused":
                 self.paused_at = event[1]
                 elapsed = self.paused_at - self.started_at
                 self.elapsed_label.set(elapsed_text(elapsed))
-                self.label.set(tr("已暫停；按「繼續佇列」恢復"))
+                self.label.set(tr("佇列停止中") if self.stop.is_set() else tr("已暫停；按「繼續佇列」恢復"))
+                for name in BT_STAGES:
+                    if self.bt_terminal.get(name) is None:
+                        self.show_bt_progress(name, "已暫停")
                 if self.history_run is not None:
                     self.history_run['elapsed_seconds'] = elapsed
                     self.save_history()
@@ -1484,6 +1503,10 @@ class TranslationQueue:
             elif event[0] == "resumed":
                 self.started_at += event[1]
                 self.paused_at = None
+                for name in BT_STAGES:
+                    if self.bt_terminal.get(name) == "已暫停":
+                        self.bt_terminal[name] = None
+                        self.show_bt_progress(name)
                 if not self.stop.is_set():
                     self.label.set(tr("佇列繼續處理"))
                 controls_changed = True
@@ -1519,7 +1542,7 @@ class TranslationQueue:
                 self.bt_elapsed[name] = None  # Only pair page counts with timing from the same progress report.
                 self.show_bt_progress(name)
             elif event[0] == "stage":
-                if phase is None:
+                if phase is None and not self.stop.is_set():
                     self.label.set(f"{tr(event[1])}: {event[2]}%")
                 self.stage.pack(fill="x", after=self.total)
                 self.stage.configure(value=event[2])

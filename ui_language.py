@@ -538,6 +538,7 @@ TRANSLATIONS = {
     '主佇列進度': {'en': 'Main queue progress', 'ja': 'メインキューの進行状況'},
     '佇列將清空指定路徑的 mask / inpainted 內容，無法復原。繼續？': {'en': 'The queue will clear mask / inpainted contents at the specified paths. This cannot be undone. Continue?', 'ja': 'キューは指定パスの mask / inpainted の内容を削除します。この操作は元に戻せません。続行しますか？'},
     '佇列已停止': {'en': 'Queue stopped', 'ja': 'キューを停止しました'},
+    '佇列停止中': {'en': 'Stopping queue', 'ja': 'キューを停止中'},
     '佇列結束，請查看各項狀態': {'en': 'Queue finished. Check the status of each item', 'ja': 'キューの処理が終了しました。各項目の状態を確認してください'},
     '佇列設定': {'en': 'Queue settings', 'ja': 'キュー設定'},
     '來源不是資料夾': {'en': 'Source is not a folder', 'ja': '元のパスがフォルダーではありません'},

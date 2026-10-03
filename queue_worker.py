@@ -425,9 +425,13 @@ def run_translation(command, root, env, stop, progress, log_context="", usage=No
             completed |= "finished translating all dirs" in line
             record = re.search(r"\[(?:ERROR|WARNING|INFO|DEBUG)\s*\]\s+\w+:\w+:\d+ - ", line)
             diagnostic = line[record.start():] if record else line
+            # setup_logging catches locked old-log deletion and continues startup.
+            if re.fullmatch(r"\[ERROR\s*\]\s+logger:setup_logging:\d+ - \[WinError 32\] .*: "
+                            r"(['\"])[^\r\n]+\.log\1", diagnostic):
+                pass
             # This diagnostic is emitted BEFORE the translator's built-in retry.
             # Exhausted retries still emit a separate fatal error and traceback.
-            if re.match(r"\[ERROR\s*\]\s+trans_llm:_translate:\d+ - Failed to parse matching translation count for prompt:", diagnostic):
+            elif re.match(r"\[ERROR\s*\]\s+trans_llm:_translate:\d+ - Failed to parse matching translation count for prompt:", diagnostic):
                 retries += 1
             elif (re.match(r"(?:\[ERROR\s*\]|ERROR\b|Traceback \(most recent call last\))", diagnostic)
                   or re.search(r"module_manager:.* - Image translation pipeline stopped", diagnostic)):

@@ -47,11 +47,16 @@ def elapsed_text(seconds):
     return f'{hours:02}:{minutes:02}:{seconds:02}'
 
 
-def format_tokens(tokens):
-    for scale, unit in ((1_000_000_000, 'B'), (1_000_000, 'M'), (1_000, 'K')):
-        if tokens >= scale:
-            return f'{tokens / scale:.2f}{unit}'
-    return str(tokens)
+def format_tokens(tokens, *, decimals=0):
+    value, unit = Decimal(tokens), ''
+    for suffix in ('K', 'M', 'B'):
+        if value.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP) < 1000:
+            break
+        value /= 1000
+        unit = suffix
+    places = 2 if unit else decimals
+    value = value.quantize(Decimal(1).scaleb(-places), rounding=ROUND_HALF_UP)
+    return f'{value:.{places}f}{unit}'
 
 
 def cost_text(amount):
@@ -226,9 +231,10 @@ def fill_model_usage(table, usage):
             for column, key in (('token_share', 'total_tokens'), ('request_share', 'requests'), ('cost_share', 'cost')):
                 amount, total = value.get(key), Decimal(totals.get(key) or 0)
                 fields[column] = f"{(Decimal(amount) * 100 / total).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP):.2f}%" if amount is not None and total > 0 else '—'
-            fields['avg_tokens'] = f"{(Decimal(value['total_tokens']) / reported_requests).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP):,.2f}" if reported_requests > 0 else '—'
+            fields['avg_tokens'] = format_tokens(Decimal(value['total_tokens']) / reported_requests, decimals=2) if reported_requests > 0 else '—'
             fields['avg_cost'] = f"US${(Decimal(cost) / value['requests']).quantize(Decimal('0.000001'), rounding=ROUND_CEILING):,.6f}" if cost is not None and value['requests'] > 0 and not value['unpriced_requests'] and not value.get('cost_incomplete') else '—'
-            fields.update({key: f"{value[key]:,}" if key in value else '—'
+            fields.update({key: (format_tokens(value[key]) if key in ('total_tokens', 'prompt', 'completion', 'cache_hit', 'cache_write')
+                                 else f"{value[key]:,}") if key in value else '—'
                            for key in MODEL_COLUMNS if key not in fields})
             rows[json.dumps([scope, model])] = tuple(fields[key] for key in MODEL_COLUMNS)
     for item in set(table.get_children()) - rows.keys():
