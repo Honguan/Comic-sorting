@@ -159,6 +159,11 @@ class PageRangeTests(unittest.TestCase):
         (package / "ui").mkdir(parents=True)
         for path in (package / "__init__.py", package / "__main__.py", package / "ui" / "__init__.py"):
             path.touch()
+        (package / "utils").mkdir()
+        (package / "utils" / "__init__.py").touch()
+        (package / "utils" / "proj_imgtrans.py").write_text(
+            "class ProjImgTrans:\n    def save(self, *args, **kwargs): pass\n", encoding='utf-8')
+
         (package / "launch.py").write_text(
             "import argparse\nfrom types import SimpleNamespace\n"
             "parser = argparse.ArgumentParser()\nparser.add_argument('--config')\n"

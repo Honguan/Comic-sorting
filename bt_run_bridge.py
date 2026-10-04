@@ -7,6 +7,23 @@ import time
 import threading
 
 
+def install_project_save(project_class):
+    """Retry short Windows read locks without hiding a permanent save failure."""
+    original = project_class.save
+
+    def save(project, *args, **kwargs):
+        deadline = time.monotonic() + 1
+        while True:
+            try:
+                return original(project, *args, **kwargs)
+            except PermissionError as error:
+                if getattr(error, 'winerror', None) not in (5, 32) or time.monotonic() >= deadline:
+                    raise
+                time.sleep(.05)
+
+    project_class.save = save
+
+
 def install_usage(chat, format_usage):
     """Observe returned usage before native output-limit handling, per request thread."""
     original_request = chat.LLMChatRequester.request_chat_completion
@@ -133,6 +150,9 @@ def main():
         # This native startup hook runs after configuration, Qt and fonts are ready.
         setup_locks()
         from ballontranslator.ui.mainwindow import MainWindow
+        from ballontranslator.utils.proj_imgtrans import ProjImgTrans
+        install_project_save(ProjImgTrans)
+
         try:
             from ballontranslator.modules import llm_chat
             from ballontranslator.modules.context.token_usage import format_completion_token_usage
