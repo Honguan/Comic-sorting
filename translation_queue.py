@@ -99,8 +99,6 @@ class TranslationQueue:
         self.button(settings_actions, tr("開啟原生設定介面"), self.open_settings)
         self.button(settings_actions, tr("開啟紀錄資料夾"), self.open_logs)
         self.button(settings_actions, tr('模型單價'), lambda: open_pricing(app.root, self.token_rates, app.save_settings))
-        for button in settings_actions.winfo_children():
-            button.pack_configure(side="top", fill="x", pady=3)
         self.notifications = NtfyNotifications(app, settings)
         self.scheduler = QueueSchedule(self)
 
@@ -181,8 +179,8 @@ class TranslationQueue:
         tree_frame.rowconfigure(0, weight=1)
         tree_frame.columnconfigure(0, weight=1)
         self.selection_details = tk.StringVar()
-        details, self.selection_label = details_text(tree_frame, self.selection_details)
-        details.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+        _details, self.selection_label = details_text(tree_frame, self.selection_details,
+                                                      row=2, column=0, columnspan=2, sticky="ew", pady=(4, 0))
         self.tree.bind("<Configure>", self.fit_columns)
         self.tree.bind("<Double-1>", self.show_details)
         self.tree.bind("<<TreeviewSelect>>", lambda _event: self.update_controls())

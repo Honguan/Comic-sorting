@@ -171,8 +171,8 @@ class FileAggregatorApp:
         list_frame.rowconfigure(0, weight=1)
         list_frame.columnconfigure(0, weight=1)
         self.folder_details = tk.StringVar()
-        details, self.folder_details_label = details_text(list_frame, self.folder_details)
-        details.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        _details, self.folder_details_label = details_text(list_frame, self.folder_details,
+                                                           row=2, column=0, columnspan=2, sticky="ew", pady=(6, 0))
         self.folder_tree.bind("<Configure>", self.fit_folder_columns)
         self.folder_tree.bind("<<TreeviewSelect>>", self.on_tree_select)
         self.folder_tree.bind("<Double-1>", self.add_chapter_to_queue)
@@ -340,17 +340,19 @@ class FileAggregatorApp:
         self.open_checkbox.pack(side="left", padx=12)
         buttons = ttk.Frame(export)
         buttons.pack(fill="x")
-        self.export_selected_button = ttk.Button(buttons, text=tr("匯出選取項目"), command=self.export_selected)
-        self.export_selected_button.pack(fill="x")
+        self.export_selected_button = ttk.Button(buttons, text=tr("匯出選取項目"), style="Accent.TButton",
+                                                 command=self.export_selected)
+        self.export_selected_button.pack(side="left")
         self.export_all_button = ttk.Button(buttons, text=tr("匯出所有已翻譯項目"), command=self.export_all)
-        self.export_all_button.pack(fill="x", pady=6)
+        self.export_all_button.pack(side="left", padx=6)
+        # Cleanup deletes cache folders, so it sits on its own row apart from the export actions.
         self.cleanup_button = ttk.Button(
-            buttons, text=tr("清理已匯出快取"), command=self.confirm_cleanup)
-        self.cleanup_button.pack(fill="x")
+            export, text=tr("清理已匯出快取"), command=self.confirm_cleanup)
+        self.cleanup_button.pack(anchor="w", pady=(6, 0))
         self.progress = ttk.Progressbar(export, mode="determinate")
         self.progress.pack(fill="x", pady=(8, 2))
         self.status_label = ttk.Label(export, textvariable=self.status_text)
-        self.status_label.pack(anchor="w")
+        self.status_label.pack(anchor="w", pady=(6, 0))
         self.progress.pack_forget()
 
     def remember_window_size(self, event):

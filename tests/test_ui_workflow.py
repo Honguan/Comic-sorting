@@ -1139,6 +1139,17 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(q.start_button['text'], '開始執行')
         self.assertEqual(q.start_targets(), (jobs[0], jobs[1], jobs[4]))
 
+    def test_details_boxes_hide_while_empty(self):
+        for variable, label in ((self.app.folder_details, self.app.folder_details_label),
+                                (self.app.translation_queue.selection_details, self.app.translation_queue.selection_label)):
+            variable.set('')
+            self.assertEqual(label.master.winfo_manager(), '')
+            variable.set('detail')
+            self.assertEqual(label.master.winfo_manager(), 'grid')
+            self.assertEqual(label.master.grid_info()['row'], 2)
+            variable.set('')
+            self.assertEqual(label.master.winfo_manager(), '')
+
     def test_queue_actions_follow_selection_and_running_state(self):
         q = self.app.translation_queue
         q.jobs = [Job(self.chapter('Chapter 1'), 'translate', 'failed', 'error'),
