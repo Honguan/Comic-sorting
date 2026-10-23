@@ -495,9 +495,162 @@ def run_translation(command, root, env, stop, progress, log_context="", usage=No
             session.close()
 
 
+def translate_job(job, index, path, settings, session, phase, stop, emit, job_id):
+    """Run one translation or preprocessing pass.
+
+    Returns None after emitting a terminal prepared/skipped status, otherwise
+    (whole_chapter, completion_note, diagnostic, result_path) for the follow-up steps.
+    """
+    from queue_phases import prepared, prepared_pages, mark_prepared, invalidate_prepared, signature, page_record
+    completion_note = ""
+    sources = image_files(path)
+    if not sources:
+        raise ValueError(tr("指定路徑沒有圖片，請選擇章節或整合輸出"))
+    # Fail before starting the translator: colliding outputs only surface after paid work.
+    duplicates = duplicate_stems(sources)
+    if duplicates:
+        raise ValueError(tr("來源有同名不同副檔名的圖片，翻譯結果會互相覆蓋；請先移除重複檔：{0}").format(
+            "、".join(" / ".join(names) for names in duplicates[:5])))
+    selected = job.select_pages(sources)
+    reusable = set(prepared_pages(path, selected)) if phase == "prepare" else set()
+    pending = [p for p in selected if p not in reusable]
+    ready = not pending if phase == "prepare" else prepared(path, selected) if phase else False
+    if phase == "prepare" and reusable:
+        logger.info("[%s] preprocessing_resume reused=%s pending=%s", job_id, len(reusable), len(pending))
+    if (phase == "prepare" and ready) or (phase == "translate" and not ready):
+        note = "" if ready else tr("尚未完成前處理，或來源／前處理成果已變更；請先跑前處理")
+        emit(("status", index, "prepared" if ready else "skipped", note))
+        return None
+    module = load_json(settings["bt_config"], {}, strict=True).get("module", {})
+    profiles = {profile.get('id'): profile for profile in module.get('llm_profiles', [])}
+    usage_context = {}
+    for scope, key, vision in (('OCR', 'ocr_llm_id', True),
+                                ('translation', 'translator_llm_id', module.get('llm_translate_vision', False))):
+        profile = profiles.get(module.get(key), {})
+        usage_context[scope] = dict(model=(profile.get('vision_model') if vision else '') or profile.get('model'),
+                                    profile_id=profile.get('id'), local=profile.get('id') in ('ollama', 'lmstudio'))
+    enabled = {name: module.get(flag, True) is not False for name, flag in BT_STAGES.items()}
+    if not any(enabled.values()):
+        raise ValueError(tr("請至少啟用一個 BallonsTranslator 處理階段"))
+    emit(("bt_reset", len(pending), enabled))
+    if any(enabled[name] for name in ("Text Detection", "OCR", "Inpaint")):
+        invalidate_prepared(path, pending)
+    source_versions = {p.name: signature(p) for p in pending} if phase == "prepare" else None
+    before_assets = {}
+    if phase == "prepare":
+        for p in pending:
+            before_assets[p.name] = {}
+            for suffix in ('.png', '.jxl'):
+                asset = path / 'inpainted' / (p.stem + suffix)
+                if asset.is_file() and asset.stat().st_size:
+                    before_assets[p.name][str(asset.relative_to(path))] = signature(asset)
+        pending_by_name = {p.name: p for p in pending}
+
+        def save_page(name):
+            source = pending_by_name[name]
+            if signature(source) != source_versions[name]:
+                raise RuntimeError(tr("前處理期間來源圖片已變更，請重新執行"))
+            project = load_json(path / f"imgtrans_{path.name}.json", {}, strict=True)
+            assets = page_record(path, source, project)['assets']
+            # Native inpaint errors can still advance progress; require a newly saved image.
+            if project['pages'][name] and not any(
+                    Path(key).parts[0] == 'inpainted' and value != before_assets[name].get(key)
+                    for key, value in assets.items()):
+                return
+            mark_prepared(path, [source])
+    logger.info("[%s] translation_pages start=%s end=%s selected=%s total=%s", job_id,
+                job.start_page, job.end_page or len(sources), len(selected), len(sources))
+    with tempfile.TemporaryDirectory(prefix="comic-sorting-pages-") as temporary:
+        page_manifest = None
+        request = None
+        if len(pending) != len(sources):
+            page_manifest = Path(temporary) / "pages.json"
+            save_json(page_manifest, [p.name for p in pending])
+        if session is not None:
+            request = dict(path=str(path), pages=[p.name for p in pending] if len(pending) != len(sources) else None,
+                           token=uuid.uuid4().hex)
+            if phase:
+                request["phase"] = phase
+            page_manifest = Path(temporary) / "session.json"
+            save_json(page_manifest, request)
+        command_options = {"page_manifest": page_manifest} if page_manifest else {}
+        if page_manifest is None:
+            page_manifest = Path(temporary) / 'usage.json'
+            save_json(page_manifest, None)
+            command_options['page_manifest'] = page_manifest
+        session_options = dict(session=session, request=request) if session is not None else {}
+        diagnostic = run_translation(*translator_command(settings["bt_path"], settings["bt_config"],
+                                            settings.get("bt_python", ""), path, **command_options), stop,
+                        lambda *values: emit(("bt_progress", *values)), log_context=job_id,
+                        usage=lambda values: emit(("usage", index, values)),
+                        pricing=settings.get('bt_token_rates', {}), usage_context=usage_context,
+                        retry=lambda: emit(("retry",)),
+                        jev=lambda values: emit(("jev_stats", index, values)),
+                        timing=lambda name, seconds: emit(("stage_time", index, name, seconds)),
+                        on_prepared=save_page if phase == "prepare" else None, **session_options)
+        if isinstance(diagnostic, str):
+            completion_note = diagnostic
+    if phase == "prepare":
+        if completion_note or stop.is_set():
+            raise RuntimeError(completion_note or tr("已停止"))
+        if source_versions != {p.name: signature(p) for p in pending}:
+            raise RuntimeError(tr("前處理期間來源圖片已變更，請重新執行"))
+        mark_prepared(path, pending)
+        if not prepared(path, selected):
+            raise RuntimeError(tr("尚未完成前處理，或來源／前處理成果已變更；請先跑前處理"))
+        emit(("status", index, "prepared", ""))
+        return None
+    status, translated = translation_status(path)
+    if not translations_complete(sources, translated, selected):
+        raise RuntimeError(tr("翻譯結果不完整，未執行後續動作"))
+    whole_chapter = status == tr("可匯出")
+    if not whole_chapter:
+        completion_note = "\n".join(filter(None, (completion_note, tr("指定頁面已完成；全章結果尚未齊全，略過自動匯出與清理"))))
+        logger.info("[%s] partial_range_completed export_cleanup_skipped", job_id)
+    result_path = translated[0].parent
+    logger.info("[%s] result_verified sources=%s results=%s", job_id, len(image_files(path)), len(translated))
+    return whole_chapter, completion_note, diagnostic, result_path
+
+
+def complete_job(job, index, path, outcome, settings, output, skip, stop, emit, job_id, export_progress):
+    """Export and clean up after the main step, then report the job's final status."""
+    whole_chapter, completion_note, diagnostic, result_path = outcome
+    action = job.action
+    if stop.is_set():
+        raise RuntimeError(tr("已停止"))
+    if whole_chapter and job.should_export(settings.get("bt_export", False)):
+        if not str(output).strip():
+            raise ValueError(tr("請設定 Komga 輸出路徑"))
+        target = Path(output).resolve()
+        if target.is_relative_to(path) or path.is_relative_to(target):
+            raise ValueError(tr("匯出與漫畫路徑不可互相包含"))
+        state_file = target / ".comic-sorting-state.json"
+        state = load_json(state_file, {}, strict=True)
+        emit(("stage", "匯出", 0))
+        export_action, archive = export_chapter(path.parent, path, target, state, skip,
+                                                progress=export_progress)
+        save_json(state_file, state)
+        result_path = archive
+        logger.info("[%s] export_%s output=%s", job_id, export_action, archive)
+        emit(("stage", "匯出", 100))
+    if stop.is_set():
+        raise RuntimeError(tr("已停止，未執行後續清理"))
+    if action == "cleanup" or (whole_chapter and settings.get("bt_cleanup", False) and action in ("translate", "export")):
+        folders, removed, errors = clear_work_folders(path, output)
+        logger.info("[%s] cleanup_result folders=%s removed=%s errors=%s", job_id, folders, removed, errors)
+        if errors:
+            raise RuntimeError("\n".join(errors))
+    if stop.is_set():
+        raise RuntimeError(tr("已停止"))
+    emit(("status", index, "done_warning" if action == "translate" and isinstance(diagnostic, str) and diagnostic else "done", completion_note))
+    if action == "translate":
+        emit(("result", result_path))
+    logger.info("[%s] job_done", job_id)
+
+
 def run_jobs(jobs, settings, output, skip, stop, emit, *, pause=None, checkpoint=None, blocked_jobs=(), before_job=None):
     """Run a pending-job snapshot; only the event consumer mutates Job state."""
-    from queue_phases import run_phased_jobs, prepared, prepared_pages, mark_prepared, invalidate_prepared, signature, page_record
+    from queue_phases import run_phased_jobs
     if settings.get("bt_workflow", "normal") != "normal":
         return run_phased_jobs(jobs, settings, output, skip, stop, emit,
                                pause=pause, checkpoint=checkpoint, blocked_jobs=blocked_jobs)
@@ -552,9 +705,6 @@ def run_jobs(jobs, settings, output, skip, stop, emit, *, pause=None, checkpoint
             job_started = time.monotonic()
             job_timestamp = datetime.now().astimezone().isoformat(timespec='seconds')
             try:
-                whole_chapter = True
-                completion_note = ""
-                diagnostic = None
                 if action not in ("translate", "export", "cleanup"):
                     raise ValueError(tr("不支援的佇列動作：{0}").format(action))
                 if not path.is_dir():
@@ -564,152 +714,11 @@ def run_jobs(jobs, settings, output, skip, stop, emit, *, pause=None, checkpoint
                     if target.is_relative_to(path) or path.is_relative_to(target):
                         raise ValueError(tr("匯出與漫畫路徑不可互相包含"))
                 if action == "translate":
-                    sources = image_files(path)
-                    if not sources:
-                        raise ValueError(tr("指定路徑沒有圖片，請選擇章節或整合輸出"))
-                    # Fail before starting the translator: colliding outputs only surface after paid work.
-                    duplicates = duplicate_stems(sources)
-                    if duplicates:
-                        raise ValueError(tr("來源有同名不同副檔名的圖片，翻譯結果會互相覆蓋；請先移除重複檔：{0}").format(
-                            "、".join(" / ".join(names) for names in duplicates[:5])))
-                    selected = job.select_pages(sources)
-                    reusable = set(prepared_pages(path, selected)) if phase == "prepare" else set()
-                    pending = [p for p in selected if p not in reusable]
-                    ready = not pending if phase == "prepare" else prepared(path, selected) if phase else False
-                    if phase == "prepare" and reusable:
-                        logger.info("[%s] preprocessing_resume reused=%s pending=%s", job_id, len(reusable), len(pending))
-                    if (phase == "prepare" and ready) or (phase == "translate" and not ready):
-                        note = "" if ready else tr("尚未完成前處理，或來源／前處理成果已變更；請先跑前處理")
-                        emit(("status", index, "prepared" if ready else "skipped", note))
-                        emit(("job_time", index, job_timestamp, datetime.now().astimezone().isoformat(timespec='seconds'),
-                              time.monotonic() - job_started))
-                        emit(("total", index + 1))
-                        if checkpoint is not None and not checkpoint():
-                            break
-                        continue
-                    module = load_json(settings["bt_config"], {}, strict=True).get("module", {})
-                    profiles = {profile.get('id'): profile for profile in module.get('llm_profiles', [])}
-                    usage_context = {}
-                    for scope, key, vision in (('OCR', 'ocr_llm_id', True),
-                                                ('translation', 'translator_llm_id', module.get('llm_translate_vision', False))):
-                        profile = profiles.get(module.get(key), {})
-                        usage_context[scope] = dict(model=(profile.get('vision_model') if vision else '') or profile.get('model'),
-                                                    profile_id=profile.get('id'), local=profile.get('id') in ('ollama', 'lmstudio'))
-                    enabled = {name: module.get(flag, True) is not False for name, flag in BT_STAGES.items()}
-                    if not any(enabled.values()):
-                        raise ValueError(tr("請至少啟用一個 BallonsTranslator 處理階段"))
-                    emit(("bt_reset", len(pending), enabled))
-                    if any(enabled[name] for name in ("Text Detection", "OCR", "Inpaint")):
-                        invalidate_prepared(path, pending)
-                    source_versions = {p.name: signature(p) for p in pending} if phase == "prepare" else None
-                    before_assets = {}
-                    if phase == "prepare":
-                        for p in pending:
-                            before_assets[p.name] = {}
-                            for suffix in ('.png', '.jxl'):
-                                asset = path / 'inpainted' / (p.stem + suffix)
-                                if asset.is_file() and asset.stat().st_size:
-                                    before_assets[p.name][str(asset.relative_to(path))] = signature(asset)
-                        pending_by_name = {p.name: p for p in pending}
-
-                        def save_page(name):
-                            source = pending_by_name[name]
-                            if signature(source) != source_versions[name]:
-                                raise RuntimeError(tr("前處理期間來源圖片已變更，請重新執行"))
-                            project = load_json(path / f"imgtrans_{path.name}.json", {}, strict=True)
-                            assets = page_record(path, source, project)['assets']
-                            # Native inpaint errors can still advance progress; require a newly saved image.
-                            if project['pages'][name] and not any(
-                                    Path(key).parts[0] == 'inpainted' and value != before_assets[name].get(key)
-                                    for key, value in assets.items()):
-                                return
-                            mark_prepared(path, [source])
-                    logger.info("[%s] translation_pages start=%s end=%s selected=%s total=%s", job_id,
-                                job.start_page, job.end_page or len(sources), len(selected), len(sources))
-                    with tempfile.TemporaryDirectory(prefix="comic-sorting-pages-") as temporary:
-                        page_manifest = None
-                        request = None
-                        if len(pending) != len(sources):
-                            page_manifest = Path(temporary) / "pages.json"
-                            save_json(page_manifest, [p.name for p in pending])
-                        if session is not None:
-                            request = dict(path=str(path), pages=[p.name for p in pending] if len(pending) != len(sources) else None,
-                                           token=uuid.uuid4().hex)
-                            if phase:
-                                request["phase"] = phase
-                            page_manifest = Path(temporary) / "session.json"
-                            save_json(page_manifest, request)
-                        command_options = {"page_manifest": page_manifest} if page_manifest else {}
-                        if page_manifest is None:
-                            page_manifest = Path(temporary) / 'usage.json'
-                            save_json(page_manifest, None)
-                            command_options['page_manifest'] = page_manifest
-                        session_options = dict(session=session, request=request) if session is not None else {}
-                        diagnostic = run_translation(*translator_command(settings["bt_path"], settings["bt_config"],
-                                                            settings.get("bt_python", ""), path, **command_options), stop,
-                                        lambda *values: emit(("bt_progress", *values)), log_context=job_id,
-                                        usage=lambda values: emit(("usage", index, values)),
-                                        pricing=settings.get('bt_token_rates', {}), usage_context=usage_context,
-                                        retry=lambda: emit(("retry",)),
-                                        jev=lambda values: emit(("jev_stats", index, values)),
-                                        timing=lambda name, seconds: emit(("stage_time", index, name, seconds)),
-                                        on_prepared=save_page if phase == "prepare" else None, **session_options)
-                        if isinstance(diagnostic, str):
-                            completion_note = diagnostic
-                    if phase == "prepare":
-                        if completion_note or stop.is_set():
-                            raise RuntimeError(completion_note or tr("已停止"))
-                        if source_versions != {p.name: signature(p) for p in pending}:
-                            raise RuntimeError(tr("前處理期間來源圖片已變更，請重新執行"))
-                        mark_prepared(path, pending)
-                        if not prepared(path, selected):
-                            raise RuntimeError(tr("尚未完成前處理，或來源／前處理成果已變更；請先跑前處理"))
-                        emit(("status", index, "prepared", ""))
-                        emit(("job_time", index, job_timestamp, datetime.now().astimezone().isoformat(timespec='seconds'),
-                              time.monotonic() - job_started))
-                        emit(("total", index + 1))
-                        if checkpoint is not None and not checkpoint():
-                            break
-                        continue
-                    status, translated = translation_status(path)
-                    if not translations_complete(sources, translated, selected):
-                        raise RuntimeError(tr("翻譯結果不完整，未執行後續動作"))
-                    whole_chapter = status == tr("可匯出")
-                    if not whole_chapter:
-                        completion_note = "\n".join(filter(None, (completion_note, tr("指定頁面已完成；全章結果尚未齊全，略過自動匯出與清理"))))
-                        logger.info("[%s] partial_range_completed export_cleanup_skipped", job_id)
-                    result_path = translated[0].parent
-                    logger.info("[%s] result_verified sources=%s results=%s", job_id, len(image_files(path)), len(translated))
-                if stop.is_set():
-                    raise RuntimeError(tr("已停止"))
-                if whole_chapter and job.should_export(settings.get("bt_export", False)):
-                    if not str(output).strip():
-                        raise ValueError(tr("請設定 Komga 輸出路徑"))
-                    target = Path(output).resolve()
-                    if target.is_relative_to(path) or path.is_relative_to(target):
-                        raise ValueError(tr("匯出與漫畫路徑不可互相包含"))
-                    state_file = target / ".comic-sorting-state.json"
-                    state = load_json(state_file, {}, strict=True)
-                    emit(("stage", "匯出", 0))
-                    export_action, archive = export_chapter(path.parent, path, target, state, skip,
-                                                            progress=export_progress)
-                    save_json(state_file, state)
-                    result_path = archive
-                    logger.info("[%s] export_%s output=%s", job_id, export_action, archive)
-                    emit(("stage", "匯出", 100))
-                if stop.is_set():
-                    raise RuntimeError(tr("已停止，未執行後續清理"))
-                if action == "cleanup" or (whole_chapter and settings.get("bt_cleanup", False) and action in ("translate", "export")):
-                    folders, removed, errors = clear_work_folders(path, output)
-                    logger.info("[%s] cleanup_result folders=%s removed=%s errors=%s", job_id, folders, removed, errors)
-                    if errors:
-                        raise RuntimeError("\n".join(errors))
-                if stop.is_set():
-                    raise RuntimeError(tr("已停止"))
-                emit(("status", index, "done_warning" if action == "translate" and isinstance(diagnostic, str) and diagnostic else "done", completion_note))
-                if action == "translate":
-                    emit(("result", result_path))
-                logger.info("[%s] job_done", job_id)
+                    outcome = translate_job(job, index, path, settings, session, phase, stop, emit, job_id)
+                else:
+                    outcome = (True, "", None, None)
+                if outcome is not None:
+                    complete_job(job, index, path, outcome, settings, output, skip, stop, emit, job_id, export_progress)
             except Exception as error:
                 if action == "translate" and session is not None:
                     session.close()
