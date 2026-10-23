@@ -247,6 +247,10 @@ TRANSLATIONS = {
     '設定檔或專案 JSON 無法讀取': {'en': 'Configuration or project JSON cannot be read', 'ja': '設定またはプロジェクトの JSON を読み込めません'},
     '漫畫資料夾不存在': {'en': 'Comic folder does not exist', 'ja': '漫画フォルダーが存在しません'},
     '資料夾內沒有可處理的圖片': {'en': 'No processable images in the folder', 'ja': 'フォルダーに処理できる画像がありません'},
+    '來源有同名不同副檔名的圖片': {'en': 'Source images share a name with different extensions', 'ja': '同名で拡張子違いの元画像があります'},
+    '來源有同名不同副檔名的圖片，翻譯結果會互相覆蓋；請先移除重複檔：{0}': {
+        'en': 'Source images share a name with different extensions, so translated results would overwrite each other. Remove the duplicates first: {0}',
+        'ja': '同名で拡張子違いの元画像があり、翻訳結果が上書きされます。先に重複ファイルを削除してください：{0}'},
     '翻譯頁數範圍無效或頁面已不存在': {'en': 'Invalid page range or pages no longer exist', 'ja': 'ページ範囲が無効、またはページが存在しません'},
     '未啟用任何處理階段': {'en': 'No processing stage is enabled', 'ja': '処理工程が有効になっていません'},
     '翻譯結果不完整，已略過後續動作': {'en': 'Translation incomplete; follow-up actions skipped', 'ja': '翻訳結果が不完全なため、後続処理を省略しました'},

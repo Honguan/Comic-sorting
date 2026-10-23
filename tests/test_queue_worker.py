@@ -435,6 +435,20 @@ class QueueWorkerTests(unittest.TestCase):
         self.assertEqual([e[2] for e in events if e[0] == 'status'], ['running', 'failed'])
         self.assertEqual(config.read_text(), '{broken')
 
+    def test_duplicate_source_names_fail_before_starting_translator(self):
+        from queue_errors import error_info
+        chapter = self.chapter()
+        (chapter / '1.jpg').write_bytes(b'same page')  # Collides with the helper's 1.png.
+        events = []
+        with mock.patch('queue_worker.run_translation') as translate:
+            run_jobs([Job(chapter, 'translate')], dict(bt_config=str(self.root / 'config.json')), '', False,
+                     threading.Event(), events.append)
+        translate.assert_not_called()
+        status = [e for e in events if e[0] == 'status']
+        self.assertEqual(status[-1][2], 'failed')
+        self.assertIn('1.', status[-1][3])
+        self.assertEqual(error_info('failed', status[-1][3])[0], 'SOURCE_DUPLICATE')
+
     def test_export_state_save_failure_prevents_cleanup(self):
         chapter = self.chapter()
         output = self.root / "output"

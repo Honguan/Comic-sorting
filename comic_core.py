@@ -80,6 +80,14 @@ def translations_complete(sources, translated, selected=None):
                for path in (sources if selected is None else selected))
 
 
+def duplicate_stems(images):
+    """Names sharing a basename; translated output is PNG, so they overwrite each other."""
+    groups = {}
+    for path in images:
+        groups.setdefault(path.stem.casefold(), []).append(path.name)
+    return [names for names in groups.values() if len(names) > 1]
+
+
 def image_count(folder):
     folder = Path(folder)
     if not folder.is_dir():
@@ -563,17 +571,13 @@ def scan_folder_data(base, progress=None):
         page_counts[chapter] = len(sources)
         if status == tr("可匯出"):
             detail = tr("{0} 張翻譯圖片｜可匯出").format(len(translated))
-            images = translated
             ready_chapters.add(chapter)
         elif status == tr("結果為空"):
             detail = tr("結果資料夾為空")
-            images = []
         elif status == tr("部分翻譯"):
             detail = tr("{0} 張翻譯圖片｜部分翻譯").format(len(translated))
-            images = translated
         else:
-            images = sources
-            detail = tr("{0} 張圖片｜未翻譯").format(len(images))
+            detail = tr("{0} 張圖片｜未翻譯").format(len(sources))
         chapter_updates[chapter] = latest
         chapter_sizes[chapter] = size
         details[chapter] = detail

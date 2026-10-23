@@ -22,10 +22,10 @@ class WindowsNotifications:
         row.pack(fill='x')
         for key, label in (('enabled', '啟用通知'), ('done', '整批結束'),
                            ('failed', '單項失敗／異常'), ('success', '單項成功')):
-            ttk.Checkbutton(row, text=tr(label), variable=self.fields[key]).pack(side='left', padx=(0, 12))
+            # No validation is needed, so toggles apply immediately like other local settings.
+            ttk.Checkbutton(row, text=tr(label), variable=self.fields[key], command=self.save).pack(side='left', padx=(0, 12))
         row = ttk.Frame(box)
         row.pack(fill='x', pady=4)
-        ttk.Button(row, text=tr('儲存通知設定'), command=self.save).pack(side='left')
         ttk.Button(row, text=tr('測試 Windows 通知'), command=lambda: self.show(
             tr('測試通知'), tr('這是 Comic sorting 的 Windows 測試通知。'), 3)).pack(side='left', padx=4)
         self.status = tk.StringVar()

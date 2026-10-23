@@ -17,7 +17,7 @@ import uuid
 
 from app_logging import logger, log_path, redact
 
-from comic_core import (clear_work_folders, export_chapter, image_files,
+from comic_core import (clear_work_folders, duplicate_stems, export_chapter, image_files,
                         load_json, save_json, translation_status, translations_complete)
 from ui_language import tr
 from queue_errors import error_info
@@ -567,6 +567,11 @@ def run_jobs(jobs, settings, output, skip, stop, emit, *, pause=None, checkpoint
                     sources = image_files(path)
                     if not sources:
                         raise ValueError(tr("指定路徑沒有圖片，請選擇章節或整合輸出"))
+                    # Fail before starting the translator: colliding outputs only surface after paid work.
+                    duplicates = duplicate_stems(sources)
+                    if duplicates:
+                        raise ValueError(tr("來源有同名不同副檔名的圖片，翻譯結果會互相覆蓋；請先移除重複檔：{0}").format(
+                            "、".join(" / ".join(names) for names in duplicates[:5])))
                     selected = job.select_pages(sources)
                     reusable = set(prepared_pages(path, selected)) if phase == "prepare" else set()
                     pending = [p for p in selected if p not in reusable]
