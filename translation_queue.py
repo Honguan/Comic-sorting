@@ -113,14 +113,16 @@ class TranslationQueue:
         self.action_choice = ttk.Combobox(app.enqueue_actions, textvariable=self.action,
             values=tuple(tr(value) for value in ACTIONS.values()), state="readonly", width=8)
         self.action_choice.pack(side="left", fill="x", expand=True, padx=(0, 8))
-        self.range_button = self.button(row, tr("翻譯頁數"), self.edit_page_range)
-        self.range_button.pack_forget()
+        # Menu-only commands; update_controls fills action_states and menus read it when opened.
+        self.actions = {"翻譯頁數": self.edit_page_range}
+        self.action_states = {}
+        self.menu_states = []
         options = ttk.Menubutton(row, text=tr("選項"))
         options.pack(side="right")
         options_menu = tk.Menu(options, tearoff=False)
-        options_menu.add_command(label=tr("翻譯頁數"), command=self.range_button.invoke)
+        self.action_entry(options_menu, "翻譯頁數")
         def sync_options():
-            options_menu.entryconfigure(0, state=self.range_button.cget("state"))
+            self.sync_menu(options_menu)
             options_menu.entryconfigure(2, state="normal" if self.export.get() else "disabled")
         options_menu.configure(postcommand=sync_options)
         for text, variable in (("翻譯成功後匯出 CBZ", self.export),
@@ -133,7 +135,6 @@ class TranslationQueue:
         options.configure(menu=options_menu)
         self.options_menu = options_menu
         self.controls.extend((options, app.add_range_button, app.add_selected_button, app.aggregate_translate_button))
-        self.zoom_button = ttk.Button(row, text=tr("放大佇列"), command=self.toggle_queue_size)
 
         footer = ttk.Frame(box)
         footer.pack(side="bottom", fill="x")
@@ -182,15 +183,12 @@ class TranslationQueue:
         self.selection_details = tk.StringVar()
         details, self.selection_label = details_text(tree_frame, self.selection_details)
         details.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(4, 0))
-        self.clear_selection_button = ttk.Button(search_row, text=tr("取消選取"), command=self.clear_selection)
-        self.clear_selection_button.pack(side="left", padx=(4, 0))
         self.tree.bind("<Configure>", self.fit_columns)
         self.tree.bind("<Double-1>", self.show_details)
         self.tree.bind("<<TreeviewSelect>>", lambda _event: self.update_controls())
         self.search.trace_add("write", lambda *_args: self.filter_jobs())
         copy_paths = bind_table_shortcuts(self.tree, self.selected_paths)
         bind_search_shortcuts(self.search_entry, self.search, self.apply_queue_filter, self.tree)
-        self.menu_states = []
         idle = lambda: "disabled" if self.running or self.app.manga_busy else "normal"
         self.context_menu = tk.Menu(self.tree, tearoff=False)
         self.menu_entry(self.context_menu, tr("移除佇列項目"), lambda: self.remove(confirm=True), idle)
@@ -202,28 +200,23 @@ class TranslationQueue:
         ttk.Label(workflow_row, text=tr("流程")).pack(side="left", padx=(0, 8))
         self.workflow_choice = ttk.Menubutton(workflow_row, textvariable=self.workflow)
         self.workflow_choice.pack(side="left", fill="x", expand=True)
-        self.selection_buttons = {}
-        for text, command in (("移除選取", self.remove), ("上移", lambda: self.move(-1)),
-                              ("下移", lambda: self.move(1)),
-                              ("移到最上", lambda: self.move(-1, to_edge=True)),
-                              ("移到最下", lambda: self.move(1, to_edge=True)), ("重新選取", self.retry),
-                              ("清除已完成", self.clear_completed)):
-            self.selection_buttons[text] = self.button(row, tr(text), command)
-        self.clear_selection_button.pack_forget()
+        self.actions.update({"移除選取": self.remove, "上移": lambda: self.move(-1),
+                             "下移": lambda: self.move(1),
+                             "移到最上": lambda: self.move(-1, to_edge=True),
+                             "移到最下": lambda: self.move(1, to_edge=True), "重試": self.retry,
+                             "清除已完成": self.clear_completed, "取消選取": self.clear_selection})
         self.operations_button = ttk.Menubutton(details_row, text=tr("操作"))
         self.operations_button.pack(side="left")
         self.operations_menu = tk.Menu(self.operations_button, tearoff=False)
-        for button in (*self.selection_buttons.values(), self.clear_selection_button):
-            button.pack_forget()
-            self.mirror(self.operations_menu, button)
+        for label in ("移除選取", "上移", "下移", "移到最上", "移到最下", "重試", "清除已完成", "取消選取"):
+            self.action_entry(self.operations_menu, label)
         self.menu_entry(self.operations_menu, tr("排程啟動"), self.scheduler.show, lambda: "normal")
         self.menu_entry(self.operations_menu, tr("調整範圍與順序…"), lambda: self.start(configure=True), idle)
         self.operations_menu.configure(postcommand=lambda: self.sync_menu(self.operations_menu))
         self.operations_button.configure(menu=self.operations_menu)
 
-        for text in ("重新選取", "上移", "下移", "移到最上", "移到最下"):
-            self.mirror(self.context_menu, self.selection_buttons[text])
-        self.mirror(self.context_menu, self.range_button)
+        for label in ("重試", "上移", "下移", "移到最上", "移到最下", "翻譯頁數"):
+            self.action_entry(self.context_menu, label)
         self.context_menu.add_separator()
         self.context_menu.add_command(label=tr("複製完整路徑"), accelerator="Ctrl+C", command=copy_paths)
         self.start_button = self.button(row, tr("開始執行"), self.start)
@@ -245,7 +238,7 @@ class TranslationQueue:
         self.pause_button.pack(side="left", padx=2)
         self.stop_button = ttk.Button(row, text=tr("停止"), command=self.request_stop, width=0)
         self.stop_button.pack(side="left", padx=2)
-        self.mirror(self.context_menu, self.selection_buttons["清除已完成"])
+        self.action_entry(self.context_menu, "清除已完成")
         self.summary = tk.StringVar()
         self.summary_preview = tk.StringVar()
         summary_label = ttk.Label(footer, textvariable=self.summary_preview, wraplength=650, style="Muted.TLabel")
@@ -259,7 +252,7 @@ class TranslationQueue:
         elapsed_row = ttk.Frame(footer)
         elapsed_row.pack(fill="x", pady=(2, 0))
         details_row.pack(fill="x")
-        progress_grid, self.bt_toggle = self.popup_panel(details_row, tr("各階段進度"), tr("進度"))
+        progress_grid, self.toggle_progress = self.popup_panel(tr("各階段進度"))
         stage_label = ttk.Label(elapsed_row, textvariable=self.label, width=1, wraplength=300)
         stage_label.pack(side="left", fill="x", expand=True, padx=(0, 8))
         stage_label.bind("<Configure>", lambda event: stage_label.configure(wraplength=event.width)
@@ -292,15 +285,14 @@ class TranslationQueue:
         self.jev_window = None
         self.model_window = None
         self.usage_labels = {}
-        usage_grid, self.usage_toggle = self.popup_panel(
-            details_row, tr("本次佇列 LLM 消耗（非實際帳單）"), tr("LLM 用量"))
+        usage_grid, self.toggle_usage = self.popup_panel(tr("本次佇列 LLM 消耗（非實際帳單）"))
         self.elapsed_label = tk.StringVar(value='00:00:00')
         ttk.Label(elapsed_row, text=tr("本次耗時") + "：").pack(side="left")
         ttk.Label(elapsed_row, textvariable=self.elapsed_label).pack(side="left")
         self.jev_elapsed_label = tk.StringVar(value='—')
         self.history_button = ttk.Button(details_row, text=tr("歷史紀錄"), command=self.open_history, width=0)
         self.stats_button = ttk.Button(details_row, text=tr("模型統計"), command=self.open_model_stats, width=0)
-        self.progress_button = ttk.Button(details_row, text=tr("進度"), command=self.bt_toggle.invoke, width=0)
+        self.progress_button = ttk.Button(details_row, text=tr("進度"), command=self.toggle_progress, width=0)
         self.view_button = ttk.Menubutton(details_row, text=tr("檢視"))
         self.navigation_buttons = (self.operations_button, self.history_button, self.stats_button,
                                    self.progress_button, self.view_button)
@@ -308,14 +300,14 @@ class TranslationQueue:
         for button in (*self.footer_buttons, self.operations_button):
             button.pack_forget()
         self.view_menu = tk.Menu(self.view_button, tearoff=False)
-        self.view_menu.add_command(label=tr("LLM 用量"), command=self.usage_toggle.invoke)
+        self.view_menu.add_command(label=tr("LLM 用量"), command=self.toggle_usage)
         self.view_menu.add_command(label=tr("Jev 統計"), command=self.open_jev_stats)
         self.view_menu.add_command(label=tr("佇列摘要"), command=lambda: messagebox.showinfo(
             tr("佇列摘要"), self.summary.get().replace("｜", "\n").replace(" | ", "\n")))
         self.view_menu.add_separator()
-        self.view_menu.add_command(label=self.zoom_button.cget("text"), command=self.zoom_button.invoke)
+        self.view_menu.add_command(label=tr("放大佇列"), command=self.toggle_queue_size)
         self.view_menu.configure(postcommand=lambda: self.view_menu.entryconfigure(
-            "end", label=self.zoom_button.cget("text")))
+            "end", label=tr("放大佇列") if self.queue_restore_ratio is None else tr("還原佇列大小")))
         self.view_button.configure(menu=self.view_menu)
 
         columns = ('scope', 'tokens', 'cost', 'requests', 'pricing', 'reporting')
@@ -353,11 +345,9 @@ class TranslationQueue:
                 self.last_library_ratio = panes.sashpos(0) / max(1, panes.winfo_width())
             self.queue_restore_ratio = self.last_library_ratio or .30
             target = 0
-            self.zoom_button.configure(text=tr("還原佇列大小"))
         else:
             target = round(self.queue_restore_ratio * panes.winfo_width())
             self.queue_restore_ratio = None
-            self.zoom_button.configure(text=tr("放大佇列"))
         self.animate_sash(target)
 
     def finish_sash_layout(self):
@@ -370,7 +360,6 @@ class TranslationQueue:
             self.sash_after = None
         self.sash_velocity = 0.0
         self.queue_restore_ratio = None
-        self.zoom_button.configure(text=tr("放大佇列"))
         self.finish_sash_layout()
 
     def animate_sash(self, target):
@@ -412,8 +401,8 @@ class TranslationQueue:
             self.sash_after = self.app.root.after(delay, step)
         step()
 
-    def popup_panel(self, parent, title, button_title):
-        """Popup content and its toggle; footer buttons and menus invoke the toggle."""
+    def popup_panel(self, title):
+        """Popup content and the function that shows or hides it."""
         popup = tk.Toplevel(self.app.root)
         popup.title(title)
         popup.geometry("1000x380")
@@ -424,15 +413,12 @@ class TranslationQueue:
             if content.winfo_manager():
                 content.pack_forget()
                 popup.withdraw()
-                button.configure(text=f"▶ {button_title}")
             else:
                 content.pack(fill="both", expand=True)
                 popup.deiconify()
                 popup.lift()
-                button.configure(text=f"▼ {button_title}")
-        button = ttk.Button(parent, text=f"▶ {button_title}", command=toggle)
         popup.protocol("WM_DELETE_WINDOW", toggle)
-        return content, button
+        return content, toggle
 
 
 
@@ -531,9 +517,15 @@ class TranslationQueue:
         menu.add_command(label=label, command=command)
         self.menu_states.append((menu, menu.index("end"), state))
 
-    def mirror(self, menu, button):
-        label = tr("重試") if button is self.selection_buttons.get("重新選取") else button.cget("text")
-        self.menu_entry(menu, label, button.invoke, lambda: button.cget("state"))
+    def action_entry(self, menu, label):
+        self.menu_entry(menu, tr(label), lambda: self.run_action(label),
+                        lambda: self.action_states.get(label, "disabled"))
+
+    def run_action(self, label):
+        """Run a menu action only while update_controls allows it."""
+        self.update_controls()
+        if self.action_states.get(label) == "normal":
+            self.actions[label]()
 
     def sync_menu(self, menu):
         for owner, index, state in self.menu_states:
@@ -753,7 +745,6 @@ class TranslationQueue:
         self.start_button.configure(text=tr("繼續佇列") if resumable else
                                     tr(start_text[self.workflow_mode()]),
                                     state="normal" if resumable or (not busy and self.start_targets()) else "disabled")
-        self.clear_selection_button.configure(state="normal" if self.tree.selection() else "disabled")
         self.pause_button.configure(
             state="normal" if self.running and not self.stop.is_set() and not self.pause_requested.is_set()
             and any(j.status in READY for j in self.active_jobs) else "disabled",
@@ -762,20 +753,21 @@ class TranslationQueue:
         self.stop_button.configure(state="normal" if self.running else "disabled")
         selection = self.tree.selection()
         single_translation = len(selection) == 1 and any(str(id(j)) == selection[0] and j.action == "translate" for j in self.jobs)
-        self.range_button.configure(state="normal" if not busy and single_translation else "disabled")
         selected = self.selected_job_ids()
         enabled = {
+            "翻譯頁數": single_translation,
             "移除選取": bool(selected),
-            "重新選取": bool(self.retry_targets()),
+            "重試": bool(self.retry_targets()),
             "清除已完成": any(j.status in ("done", "done_warning") for j in self.jobs),
         }
         for label, direction in (("上移", -1), ("下移", 1)):
             enabled[label] = any(str(id(job)) in selected and 0 <= index + direction < len(self.jobs)
                                  and str(id(self.jobs[index + direction])) not in selected
                                  for index, job in enumerate(self.jobs))
-        for label, button in self.selection_buttons.items():
-            key = {"移到最上": "上移", "移到最下": "下移"}.get(label, label)
-            button.configure(state="normal" if not busy and enabled[key] else "disabled")
+        enabled["移到最上"], enabled["移到最下"] = enabled["上移"], enabled["下移"]
+        self.action_states = {label: "normal" if not busy and value else "disabled" for label, value in enabled.items()}
+        # Deselecting is harmless while the queue runs.
+        self.action_states["取消選取"] = "normal" if selection else "disabled"
 
     def page_range_text(self, job):
         if job.action != "translate":

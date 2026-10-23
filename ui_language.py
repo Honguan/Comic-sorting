@@ -698,7 +698,6 @@ TRANSLATIONS.update({
     "搜尋漫畫名稱／路徑": {"en": "Search manga / path", "ja": "漫画名／パスを検索"},
     "顯示 {0} / {1} 項": {"en": "Showing {0} / {1} jobs", "ja": "{0} / {1} 件を表示"},
     "執行選取項目": {"en": "Run selected", "ja": "選択項目を実行"},
-    "重新選取": {"en": "Requeue", "ja": "再登録"},
     "清除已完成": {"en": "Clear completed", "ja": "完了項目を除去"},
     "工作詳情": {"en": "Job details", "ja": "処理の詳細"},
     "佇列 {0} 項｜等待 {1}｜完成 {2}｜需處理 {3}": {"en": "Queue: {0} | Pending: {1} | Done: {2} | Needs attention: {3}", "ja": "キュー {0} 件｜待機 {1}｜完了 {2}｜要確認 {3}"},

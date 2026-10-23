@@ -397,12 +397,13 @@ class HistoryWindow(tk.Toplevel):
         self.tree.column('#0', width=max(1, remaining), minwidth=1, stretch=False)
         self.tree.xview_moveto(0)
 
-    def refresh(self):
+    def refresh(self, totals=True):
+        """Reload the page; paging skips the all-history totals, which do not depend on the page."""
         query = (self.keyword.get().strip(), self.start.get().strip(), self.end.get().strip())
         offset = self.offset if query == self.query else 0
         try:
             rows = find_runs(self.path, *query, limit=201, offset=offset)
-            totals = history_totals(self.path)
+            totals = history_totals(self.path) if totals else None
         except (OSError, sqlite3.Error, ValueError) as error:
             messagebox.showerror(tr("歷史紀錄讀取失敗"), str(error), parent=self)
             return False
@@ -411,14 +412,8 @@ class HistoryWindow(tk.Toplevel):
         self.previous.configure(state='normal' if self.offset else 'disabled')
         self.next.configure(state='normal' if len(rows) > 200 else 'disabled')
         rows = rows[:200]
-        for key in ('runs', 'jobs'):
-            self.total_counts[key].set(f"{totals[key]:,}")
-        self.total_counts['elapsed'].set(elapsed_text(totals['elapsed_seconds']))
-        self.total_usage.set('LLM ' + usage_text([dict(value, model=None, models=[])
-                                                for value in totals['usage_records']['total']]))
-        self.fill_usage(self.totals, totals['usage_records'])
-        self.jev_totals_table.delete(*self.jev_totals_table.get_children())
-        self.jev_totals_table.insert('', 'end', values=jev_columns(totals['jev_stats']))
+        if totals is not None:
+            self.show_totals(totals)
         selected = self.tree.selection()
         expanded = {item for item in self.records if self.tree.exists(item) and self.tree.item(item, 'open')}
         self.tree.delete(*self.tree.get_children())
@@ -452,10 +447,20 @@ class HistoryWindow(tk.Toplevel):
         self.fit_columns()
         return True
 
+    def show_totals(self, totals):
+        for key in ('runs', 'jobs'):
+            self.total_counts[key].set(f"{totals[key]:,}")
+        self.total_counts['elapsed'].set(elapsed_text(totals['elapsed_seconds']))
+        self.total_usage.set('LLM ' + usage_text([dict(value, model=None, models=[])
+                                                for value in totals['usage_records']['total']]))
+        self.fill_usage(self.totals, totals['usage_records'])
+        self.jev_totals_table.delete(*self.jev_totals_table.get_children())
+        self.jev_totals_table.insert('', 'end', values=jev_columns(totals['jev_stats']))
+
     def change_page(self, direction):
         previous = self.offset
         self.offset = max(0, self.offset + direction * 200)
-        if not self.refresh():
+        if not self.refresh(totals=False):
             self.offset = previous
 
     def load_children(self, item):

@@ -432,8 +432,8 @@ class UIImprovementsTests(unittest.TestCase):
                     window = tk.Toplevel(self.root)
                     window.geometry("820x640")
                     app = comic.FileAggregatorApp(window)
-                    app.translation_queue.bt_toggle.invoke()
-                    app.translation_queue.usage_toggle.invoke()
+                    app.translation_queue.toggle_progress()
+                    app.translation_queue.toggle_usage()
                     for scope in ('OCR ', 'translation ', ''):
                         record = parse_bt_usage(usage_line(scope))
                         app.translation_queue.usage_records[0, record['scope']] = record
