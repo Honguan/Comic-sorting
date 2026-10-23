@@ -689,7 +689,6 @@ TRANSLATIONS.update({
     "無法計數": {"en": "Unable to count", "ja": "計数できません"},
     "複製漫畫名稱": {"en": "Copy manga name", "ja": "漫画名をコピー"},
     "依編號加入佇列": {"en": "Add number range", "ja": "番号範囲を追加"},
-    "依編號加入時請只選擇同一系列": {"en": "Select only one series when adding a number range", "ja": "番号範囲を追加する場合は同じシリーズだけを選択してください"},
     "放大佇列": {"en": "Expand queue", "ja": "キューを拡大"},
     "還原佇列大小": {"en": "Restore queue size", "ja": "キューのサイズを戻す"},
     "搜尋漫畫名稱／路徑": {"en": "Search manga / path", "ja": "漫画名／パスを検索"},

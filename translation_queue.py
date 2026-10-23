@@ -223,7 +223,8 @@ class TranslationQueue:
         self.operations_button.configure(menu=self.operations_menu)
 
         for text in ("重新選取", "上移", "下移", "移到最上", "移到最下"):
-            self.context_menu.add_command(label=tr(text), command=self.selection_buttons[text].invoke)
+            self.context_menu.add_command(label=tr("重試" if text == "重新選取" else text),
+                                          command=self.selection_buttons[text].invoke)
         self.context_menu.add_command(label=tr("翻譯頁數"), command=self.edit_page_range)
         self.context_menu.add_separator()
         self.context_menu.add_command(label=tr("複製完整路徑"), accelerator="Ctrl+C", command=copy_paths)
@@ -749,7 +750,7 @@ class TranslationQueue:
         self.action_choice.configure(state="disabled" if busy else "readonly")
         self.app.manga_choice.configure(state="disabled" if busy else "readonly")
         selection = self.app.folder_tree.selection()
-        self.app.add_range_button.configure(state="normal" if not busy and len(selection) == 1 else "disabled")
+        self.app.add_range_button.configure(state="normal" if not busy and selection else "disabled")
         self.app.add_selected_button.configure(state="normal" if not busy and selection else "disabled")
         self.workflow_choice.configure(state="disabled" if busy else "normal")
         for index in range(len(MODES)):
@@ -1047,8 +1048,9 @@ class TranslationQueue:
             return
         series = {path if kind == "series" else path.parent
                   for kind, path in (self.app.tree_items[item] for item in self.app.folder_tree.selection())}
-        if len(series) != 1:
-            messagebox.showwarning(tr("警告"), tr("依編號加入時請只選擇同一系列"))
+        if len(series) != 1 or self.app.has_explicit_chapter_selection():
+            # A range only applies to one manga; otherwise the selection itself is the request.
+            self.add_paths(self.app.selected_chapters())
             return
         chapters = selected[2]
         try:

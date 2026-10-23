@@ -19,7 +19,7 @@ The EXE includes this tool's dependencies; no separate Python or archive utility
 
 ## Common operations
 
-The Add manga and chapters panel at the top of the main queue is the primary entry point: choose a manga, enter chapter list indices starting at 1, choose translation, export, or cleanup, and click Add to queue. A blank end includes all remaining chapters; adding does not merge or start execution. The left library retains multi-selection, Add selected, and double-clicking chapters. Merging is a secondary tool available from library Tools or queue Options in a separate window that preserves the selection and range when reopened.
+The Add manga and chapters panel at the top of the main queue is the primary entry point: choose a manga, enter chapter list indices starting at 1, choose translation, export, or cleanup, and click Add to queue. A blank end includes all remaining chapters; adding does not merge or start execution. With several chapters or manga selected in the library, Add to queue adds the selection and the range fields (including the merge window) are disabled; Add selected and double-clicking chapters still work. Merging is a secondary tool available from library Tools or queue Options in a separate window that preserves the selection and range when reopened.
 
 The add form wraps in narrow panes. Options contains page ranges, follow-up processing, Add path, and chapter merging. History, Model statistics, and Progress open directly from the footer. Actions manages queue items; View provides LLM usage, Jev statistics, the full summary, and queue expansion/restoration. Common controls wrap when space is limited.
 
@@ -36,7 +36,7 @@ Model statistics show scope, model, tokens, requests, and estimated cost by defa
 | Operation | Behavior |
 |---|---|
 | Merge chapters | Secondary tool: open the merge window from Tools or Options and use chapters or a range in one series. Already merged folders are skipped. |
-| Add to queue | Primary action: choose a manga, action, and chapter range in the main queue, then click Add to queue. Library multi-selection and adding a specific path are also available. |
+| Add to queue | Primary action: one manga uses the chapter range; several selected chapters or manga are added as selected. Add selected and adding a specific path are also available. |
 | Chapter range | Use list indices starting at 1; a blank end includes the remaining chapters. Existing entries with the same path and action are skipped. |
 | Merge and queue | Adds the merged output as a pending translation job. Start it manually. |
 | Start | With a selection: runs pending jobs within the selected chapters or groups. Without a selection: runs all pending jobs in queue order. |

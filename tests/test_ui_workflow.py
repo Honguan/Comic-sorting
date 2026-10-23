@@ -721,6 +721,46 @@ class WorkflowTests(unittest.TestCase):
         self.assertTrue(app.manga_choice.instate(["readonly"]))
         self.assertFalse(app.add_range_button.instate(["disabled"]))
 
+    def test_applied_search_clears_safely_and_primary_add_uses_multi_selection(self):
+        app, q = self.app, self.app.translation_queue
+        base = self.folder / "Comics"
+        paths = []
+        for group in ("A", "B"):
+            for number in (1, 2):
+                path = base / group / "Series" / f"Chapter {number}"
+                path.mkdir(parents=True)
+                (path / "1.png").write_bytes(b"image")
+                paths.append(path)
+        app.base_path.set(str(base))
+        app.apply_scan_data(base, app.scan_folder_data(base))
+        for pick in (lambda: (app.manga_choice.set(str(Path("B/Series"))), app.choose_series()),
+                     lambda: app.select_all_chapters(base / "B" / "Series", base)):
+            app.search_text.set(str(base / "A" / "Series"))
+            app.apply_filter()
+            self.assertIsNone(app.search_after)
+            self.assertEqual(len(app.folder_tree.get_children()), 1)
+            pick()
+            self.assertEqual(app.search_text.get(), "")
+            self.assertEqual(len(app.folder_tree.get_children()), 2)
+        self.assertEqual(app.selected_chapters(), paths[2:])
+        leaves = [item for parent in app.folder_tree.get_children() for item in app.folder_tree.get_children(parent)
+                  if app.tree_items[item][1] in (paths[0], paths[3])]
+        app.folder_tree.selection_set(leaves)
+        app.on_tree_select()
+        for entry in (app.start_entry, app.end_entry, app.aggregate_start_entry, app.aggregate_end_entry):
+            self.assertEqual(str(entry.cget("state")), "disabled")
+        self.assertFalse(app.add_range_button.instate(["disabled"]))
+        app.add_range_button.invoke()
+        self.assertEqual({job.path for job in q.jobs}, {paths[0], paths[3]})
+        app.folder_tree.selection_set(app.folder_tree.get_children())
+        app.on_tree_select()
+        self.assertEqual(str(app.aggregate_start_entry.cget("state")), "normal")
+        with mock.patch("translation_queue.messagebox.showwarning") as warning:
+            app.add_range_button.invoke()
+        warning.assert_not_called()
+        self.assertEqual(sorted(job.path for job in q.jobs), sorted(paths))
+        self.assertEqual(q.context_menu.entrycget(1, "label"), "重試")
+
     def test_merge_is_a_reusable_tool_window_outside_main_tabs(self):
         app, q = self.app, self.app.translation_queue
         self.root.geometry("820x640")

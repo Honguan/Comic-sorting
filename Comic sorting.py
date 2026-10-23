@@ -250,8 +250,6 @@ class FileAggregatorApp:
             return
         if self.search_text.get() or self.search_after is not None:
             self.search_text.set("")
-            self.root.after_cancel(self.search_after)
-            self.search_after = None
             self.apply_filter()
         parent = next(item for item in self.folder_tree.get_children()
                       if self.tree_items[item] == ("series", series))
@@ -502,8 +500,12 @@ class FileAggregatorApp:
         if hasattr(self, "translation_queue"):
             self.translation_queue.update_controls()
         if not busy and self.has_explicit_chapter_selection():
-            self.start_entry.configure(state="disabled")
-            self.end_entry.configure(state="disabled")
+            for entry in self.range_entries():
+                entry.configure(state="disabled")
+
+    def range_entries(self):
+        # The merge window shares the range variables, so both ignore them together.
+        return self.start_entry, self.end_entry, self.aggregate_start_entry, self.aggregate_end_entry
 
     def show_scan_progress(self, mode):
         self.scan_progress.configure(mode=mode, value=0)
@@ -680,7 +682,6 @@ class FileAggregatorApp:
             return
         if self.search_text.get().strip():
             self.search_text.set("")
-            self.root.after_cancel(self.search_after)
             self.apply_filter()
         parent = next((item for item in self.folder_tree.get_children()
                        if self.tree_items[item] == ("series", series)), None)
@@ -811,7 +812,7 @@ class FileAggregatorApp:
             self.translation_queue.update_controls()
         if self.manga_busy:
             return
-        for entry in (self.start_entry, self.end_entry):
+        for entry in self.range_entries():
             entry.configure(state="normal")
         selected = self.selected_tree_item()
         if not selected:
@@ -825,7 +826,8 @@ class FileAggregatorApp:
         for entry, value in ((self.start_entry, start), (self.end_entry, end)):
             entry.delete(0, tk.END)
             entry.insert(0, str(value))
-            if self.has_explicit_chapter_selection():
+        if self.has_explicit_chapter_selection():
+            for entry in self.range_entries():
                 entry.configure(state="disabled")
 
     def confirm_aggregate(self, translate_after=False):

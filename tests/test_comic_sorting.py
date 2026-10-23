@@ -554,6 +554,7 @@ class ComicSortingTests(unittest.TestCase):
         app.selection_text = mock.Mock()
         app.folder_details = mock.Mock()
         app.start_entry, app.end_entry = Entry(), Entry()
+        app.aggregate_start_entry, app.aggregate_end_entry = Entry(), Entry()
         app.current_series = mock.Mock()
         app.series_groups = {series: chapters}
         app.tree_items = {"series": ("series", series), **{
@@ -598,6 +599,7 @@ class ComicSortingTests(unittest.TestCase):
             app.current_series = mock.Mock()
             app.folder_details = mock.Mock()
             app.start_entry, app.end_entry = mock.Mock(), mock.Mock()
+            app.aggregate_start_entry, app.aggregate_end_entry = mock.Mock(), mock.Mock()
             app.manga_choice = mock.Mock()
             app.tree_items = {}
             app.search_text = type("Value", (), {"get": lambda self: ""})()
