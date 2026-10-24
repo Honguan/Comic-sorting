@@ -164,7 +164,9 @@ def history_totals(path):
 def usage_columns(records):
     costs = [Decimal(value['cost']) for value in records if value['cost'] is not None]
     cost = cost_text(sum(costs)) if costs else tr("無法預估")
-    tokens = format_tokens(sum(value['total_tokens'] for value in records)) if records else tr("尚未回報")
+    # Providers such as Codex return no usage; zero tokens from only unreported requests would read as "free".
+    reported = any(value['total_tokens'] or value['requests'] > value['missing_usage_requests'] for value in records)
+    tokens = format_tokens(sum(value['total_tokens'] for value in records)) if reported else tr("尚未回報")
     requests = f"{sum(value['requests'] for value in records):,}" if records else '—'
     partial = any(value['cost'] is None or value['unpriced_requests'] or value.get('cost_incomplete') for value in records)
     pricing = tr("僅含已知金額") if costs and partial else tr("完整") if costs else tr("費用未知") if records else tr("尚未回報")

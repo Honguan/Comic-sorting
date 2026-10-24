@@ -37,12 +37,13 @@ def install_usage(chat, format_usage):
         with output_lock:
             print('COMIC_SORTING_USAGE:' + json.dumps(dict(data, usage=usage), ensure_ascii=True), flush=True)
 
-    def request(owner, profile, api_args):
+    def request(owner, profile, api_args, *args, **kwargs):
+        # Forward extra arguments (e.g. BallonsTranslator's newer codex_turn) so upgrades keep translating.
         previous = getattr(context, 'request', None)
         context.request = dict(scope='OCR' if '.ocr.' in type(owner).__module__ else 'translation',
                                model=str(api_args.get('model', '')), profile_id=str(profile.id), _reported=False)
         try:
-            return original_request(owner, profile, api_args)
+            return original_request(owner, profile, api_args, *args, **kwargs)
         finally:
             if not context.request['_reported']:
                 report(context.request, '')

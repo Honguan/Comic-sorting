@@ -55,6 +55,10 @@ class HistoryStorageTests(unittest.TestCase):
             self.assertTrue(usage_text([record]).startswith(expected + ' tokens'))
             self.assertEqual(record['total_tokens'], tokens)
         self.assertEqual(usage_columns([])[0], '尚未回報')
+        # Codex-style requests that report no usage must not display as 0 tokens.
+        unreported = dict(total_tokens=0, requests=12, cost=None, unpriced_requests=12, missing_usage_requests=12)
+        self.assertEqual(usage_columns([unreported])[0], '尚未回報')
+        self.assertEqual(usage_columns([unreported])[4], '用量不完整')
 
     def test_model_and_jev_tokens_use_compact_units_without_changing_usage(self):
         from unittest.mock import Mock

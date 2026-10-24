@@ -99,10 +99,11 @@ class ModelPricingTests(unittest.TestCase):
             def __init__(self, usage):
                 self.usage = usage
         class Requester:
-            def request_chat_completion(self, profile, api_args):
+            def request_chat_completion(self, profile, api_args, codex_turn=None):
                 if api_args['model'] == 'failed':
                     raise RuntimeError('transport failure')
                 result = Result('prompt=100, completion=20, total=120')
+                result.codex_turn = codex_turn
                 if api_args['model'] == 'limited':
                     raise RuntimeError('output limit')
                 return result
@@ -115,14 +116,17 @@ class ModelPricingTests(unittest.TestCase):
             install_usage(chat, lambda result: result.usage)
             with ThreadPoolExecutor(max_workers=4) as pool:
                 list(pool.map(lambda index: OCR().request_chat_completion(SimpleNamespace(id='ocr'), {'model': f'model-{index}'}), range(12)))
+            # Newer BallonsTranslator passes extra keywords; the wrapper must forward them.
+            turn = Requester().request_chat_completion(SimpleNamespace(id='translator'), {'model': 'turn'}, codex_turn=2)
+            self.assertEqual(turn.codex_turn, 2)
             with self.assertRaises(RuntimeError):
                 Requester().request_chat_completion(SimpleNamespace(id='translator'), {'model': 'limited'})
             with self.assertRaises(RuntimeError):
                 Requester().request_chat_completion(SimpleNamespace(id='translator'), {'model': 'failed'})
         records = [json.loads(line.split(':', 1)[1]) for line in output.getvalue().splitlines()
                    if line.startswith('COMIC_SORTING_USAGE:')]
-        self.assertEqual(len(records), 14)
-        self.assertEqual({record['model'] for record in records}, {f'model-{index}' for index in range(12)} | {'limited', 'failed'})
+        self.assertEqual(len(records), 15)
+        self.assertEqual({record['model'] for record in records}, {f'model-{index}' for index in range(12)} | {'turn', 'limited', 'failed'})
         self.assertTrue(all(record['scope'] == 'OCR' for record in records if record['model'].startswith('model-')))
         self.assertEqual(next(record['scope'] for record in records if record['model'] == 'limited'), 'translation')
         self.assertEqual(next(record['usage'] for record in records if record['model'] == 'failed'), '')

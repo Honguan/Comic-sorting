@@ -2400,6 +2400,28 @@ class WorkflowTests(unittest.TestCase):
         self.assertFalse(q.running)
         self.assertFalse(self.app.manga_busy)
 
+    def test_translation_errors_skip_automatic_export_and_cleanup(self):
+        from queue_worker import run_jobs
+        from ui_language import tr
+        chapter = self.chapter("Chapter 1")
+        (chapter / "1.png").write_bytes(b"source")
+        q = self.app.translation_queue
+        q.add_paths([chapter], "translate")
+        q.active_jobs = tuple(q.jobs)
+        diagnostic = "[ERROR  ] trans_llm:_translate:1385 - LLM translation failed: unexpected keyword"
+        with mock.patch("queue_worker.translator_command", return_value=([], self.folder, None)), \
+                mock.patch("queue_worker.run_translation", return_value=diagnostic), \
+                mock.patch("queue_worker.export_chapter") as export, \
+                mock.patch("queue_worker.clear_work_folders") as cleanup, \
+                mock.patch("translation_queue.os.startfile"):
+            run_jobs(q.active_jobs, dict(bt_path="installed", bt_config="", bt_export=True, bt_cleanup=True),
+                     str(self.folder / "Komga"), True, q.stop, q.events.put)
+            q.poll()
+        export.assert_not_called()
+        cleanup.assert_not_called()
+        self.assertEqual(q.jobs[0].status, "done_warning")
+        self.assertIn(tr("翻譯過程出現錯誤，略過自動匯出與清理；請檢查結果後再手動匯出"), q.jobs[0].error)
+
     def test_completed_anomaly_is_visible_persisted_and_can_be_retried(self):
         from comic_core import load_json
         from queue_worker import run_jobs

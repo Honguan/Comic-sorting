@@ -363,6 +363,7 @@ TRANSLATIONS = {
     '結束頁（空白到最後）': {'en': 'Last page (blank = end)', 'ja': '終了ページ（空欄で最後まで）'},
     '共 {0} 頁；檔名自然排序，含起訖頁': {'en': '{0} pages; natural filename order, endpoints included', 'ja': '全 {0} ページ。ファイル名の自然順、両端を含む'},
     '翻譯頁數必須介於 1 至 {0}，且起始頁不可大於結束頁': {'en': 'Pages must be between 1 and {0}, with first page no greater than last page', 'ja': '1～{0} の範囲で、開始ページが終了ページ以下になるように指定してください'},
+    '翻譯過程出現錯誤，略過自動匯出與清理；請檢查結果後再手動匯出': {'en': 'Errors occurred during translation, so automatic export and cleanup were skipped; check the results, then export manually', 'ja': '翻訳中にエラーが発生したため、自動出力とクリーンアップをスキップしました。結果を確認してから手動で出力してください'},
     '指定頁面已完成；全章結果尚未齊全，略過自動匯出與清理': {'en': 'Selected pages completed; chapter results are incomplete, so automatic export and cleanup were skipped', 'ja': '指定ページは完了しました。章全体の結果が未完了のため、自動出力とクリーンアップをスキップしました'},
     '無法開啟結果位置': {'en': 'Cannot open result location', 'ja': '結果の保存場所を開けません'},
     '未啟用': {'en': 'Disabled', 'ja': '無効'},

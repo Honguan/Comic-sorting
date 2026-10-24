@@ -604,7 +604,12 @@ def translate_job(job, index, path, settings, session, phase, stop, emit, job_id
     if not translations_complete(sources, translated, selected):
         raise RuntimeError(tr("翻譯結果不完整，未執行後續動作"))
     whole_chapter = status == tr("可匯出")
-    if not whole_chapter:
+    if whole_chapter and isinstance(diagnostic, str) and diagnostic:
+        # A failed LLM step still writes inpainted pages, so a full page count does not prove the text is there.
+        whole_chapter = False
+        completion_note = "\n".join(filter(None, (completion_note, tr("翻譯過程出現錯誤，略過自動匯出與清理；請檢查結果後再手動匯出"))))
+        logger.info("[%s] run_warning export_cleanup_skipped", job_id)
+    elif not whole_chapter:
         completion_note = "\n".join(filter(None, (completion_note, tr("指定頁面已完成；全章結果尚未齊全，略過自動匯出與清理"))))
         logger.info("[%s] partial_range_completed export_cleanup_skipped", job_id)
     result_path = translated[0].parent
