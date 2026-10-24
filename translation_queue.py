@@ -197,7 +197,8 @@ class TranslationQueue:
         self.workflow_group = workflow_row = ttk.Frame(row)
         ttk.Label(workflow_row, text=tr("流程")).pack(side="left", padx=(0, 8))
         self.workflow_choice = ttk.Menubutton(workflow_row, textvariable=self.workflow)
-        self.workflow_choice.pack(side="left", fill="x", expand=True)
+        # Natural width keeps the arrow beside the label text so it reads as a menu.
+        self.workflow_choice.pack(side="left", padx=(4, 0))
         self.actions.update({"移除選取": self.remove, "上移": lambda: self.move(-1),
                              "下移": lambda: self.move(1),
                              "移到最上": lambda: self.move(-1, to_edge=True),
