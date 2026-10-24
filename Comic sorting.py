@@ -85,6 +85,8 @@ class FileAggregatorApp:
         self.search_text = tk.StringVar()
         self.scan_data = None
         self.search_after = None
+        self.applied_query = ""
+        self.expanded_series = set()
         self.series_sort = settings.get("series_sort", "updated")
         if self.series_sort not in tuple(SERIES_SORT_FIELDS):
             self.series_sort = "updated"
@@ -581,9 +583,12 @@ class FileAggregatorApp:
         view = self.folder_tree.yview() if self.scan_data and self.scan_data[0] == base else ()
         self.scan_data = (base, data)
         selected_paths = {self.tree_items[item][1] for item in self.folder_tree.selection()}
-        expanded_paths = {self.tree_items[item][1] for item in self.folder_tree.get_children()
-                          if self.folder_tree.item(item, "open")}
+        # A search opens every match, so only remember expansion from an unfiltered tree.
+        if not self.applied_query:
+            self.expanded_series = {self.tree_items[item][1] for item in self.folder_tree.get_children()
+                                    if self.folder_tree.item(item, "open")}
         query = self.search_text.get().strip().casefold()
+        self.applied_query = query
         (self.folders, self.series_groups, self.chapter_updates,
          self.chapter_sizes, self.ready_chapters, details, self.chapter_page_counts) = data
         existing_items = self.folder_tree.get_children()
@@ -599,24 +604,24 @@ class FileAggregatorApp:
                        if not query or query in str(series).casefold() or query in item[1].casefold()}
             if not visible:
                 continue
-            modified = max(self.chapter_updates[Path(item[0])]
-                           for item in self.series_groups[series])
+            chapters = [Path(item[0]) for item in self.series_groups[series]]
+            modified = max(self.chapter_updates[chapter] for chapter in chapters)
             series_name = self.series_name(series)
             parent = self.folder_tree.insert(
-                "", "end", text=f"{series_index}. {series_name}", open=bool(query) or series in expanded_paths,
+                "", "end", text=f"{series_index}. {series_name}", open=bool(query) or series in self.expanded_series,
                 values=("", tr("{0} 單一｜{1} 整合").format(
                             sum(folder_kind(name) == "chapter" for _, name, _ in self.series_groups[series]),
                             sum(folder_kind(name) == "merged" for _, name, _ in self.series_groups[series])),
-                        format_size(sum(self.chapter_sizes[Path(item[0])]
-                                        for item in self.series_groups[series])),
+                        format_size(sum(self.chapter_sizes[chapter] for chapter in chapters)),
                         datetime.fromtimestamp(modified).strftime("%Y-%m-%d %H:%M:%S"),
-                        f"{sum(self.chapter_page_counts[Path(item[0])] for item in self.series_groups[series]):,}"))
+                        f"{sum(self.chapter_page_counts[chapter] for chapter in chapters):,}"))
             self.tree_items[parent] = ("series", series)
             if series in selected_paths:
                 selected_parents.append(parent)
             self.pending_chapters[parent] = (visible, selected_paths)
             self.folder_tree.insert(parent, 'end')
-            if self.folder_tree.item(parent, 'open') or any(Path(path) in selected_paths for path in visible):
+            if self.folder_tree.item(parent, 'open') or any(chapter in selected_paths for chapter in chapters
+                                                            if str(chapter) in visible):
                 self.load_series_children(parent)
         if selected_parents:
             self.folder_tree.selection_add(selected_parents)

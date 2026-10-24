@@ -1380,6 +1380,22 @@ class WorkflowTests(unittest.TestCase):
             self.app.export_manga_names()
             error.assert_called_once()
 
+    def test_clearing_search_restores_expansion_from_before_the_search(self):
+        base = self.folder / "Comics"
+        for name in ("Alpha", "Beta"):
+            folder = base / name / "Chapter 1" / "result"
+            folder.mkdir(parents=True)
+            (folder / "1.png").write_bytes(b"image")
+        app, tree = self.app, self.app.folder_tree
+        app.apply_scan_data(base, app.scan_folder_data(base))
+        opened = {app.tree_items[item][1]: item for item in tree.get_children()}[base / "Alpha"]
+        tree.item(opened, open=True)
+        for query in ("Chapter", ""):
+            app.search_text.set(query)
+            app.apply_filter()
+        self.assertEqual({app.tree_items[item][1] for item in tree.get_children() if tree.item(item, "open")},
+                         {base / "Alpha"})
+
     def test_multi_selection_filter_and_rescan_preserve_scope(self):
         first, second = self.chapter("Chapter 1"), self.chapter("Chapter 2")
         base = self.folder / "Comics"

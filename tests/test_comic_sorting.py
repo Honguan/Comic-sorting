@@ -603,6 +603,7 @@ class ComicSortingTests(unittest.TestCase):
             app.manga_choice = mock.Mock()
             app.tree_items = {}
             app.search_text = type("Value", (), {"get": lambda self: ""})()
+            app.applied_query, app.expanded_series = "", set()
             app.scan_status_text = type("Value", (), {"set": lambda self, value: None})()
 
             app.apply_scan_data(root, app.scan_folder_data(root))
