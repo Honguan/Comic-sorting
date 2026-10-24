@@ -145,15 +145,17 @@ class QueueSchedule:
         for variable in (self.hours, self.minutes, self.date, self.hour, self.minute):
             variable.trace_add('write', lambda *_: self.update_preview())
         self.tabs.bind('<<NotebookTabChanged>>', lambda _: self.update_preview())
-        self.table = ttk.Treeview(window, columns=('time', 'count', 'status'), show='headings', selectmode='extended')
-        for key, title in [('time', '啟動時間'), ('count', '工作數'), ('status', '狀態')]:
-            self.table.heading(key, text=tr(title))
-        self.table.pack(fill='both', expand=True, padx=8, pady=8)
         def remove():
             selected = set(self.table.selection())
             self.entries[:] = [entry for entry in self.entries if str(id(entry)) not in selected]
             self.refresh()
-        ttk.Button(window, text=tr('刪除選取排程'), command=remove).pack(pady=8)
+        # Packed before the expanding table so the table cannot push it out of the window.
+        self.remove_button = ttk.Button(window, text=tr('刪除選取排程'), command=remove)
+        self.remove_button.pack(side='bottom', pady=8)
+        self.table = ttk.Treeview(window, columns=('time', 'count', 'status'), show='headings', selectmode='extended')
+        for key, title in [('time', '啟動時間'), ('count', '工作數'), ('status', '狀態')]:
+            self.table.heading(key, text=tr(title))
+        self.table.pack(fill='both', expand=True, padx=8, pady=(8, 0))
         self.refresh()
 
     def form_value(self):

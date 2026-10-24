@@ -88,6 +88,9 @@ class ScheduleTests(unittest.TestCase):
         self.q.app.root = root
         self.s.show()
         root.update()
+        window, button = self.s.window, self.s.remove_button
+        self.assertTrue(button.winfo_ismapped())
+        self.assertLessEqual(button.winfo_y() + button.winfo_height(), window.winfo_height())
         self.assertEqual(self.s.form_value()[:2], (True, 60))
         self.s.hours.set('2')
         self.s.minutes.set('30')
