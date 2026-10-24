@@ -733,8 +733,9 @@ class TranslationQueue:
         self.action_choice.configure(state="disabled" if busy else "readonly")
         self.app.manga_choice.configure(state="disabled" if busy else "readonly")
         selection = self.app.folder_tree.selection()
-        self.app.add_range_button.configure(state="normal" if not busy and selection else "disabled")
-        self.app.add_selected_button.configure(state="normal" if not busy and selection else "disabled")
+        for button in (self.app.add_range_button, self.app.add_selected_button,
+                       self.app.aggregate_button, self.app.aggregate_translate_button):
+            button.configure(state="normal" if not busy and selection else "disabled")
         self.workflow_choice.configure(state="disabled" if busy else "normal")
         for index in range(len(MODES)):
             self.workflow_menu.entryconfigure(index, state="disabled" if busy else "normal")
@@ -824,13 +825,10 @@ class TranslationQueue:
             self.tree.insert(series, "end", iid=item, text=f"{index}. {job.path.name}", tags=(job.status,),
                              values=(tr(FOLDER_KINDS[folder_kind(job.path.name)]), tr(ACTIONS[job.action]), self.page_range_text(job), tr(STATUSES[job.status]),
                                      error_info(job.status, job.error)[1]))
-            if item in selected:
-                self.tree.selection_add(item)
-            if item == focus:
-                self.tree.focus(item)
-        for item in selected:
-            if self.tree.exists(item):
-                self.tree.selection_add(item)
+        # One call: each selection change queues a <<TreeviewSelect>> that reruns update_controls.
+        restored = [item for item in selected if self.tree.exists(item)]
+        if restored:
+            self.tree.selection_set(restored)
         if focus and self.tree.exists(focus):
             self.tree.focus(focus)
         if view:

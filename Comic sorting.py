@@ -287,8 +287,7 @@ class FileAggregatorApp:
 
         integration = ttk.LabelFrame(self.aggregate_tab, text=tr("章節整合"), padding=12)
         integration.pack(fill="x", padx=8, pady=8)
-        ttk.Label(integration, text=tr("先從漫畫庫選取漫畫或章節。"), wraplength=450).pack(anchor="w")
-        ttk.Label(integration, textvariable=self.current_series).pack(anchor="w", pady=8)
+        ttk.Label(integration, textvariable=self.current_series).pack(anchor="w", pady=(0, 8))
         range_row = ttk.Frame(integration)
         range_row.pack(fill="x")
         ttk.Label(range_row, text=tr("章節序號")).pack(side="left")
@@ -594,6 +593,7 @@ class FileAggregatorApp:
             self.folder_tree.delete(*existing_items)
         self.tree_items = {}
         self.pending_chapters = {}
+        selected_parents = []
         for series_index, series in enumerate(self.series_choices.values(), 1):
             visible = {item[0] for item in self.series_groups[series]
                        if not query or query in str(series).casefold() or query in item[1].casefold()}
@@ -613,11 +613,13 @@ class FileAggregatorApp:
                         f"{sum(self.chapter_page_counts[Path(item[0])] for item in self.series_groups[series]):,}"))
             self.tree_items[parent] = ("series", series)
             if series in selected_paths:
-                self.folder_tree.selection_add(parent)
+                selected_parents.append(parent)
             self.pending_chapters[parent] = (visible, selected_paths)
             self.folder_tree.insert(parent, 'end')
             if self.folder_tree.item(parent, 'open') or any(Path(path) in selected_paths for path in visible):
                 self.load_series_children(parent)
+        if selected_parents:
+            self.folder_tree.selection_add(selected_parents)
         self.scan_status_text.set(tr("{0} 部漫畫 · {1} 個資料夾").format(
             len(self.series_groups), len(self.folders)))
 
@@ -635,6 +637,7 @@ class FileAggregatorApp:
             self.folder_tree.delete(*children)
         series = self.tree_items[parent][1]
         details = self.scan_data[1][5]
+        chosen = []
         for index, (path, name, _number) in enumerate(self.series_groups[series], 1):
             if path not in visible:
                 continue
@@ -646,7 +649,10 @@ class FileAggregatorApp:
                         f'{self.chapter_page_counts[chapter]:,}'))
             self.tree_items[item] = (kind, chapter)
             if chapter in selected:
-                self.folder_tree.selection_add(item)
+                chosen.append(item)
+        # One call: each selection change queues a <<TreeviewSelect>> that reruns on_tree_select.
+        if chosen:
+            self.folder_tree.selection_add(chosen)
 
     def show_folder_context_menu(self, event):
         if self.folder_tree.identify_region(event.x, event.y) not in ("tree", "cell"):

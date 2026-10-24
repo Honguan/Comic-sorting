@@ -29,7 +29,8 @@ class WindowsNotifications:
         ttk.Button(row, text=tr('測試 Windows 通知'), command=lambda: self.show(
             tr('測試通知'), tr('這是 Comic sorting 的 Windows 測試通知。'), 3)).pack(side='left', padx=4)
         self.status = tk.StringVar()
-        ttk.Label(box, textvariable=self.status, wraplength=720).pack(anchor='w')
+        # Beside the test button so an empty status adds no blank row.
+        ttk.Label(row, textvariable=self.status, wraplength=480).pack(side='left', padx=8)
         app.root.bind('<Destroy>', self.close, add='+')
 
     def settings(self):

@@ -720,12 +720,18 @@ class WorkflowTests(unittest.TestCase):
             start.assert_not_called()
         q.running = True
         q.update_controls()
-        for widget in (app.manga_choice, app.add_range_button, app.add_selected_button):
+        for widget in (app.manga_choice, app.add_range_button, app.add_selected_button,
+                       app.aggregate_button, app.aggregate_translate_button):
             self.assertTrue(widget.instate(["disabled"]))
         q.running = False
         q.update_controls()
         self.assertTrue(app.manga_choice.instate(["readonly"]))
         self.assertFalse(app.add_range_button.instate(["disabled"]))
+        self.assertFalse(app.aggregate_button.instate(["disabled"]))
+        app.folder_tree.selection_set(())
+        app.on_tree_select()
+        for widget in (app.add_range_button, app.aggregate_button, app.aggregate_translate_button):
+            self.assertTrue(widget.instate(["disabled"]), str(widget))
 
     def test_applied_search_clears_safely_and_primary_add_uses_multi_selection(self):
         app, q = self.app, self.app.translation_queue
@@ -1149,6 +1155,19 @@ class WorkflowTests(unittest.TestCase):
             self.assertEqual(label.master.grid_info()['row'], 2)
             variable.set('')
             self.assertEqual(label.master.winfo_manager(), '')
+
+    def test_render_restores_selection_with_one_select_event(self):
+        q = self.app.translation_queue
+        q.jobs = [Job(self.chapter(f'Chapter {number}'), 'translate', 'pending') for number in range(1, 6)]
+        q.render()
+        ids = [str(id(job)) for job in q.jobs]
+        q.tree.selection_set(ids)
+        self.root.update()
+        with mock.patch.object(q, 'update_controls') as update:
+            q.render()
+            self.root.update()
+        self.assertEqual(set(q.tree.selection()), set(ids))
+        self.assertLessEqual(update.call_count, 2)
 
     def test_queue_actions_follow_selection_and_running_state(self):
         q = self.app.translation_queue

@@ -61,7 +61,6 @@ TRANSLATIONS = {
     '加入佇列': {'en': 'Add to queue', 'ja': 'キューに追加'},
     '從 1 起算；結束留白到最後': {'en': 'From 1; blank end = last chapter', 'ja': '1から指定。終了が空欄なら最後まで'},
     '請先選擇漫畫': {'en': 'Select a comic first', 'ja': '漫画を選択してください'},
-    '先從漫畫庫選取漫畫或章節。': {'en': 'First select a comic or chapters in the library.', 'ja': 'まずライブラリで漫画または章を選択。'},
     '頁數': {'en': 'Pages', 'ja': 'ページ数'},
     '工具': {'en': 'Tools', 'ja': 'ツール'},
     '清除': {'en': 'Clear', 'ja': 'クリア'},
