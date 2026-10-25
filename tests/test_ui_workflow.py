@@ -2858,6 +2858,36 @@ class WorkflowTests(unittest.TestCase):
         q = self.app.translation_queue
         self.assertFalse(q.bt_bars['OCR'].master.winfo_ismapped())
         self.assertFalse(q.usage_table.master.winfo_ismapped())
+    def test_secondary_actions_add_path_summary_komga_and_ntfy_url(self):
+        import translation_queue
+        q = self.app.translation_queue
+        chapter = self.folder / 'Series' / 'Chapter 1'
+        chapter.mkdir(parents=True)
+        with mock.patch.object(translation_queue.filedialog, 'askdirectory', return_value=''):
+            q.add_directory()
+        self.assertEqual(q.jobs, [])
+        with mock.patch.object(translation_queue.filedialog, 'askdirectory', return_value=str(chapter)):
+            q.add_directory()
+        self.assertEqual([job.path for job in q.jobs], [chapter])
+        index = next(i for i in range(q.view_menu.index('end') + 1)
+                     if q.view_menu.type(i) == 'command' and q.view_menu.entrycget(i, 'label') == '佇列摘要')
+        with mock.patch.object(translation_queue.messagebox, 'showinfo') as info:
+            q.view_menu.invoke(index)
+        self.assertEqual(info.call_args.args[1].splitlines()[0], '佇列 1 項')
+        komga = self.folder / 'Komga'
+        with mock.patch.object(comic.filedialog, 'askdirectory', return_value=str(komga)):
+            self.app.browse_komga()
+        self.assertEqual(comic.load_json(self.settings, {})['komga_path'], str(komga))
+        ntfy = q.notifications
+        ntfy.server.set('https://ntfy.example/ ')
+        ntfy.topic.set('comics')
+        ntfy.copy_url()
+        self.assertEqual(self.root.clipboard_get(), 'https://ntfy.example/comics')
+        ntfy.server.set('not a url')
+        ntfy.copy_url()
+        self.assertTrue(ntfy.status.get().startswith('NTFY_CONFIG'))
+        self.assertEqual(self.root.clipboard_get(), 'https://ntfy.example/comics')
+
     def test_window_size_is_saved_in_96_dpi_pixels(self):
         with mock.patch.object(ui_theme, 'SCALE', 1.25), mock.patch.object(self.root, 'state', return_value='normal'):
             self.assertEqual((ui_theme.px(4), ui_theme.px(4, 0)), (5, (5, 0)))
