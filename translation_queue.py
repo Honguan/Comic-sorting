@@ -42,6 +42,8 @@ class TranslationQueue:
         self.active_jobs = ()
         self.events = queue.Queue()
         self.count_cache = {}
+        # Paths whose scan page count may be stale; the library keeps showing its own scan result.
+        self.recount = set()
         self.count_results = queue.Queue()
         self.counting = False
         self.count_generation = 0
@@ -850,7 +852,8 @@ class TranslationQueue:
             return
         self.counting = True
         generation = self.count_generation
-        totals = dict(getattr(self.app, 'chapter_page_counts', {}))
+        totals = {path: count for path, count in getattr(self.app, 'chapter_page_counts', {}).items() if path not in self.recount}
+        self.recount.difference_update(path for path, _, _ in missing)
         totals.update({path: count for (path, first, last), count in self.count_cache.items()
                        if first == 1 and last is None and count is not None})
         def work():
@@ -997,7 +1000,7 @@ class TranslationQueue:
             self.count_cache = {key: value for key, value in self.count_cache.items() if key[0] != path}
             existing = next((job for job in self.jobs if job.path == path and job.action == action), None)
             if existing:
-                self.app.chapter_page_counts.pop(path, None)
+                self.recount.add(path)
                 existing.status, existing.error = "pending", ""
             else:
                 existing = Job(path, action)
@@ -1139,7 +1142,7 @@ class TranslationQueue:
                         job.status = "prepared"
                 except (OSError, ValueError):
                     pass  # Missing sources or an invalid range remain pending for normal validation.
-            self.app.chapter_page_counts.pop(job.path, None)
+            self.recount.add(job.path)
         self.tree.selection_set(items)
         for item in items:
             parent = self.tree.parent(item)

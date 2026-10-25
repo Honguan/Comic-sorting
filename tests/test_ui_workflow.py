@@ -541,6 +541,22 @@ class WorkflowTests(unittest.TestCase):
         self.wait_counts(q)
         self.assertEqual(sum(q.pending_file_counts.values()), 3)
 
+    def test_readding_a_job_recounts_pages_without_breaking_the_library(self):
+        q = self.app.translation_queue
+        path = self.chapter('Chapter 1')
+        for name in ('1.png', '2.png'):
+            (path / name).touch()
+        base = path.parent.parent
+        self.app.apply_scan_data(base, self.app.scan_folder_data(base))
+        q.add_paths([path], 'translate')
+        self.wait_counts(q)
+        (path / '3.png').touch()
+        q.add_paths([path], 'translate')
+        self.wait_counts(q)
+        self.assertEqual(q.count_cache[path, 1, None], 3)
+        self.app.apply_scan_data(*self.app.scan_data)
+        self.assertEqual(self.app.chapter_page_counts[path], 2)
+
     def test_scan_page_index_shared_with_queue_and_rebuilt(self):
         q = self.app.translation_queue
         path = self.chapter('Chapter 1')
@@ -2887,6 +2903,76 @@ class WorkflowTests(unittest.TestCase):
         ntfy.copy_url()
         self.assertTrue(ntfy.status.get().startswith('NTFY_CONFIG'))
         self.assertEqual(self.root.clipboard_get(), 'https://ntfy.example/comics')
+
+    def test_every_button_and_menu_entry_runs_without_error(self):
+        import subprocess, translation_queue
+        from tkinter import filedialog, messagebox, simpledialog
+        for series in ('Alpha', 'Beta'):
+            for number in (1, 2):
+                chapter = self.folder / 'lib' / series / f'Chapter {number}'
+                chapter.mkdir(parents=True)
+                (chapter / '1.png').write_bytes(b'x')
+        errors = []
+        self.root.report_callback_exception = lambda kind, error, trace: errors.append(''.join(__import__('traceback').format_exception(kind, error, trace)))
+        dialogs = {name: mock.patch.object(messagebox, name, return_value=False)
+                   for name in ('showinfo', 'showwarning', 'showerror', 'askyesno', 'askokcancel', 'askyesnocancel')}
+        # Dialogs answer cancel and nothing external starts; a real run is covered by the worker tests.
+        with (mock.patch.object(filedialog, 'askdirectory', return_value=''),
+              mock.patch.object(filedialog, 'askopenfilename', return_value=''),
+              mock.patch.object(filedialog, 'asksaveasfilename', return_value=''),
+              mock.patch.object(simpledialog, 'askstring', return_value=None),
+              mock.patch.object(tk.Misc, 'wait_window', lambda self, window=None: None),
+              mock.patch.object(tk.Misc, 'grab_set', lambda self: None),
+              mock.patch.object(subprocess, 'Popen'), mock.patch.object(comic.os, 'startfile', create=True),
+              mock.patch.object(translation_queue.TranslationQueue, 'start')):
+            for patch in dialogs.values():
+                patch.start()
+            try:
+                self.app.base_path.set(str(self.folder / 'lib'))
+                self.app.load_folders()
+                deadline = time.monotonic() + 10
+                while time.monotonic() < deadline and (self.app.manga_busy or not self.app.folder_tree.get_children()):
+                    self.root.update()
+                    time.sleep(.02)
+                q = self.app.translation_queue
+                q.add_paths([self.folder / 'lib' / 'Alpha' / 'Chapter 1', self.folder / 'lib' / 'Beta' / 'Chapter 2'], 'translate')
+                for series in self.app.folder_tree.get_children():
+                    self.app.folder_tree.item(series, open=True)
+                    self.app.load_series_children(series)
+                windows = [self.root]
+                for opener in (self.app.open_aggregate, q.open_history, q.open_model_stats, q.open_jev_stats, q.scheduler.show,
+                               lambda: translation_queue.open_pricing(self.root, q.token_rates, self.app.save_settings)):
+                    before = set(self.root.winfo_children())
+                    opener()
+                    self.root.update()
+                    windows += set(self.root.winfo_children()) - before
+
+                def actions(widget):
+                    for child in widget.winfo_children():
+                        if child.winfo_class() in ('TButton', 'TCheckbutton'):
+                            yield child.cget('text'), child.invoke
+                        if isinstance(child, tk.Menu) and child.index('end') is not None:
+                            for index in range(child.index('end') + 1):
+                                if child.type(index) in ('command', 'checkbutton', 'radiobutton'):
+                                    yield child.entrycget(index, 'label'), lambda menu=child, index=index: menu.invoke(index)
+                        yield from actions(child)
+                count = 0
+                for window in windows:
+                    for label, invoke in list(actions(window)):
+                        chapters = [item for item, (kind, _) in self.app.tree_items.items() if kind != 'series']
+                        if chapters:
+                            self.app.folder_tree.selection_set(chapters[:2])
+                        if q.tree.get_children():
+                            q.tree.selection_set(q.tree.get_children()[:1])
+                        self.root.update()
+                        invoke()
+                        self.root.update()
+                        count += 1
+                        self.assertEqual(errors, [], label)
+            finally:
+                for patch in dialogs.values():
+                    patch.stop()
+        self.assertGreater(count, 80)
 
     def test_window_size_is_saved_in_96_dpi_pixels(self):
         with mock.patch.object(ui_theme, 'SCALE', 1.25), mock.patch.object(self.root, 'state', return_value='normal'):
