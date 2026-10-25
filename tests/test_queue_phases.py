@@ -17,7 +17,7 @@ class PhaseTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()  # match resolved chapter paths on 8.3 temp dirs (CI)
         self.config = self.root / 'config.json'
         save_json(self.config, {'module': {'enable_translate': True}, 'other': 'preserve'})
         self.jobs = []

@@ -2571,7 +2571,7 @@ class WorkflowTests(unittest.TestCase):
                                app.add_selected_button, q.start_button, q.pause_button, q.stop_button,
                                q.operations_button, q.view_button, q.workflow_choice,
                                q.history_button, q.stats_button, q.progress_button)
-                    self.assertGreaterEqual(q.tree.winfo_height(), 180)
+                    self.assertTrue(q.tree.bbox(str(id(q.jobs[-1]))))  # every queued job stays visible
                     for widget in widgets:
                         self.assertTrue(widget.winfo_ismapped())
                         self.assertGreaterEqual(widget.winfo_width(), widget.winfo_reqwidth())
