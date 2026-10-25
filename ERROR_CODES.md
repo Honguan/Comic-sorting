@@ -53,6 +53,7 @@
 | `JSON_INVALID` | 設定檔或專案 JSON 無法讀取 |
 | `MANGA_MISSING` | 漫畫資料夾不存在 |
 | `NO_IMAGES` | 資料夾內沒有可處理的圖片 |
+| `SOURCE_DUPLICATE` | 來源有同名不同副檔名的圖片（如 `01.jpg` 與 `01.png`）；翻譯前即停止，請刪除重複檔後重試 |
 | `PAGE_RANGE` | 翻譯頁數範圍無效或頁面已不存在 |
 | `NO_STAGE` | 未啟用任何處理階段 |
 | `RESULT_INCOMPLETE` | 翻譯結果不完整，已略過後續動作 |

@@ -7,6 +7,7 @@ import win32gui
 
 from app_logging import logger
 from ui_language import tr
+from ui_theme import px
 
 
 class WindowsNotifications:
@@ -16,20 +17,21 @@ class WindowsNotifications:
         self.saved = {key: settings.get('windows_notify_' + key, key != 'success') is True
                       for key in ('enabled', 'done', 'failed', 'success')}
         self.fields = {key: tk.BooleanVar(value=value) for key, value in self.saved.items()}
-        box = ttk.LabelFrame(parent, text=tr('Windows 桌面通知'), padding=8)
-        box.pack(fill='x', padx=8, pady=8)
+        box = ttk.LabelFrame(parent, text=tr('Windows 桌面通知'), padding=px(8))
+        box.pack(fill='x', padx=px(8), pady=px(8))
         row = ttk.Frame(box)
         row.pack(fill='x')
         for key, label in (('enabled', '啟用通知'), ('done', '整批結束'),
                            ('failed', '單項失敗／異常'), ('success', '單項成功')):
-            ttk.Checkbutton(row, text=tr(label), variable=self.fields[key]).pack(side='left', padx=(0, 12))
+            # No validation is needed, so toggles apply immediately like other local settings.
+            ttk.Checkbutton(row, text=tr(label), variable=self.fields[key], command=self.save).pack(side='left', padx=px(0, 12))
         row = ttk.Frame(box)
-        row.pack(fill='x', pady=4)
-        ttk.Button(row, text=tr('儲存通知設定'), command=self.save).pack(side='left')
+        row.pack(fill='x', pady=px(4))
         ttk.Button(row, text=tr('測試 Windows 通知'), command=lambda: self.show(
-            tr('測試通知'), tr('這是 Comic sorting 的 Windows 測試通知。'), 3)).pack(side='left', padx=4)
+            tr('測試通知'), tr('這是 Comic sorting 的 Windows 測試通知。'), 3)).pack(side='left', padx=px(4))
         self.status = tk.StringVar()
-        ttk.Label(box, textvariable=self.status, wraplength=720).pack(anchor='w')
+        # Beside the test button so an empty status adds no blank row.
+        ttk.Label(row, textvariable=self.status, wraplength=px(480)).pack(side='left', padx=px(8))
         app.root.bind('<Destroy>', self.close, add='+')
 
     def settings(self):

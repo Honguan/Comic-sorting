@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from datetime import datetime
 import os
+import json
+import math
 from pathlib import Path
 import re
 import subprocess
@@ -15,10 +17,12 @@ import uuid
 
 from app_logging import logger, log_path, redact
 
-from comic_core import (clear_work_folders, export_chapter, image_files,
+from comic_core import (clear_work_folders, duplicate_stems, export_chapter, image_files,
                         load_json, save_json, translation_status, translations_complete)
 from ui_language import tr
 from queue_errors import error_info
+from queue_stats import merge_snapshots, model_usage
+from model_pricing import DEFAULT_RATES as BT_TOKEN_RATES, effective_rates, get_price
 
 
 BT_STAGES = {"Text Detection": "enable_detect", "OCR": "enable_ocr",
@@ -26,7 +30,7 @@ BT_STAGES = {"Text Detection": "enable_detect", "OCR": "enable_ocr",
 
 
 def parse_bt_usage(line):
-    match = re.search(r"\[INFO\s*\]\s+module_manager:_finish_llm_usage_run:\d+ - LLM (?:(OCR|translation) )?run usage: (.*)", line)
+    match = re.search(r"\[INFO\s*\]\s+module_manager:_finish_llm_usage_run:\d+ - LLM (?:(OCR|translation|Jev) )?run usage: (.*)", line)
     if not match:
         return None
     fields = dict(part.split('=', 1) for part in match[2].split(', ') if '=' in part)
@@ -43,6 +47,102 @@ def parse_bt_usage(line):
         return None
     return dict(scope=match[1] or 'total', cost=cost, price_basis=fields.get('price_basis'),
                 rates_date=fields.get('rates_date'), **counts)
+
+
+def estimate_bt_cost(counts, model, price=None):
+    price = price or get_price(model or '')
+    if price is None:
+        return None
+    if not all(key in counts for key in ('prompt', 'completion')):
+        return Decimal(0) if price.get('source') == 'local' else None
+    prompt, output = counts['prompt'], counts['completion']
+    hit, write = counts.get('cache_hit', 0), counts.get('cache_write', 0)
+    rates = effective_rates(price, prompt)
+    if (hit + write > prompt or (hit and rates[1] is None) or (write and rates[2] is None)
+            or counts.get('total', prompt + output) != prompt + output):
+        return None
+    input_rate, hit_rate, write_rate, output_rate = (rate or Decimal(0) for rate in rates)
+    return ((prompt - hit - write) * input_rate + hit * hit_rate +
+            write * write_rate + output * output_rate) / 1_000_000
+
+
+
+
+def parse_bt_request_usage(line, model=None, price=None):
+    """Read per-response usage and estimate Standard API equivalent cost."""
+    match = re.search(r"\[(?:DEBUG|INFO)\s*\]\s+(ocr_llm|trans_llm|llm_chat):\w+:\d+ - (.*)", line)
+    if not match:
+        return None
+    module, message = match.groups()
+    scope = 'OCR' if module == 'ocr_llm' else 'translation'
+    counts = {}
+    used = re.fullmatch(r"Used (\d+) tokens \(Total: \d+\)", message)
+    if used and module in ('ocr_llm', 'trans_llm'):
+        total = int(used[1])
+    elif message.startswith(('LLM token usage: ', 'LLM output-limited response: ')):
+        # Output-limit diagnostics can also contain arbitrary response text.
+        details = message.split(': ', 1)[1].split(', content=', 1)[0]
+        try:
+            counts = {key: int(value) for key, value in
+                      re.findall(r"(?:^|, )(prompt|completion|total|cache_hit|cache_write)=([^, ]+)", details)}
+            if any(value < 0 for value in counts.values()):
+                return None
+        except ValueError:
+            return None
+        total = counts.get('total')
+        if total is None and 'prompt' in counts and 'completion' in counts:
+            total = counts['prompt'] + counts['completion']
+    else:
+        return None
+    price = price or get_price(model or '')
+    cost = estimate_bt_cost(counts, model, price)
+    record = dict(scope=scope, requests=1, total_tokens=total if total is not None else 0,
+                  missing_usage_requests=int(total is None), unpriced_requests=int(cost is None),
+                  cost=cost, model=model, models=[model] if model else [],
+                  **{key: value for key, value in counts.items() if key != 'total'})
+    if cost is not None:
+        record.update(rates_date=price['date'],
+                      price_basis='Self-estimated ' + price['source'] + ' (not a bill; unreported cache=0)',
+                      price_source=price.get('url'),
+                      model_rates={model: [str(rate) if rate is not None else None
+                                           for rate in effective_rates(price, counts.get('prompt', 0))]})
+    record['by_model'] = model_usage(record)
+    return record
+
+
+def parse_jev_stats(line):
+    marker = ' - Jev OCR filter audit: '
+    if marker not in line:
+        return None
+    try:
+        data = json.loads(line.split(marker, 1)[1])
+        if data.get('event') != 'finished' or not isinstance(data.get('audit_id'), str):
+            return None
+        blocks, usage = data['blocks'], data['usage']
+        counts = dict(calls=1, changed_calls=int(any(b['action'] != 'kept' for b in blocks)),
+                      cleared_blocks=sum(b['action'] == 'cleared' for b in blocks),
+                      trimmed_blocks=sum(b['action'] == 'trimmed' for b in blocks),
+                      kept_blocks=sum(b['action'] == 'kept' for b in blocks),
+                      removed_characters=sum(b['removed_characters'] for b in blocks),
+                      requests=usage['requests'])
+        if 'input_tokens' in usage:
+            counts.update(input_tokens=usage['input_tokens'], reported_input_requests=usage['reported_input_requests'],
+                          missing_input_usage_requests=usage['requests'] - usage['reported_input_requests'])
+        else:
+            counts.update(reported_requests=usage['reported_requests'], total_tokens=usage['total_tokens'])
+        if any(key in usage for key in ('cost_nano_usd', 'reported_cost_requests', 'estimated_cost_requests')):
+            for key in ('cost_nano_usd', 'reported_cost_requests', 'estimated_cost_requests'):
+                counts[key] = usage.get(key, 0)
+            counts['unpriced_requests'] = counts['requests'] - counts['reported_cost_requests'] - counts['estimated_cost_requests']
+        seconds = data.get('elapsed_seconds')
+        if (any(type(v) is not int or v < 0 for v in counts.values())
+                or counts.get('reported_requests', counts.get('reported_input_requests', 0)) > counts['requests']
+                or any(b['action'] not in ('cleared', 'trimmed', 'kept') for b in blocks)
+                or (seconds is not None and (type(seconds) not in (int, float) or not math.isfinite(seconds) or seconds < 0))):
+            return None
+        return dict(audit_id=data['audit_id'], elapsed_seconds=seconds, **counts)
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return None
 
 
 def parse_bt_progress(line):
@@ -114,90 +214,240 @@ def translator_command(installation, config, python_path="", chapter=None, page_
     return command, root, env
 
 
-def run_translation(command, root, env, stop, progress, log_context="", usage=None, timing=None):
+class TranslationSession:
+    """Own one translator process and its descendants for a batch."""
+    def __init__(self, stop):
+        self.stop = stop
+        self.process = None
+        self.process_job = None
+        self.watcher = None
+        self.finished = threading.Event()
+        self.fatal = threading.Event()
+
+    def open(self, command, root, env, request, log_context):
+        if self.stop.is_set():
+            raise RuntimeError(tr("已停止"))
+        if self.process is not None and self.process.poll() is None:
+            self.process.stdin.write(json.dumps(request, ensure_ascii=False) + "\n")
+            self.process.stdin.flush()
+            logger.info("[%s] translator_reuse pid=%s", log_context, self.process.pid)
+            return self.process
+        self.close()
+        self.finished.clear()
+        self.fatal.clear()
+        logger.info("[%s] translator_start command=%s cwd=%s", log_context, subprocess.list2cmdline(command), root)
+        process = self.process = subprocess.Popen(
+            command, cwd=root, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        logger.info("[%s] translator_pid=%s", log_context, process.pid)
+        try:
+            if os.name == "nt":
+                import win32api
+                import win32con
+                import win32job
+                self.process_job = win32job.CreateJobObject(None, "")
+                limits = win32job.QueryInformationJobObject(self.process_job, win32job.JobObjectExtendedLimitInformation)
+                limits['BasicLimitInformation']['LimitFlags'] |= win32job.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+                win32job.SetInformationJobObject(self.process_job, win32job.JobObjectExtendedLimitInformation, limits)
+                handle = win32api.OpenProcess(win32con.PROCESS_SET_QUOTA | win32con.PROCESS_TERMINATE, False, process.pid)
+                try:
+                    win32job.AssignProcessToJobObject(self.process_job, handle)
+                finally:
+                    handle.Close()
+            self.watcher = threading.Thread(target=self.watch, daemon=True)
+            self.watcher.start()
+        except BaseException:
+            self.close()
+            raise
+        return process
+
+    def terminate(self):
+        process = self.process
+        if process is None:
+            return
+        try:
+            if self.process_job is not None:
+                import win32job
+                win32job.TerminateJobObject(self.process_job, 1)
+            elif process.poll() is None:
+                process.terminate()
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+        except OSError:
+            pass  # The child can exit between poll and terminate.
+
+    def watch(self):
+        while not self.finished.wait(.2):
+            if self.stop.is_set() or self.fatal.is_set() or self.process.poll() is not None:
+                self.terminate()
+                return
+
+    def close(self, graceful=False):
+        if self.process is None:
+            return
+        try:
+            if graceful and not self.stop.is_set() and self.process.poll() is None:
+                try:
+                    self.process.stdin.write("exit\n")
+                    self.process.stdin.flush()
+                    self.process.wait(timeout=5)
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
+        finally:
+            self.finished.set()
+            self.terminate()
+            if self.watcher is not None:
+                self.watcher.join()
+                self.watcher = None
+            try:
+                self.process.stdin.close()
+            except OSError:
+                pass  # The child may already have closed its input pipe.
+            self.process.stdout.close()
+            if self.process_job is not None:
+                self.process_job.Close()
+                self.process_job = None
+            self.process = None
+
+
+def run_translation(command, root, env, stop, progress, log_context="", usage=None, timing=None, *, session=None, request=None, jev=None, retry=None, pricing=None, usage_context=None, on_prepared=None):
     completed = False
+    native_completed = None
     failures = deque(maxlen=5)
     fatal_count = 0
     retries = 0
     recent = deque(maxlen=20)
     stages = {}
+    jev_seen, jev_totals = set(), {}
+    usage_records, summary_scopes = {}, set()
+    usage_models = {scope: value.get('model') for scope, value in (usage_context or {}).items()}
+    bridge_usage = False
+    request_usage_seen = False
     ansi = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\))")
-    logger.info("[%s] translator_start command=%s cwd=%s", log_context, subprocess.list2cmdline(command), root)
-    process = subprocess.Popen(command, cwd=root, env=env, stdin=subprocess.PIPE,
-                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                               text=True, encoding="utf-8", errors="replace",
-                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    logger.info("[%s] translator_pid=%s", log_context, process.pid)
-    process_job = None
-    if os.name == "nt":
-        import win32api
-        import win32con
-        import win32job
-        try:
-            process_job = win32job.CreateJobObject(None, "")
-            limits = win32job.QueryInformationJobObject(process_job, win32job.JobObjectExtendedLimitInformation)
-            limits['BasicLimitInformation']['LimitFlags'] |= win32job.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-            win32job.SetInformationJobObject(process_job, win32job.JobObjectExtendedLimitInformation, limits)
-            handle = win32api.OpenProcess(win32con.PROCESS_SET_QUOTA | win32con.PROCESS_TERMINATE, False, process.pid)
-            try:
-                win32job.AssignProcessToJobObject(process_job, handle)
-            finally:
-                handle.Close()
-        except Exception:
-            process.kill()
-            process.wait()
-            process.stdin.close()
-            process.stdout.close()
-            if process_job is not None:
-                process_job.Close()
-            raise
-    finished = threading.Event()
-    fatal = threading.Event()
-
-    def cancel():
-        while not finished.wait(.2):
-            if stop.is_set() or fatal.is_set() or process.poll() is not None:
-                try:
-                    if process_job is not None:
-                        win32job.TerminateJobObject(process_job, 1)
-                    elif process.poll() is None:
-                        process.terminate()
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                except OSError:
-                    pass  # The process may exit between poll() and terminate().
-                return
-
-    watcher = threading.Thread(target=cancel, daemon=True)
-    watcher.start()
+    owned = session is None
+    session = session or TranslationSession(stop)
     try:
-        try:
-            process.stdin.write("exit\n")
-            process.stdin.flush()
-        except (BrokenPipeError, OSError):
-            pass  # Read startup diagnostics even if the child already exited.
+        process = session.open(command, root, env, request, log_context)
+        if owned:
+            try:
+                process.stdin.write("exit\n")
+                process.stdin.flush()
+            except (BrokenPipeError, OSError):
+                pass  # Read startup diagnostics even if the child already exited.
+        boundary = False
         for line in process.stdout:
             line = redact(ansi.sub("", line).rstrip())
+            if request is not None:
+                for state in (0, 1):
+                    if line == f"COMIC_SORTING_FINISHED:{request['token']}:{state}":
+                        native_completed = bool(state)
+            if request is not None and line == "COMIC_SORTING_DONE:" + request["token"]:
+                boundary = True
+                break
+            if on_prepared is not None and not fatal_count and line.startswith('COMIC_SORTING_PREPARED:'):
+                record = json.loads(line.removeprefix('COMIC_SORTING_PREPARED:'))
+                if record.get('token') == request['token']:
+                    on_prepared(record['page'])
             if line:
                 logger.info("[%s] BT %s", log_context, line)
             recent.append(line)
+            if 'COMIC_SORTING_USAGE_READY' in line:
+                bridge_usage = True
+            model_info = re.search(r"\[INFO\s*\]\s+(?:module_manager|trans_llm|ocr_llm):\w+:\d+ - LLM (translation|OCR) run: .*?model='([^']+)'", line)
+            if model_info:
+                usage_models[model_info[1]] = model_info[2]
             consumption = parse_bt_usage(line)
+            if consumption is not None:
+                summary_scopes.add(consumption['scope'])
+                previous = usage_records.get(consumption['scope'], {})
+                for key in ('model', 'models', 'model_rates'):
+                    if key in previous:
+                        consumption[key] = previous[key]
+                matches = all(previous.get(key) == consumption[key] for key in
+                              ('requests', 'total_tokens', 'missing_usage_requests'))
+                if consumption['cost'] is None and previous.get('cost') is not None and matches:
+                    consumption = dict(previous)
+                elif previous.get('by_model') and previous.get('cost') == consumption['cost'] and matches:
+                    consumption['by_model'] = previous['by_model']
+                if 'by_model' not in consumption:
+                    consumption['by_model'] = model_usage(consumption)
+            else:
+                response_usage = None if bridge_usage else parse_bt_request_usage(line)
+                marker = 'COMIC_SORTING_USAGE:'
+                metadata = {}
+                if marker in line:
+                    try:
+                        metadata, _ = json.JSONDecoder().raw_decode(line.split(marker, 1)[1])
+                        if metadata['scope'] not in ('OCR', 'translation') or not isinstance(metadata['model'], str) or not isinstance(metadata['usage'], str):
+                            raise ValueError('Invalid usage metadata')
+                        bridge_usage = True  # Persistent sessions emit READY only at startup.
+                        module = 'ocr_llm' if metadata['scope'] == 'OCR' else 'trans_llm'
+                        line_usage = f"[INFO] {module}:bridge:0 - LLM token usage: {metadata['usage']}"
+                        response_usage = parse_bt_request_usage(line_usage)
+                    except (ValueError, KeyError, TypeError):
+                        response_usage = None
+                if response_usage is not None and response_usage['scope'] not in summary_scopes:
+                    scope = response_usage['scope']
+                    model = metadata.get('model') or usage_models.get(scope)
+                    context = (usage_context or {}).get(scope, {})
+                    price = get_price(model or '', pricing, local=context.get('local', False), catalog=pricing is not None)
+                    response_usage = parse_bt_request_usage(line_usage if metadata else line, model, price)
+                    response_usage['profile_id'] = metadata.get('profile_id') or context.get('profile_id')
+                    request_usage_seen = True
+                    previous = usage_records.get(response_usage['scope'], {})
+                    consumption = merge_snapshots((previous, response_usage))
+                    if consumption['cost'] is not None:
+                        consumption['cost'] = Decimal(consumption['cost'])
             if consumption is not None and usage is not None:
+                usage_records[consumption['scope']] = consumption
                 usage(consumption)
+                if (request_usage_seen and consumption['scope'] in ('OCR', 'translation')
+                        and 'total' not in summary_scopes):
+                    # Phase/job snapshots replace earlier snapshots; Jev stays separate.
+                    records = [usage_records[scope] for scope in ('OCR', 'translation') if scope in usage_records]
+                    total = dict(merge_snapshots(records), scope='total')
+                    if total['cost'] is not None:
+                        total['cost'] = Decimal(total['cost'])
+                    usage_records['total'] = total
+                    usage(total)
+            stats = parse_jev_stats(line)
+            if stats is not None and stats['audit_id'] not in jev_seen:
+                jev_seen.add(stats.pop('audit_id'))
+                for key, value in stats.items():
+                    if value is not None:
+                        jev_totals[key] = jev_totals.get(key, 0) + value
+                if jev is not None:
+                    jev(dict(jev_totals))
+                if usage is not None and 'total_tokens' in jev_totals:
+                    usage(dict(scope='Jev', cost=None, requests=jev_totals['requests'],
+                               total_tokens=jev_totals['total_tokens'],
+                               missing_usage_requests=jev_totals['requests'] - jev_totals['reported_requests'],
+                               unpriced_requests=jev_totals['requests']))
             completed |= "finished translating all dirs" in line
             record = re.search(r"\[(?:ERROR|WARNING|INFO|DEBUG)\s*\]\s+\w+:\w+:\d+ - ", line)
             diagnostic = line[record.start():] if record else line
+            # setup_logging catches locked/missing old-log deletion and continues startup.
+            if re.fullmatch(r"\[ERROR\s*\]\s+logger:setup_logging:\d+ - \[WinError (?:2|32)\] .*: "
+                            r"(['\"])[^\r\n]+\.log\1", diagnostic):
+                pass
             # This diagnostic is emitted BEFORE the translator's built-in retry.
             # Exhausted retries still emit a separate fatal error and traceback.
-            if re.match(r"\[ERROR\s*\]\s+trans_llm:_translate:\d+ - Failed to parse matching translation count for prompt:", diagnostic):
+            elif re.match(r"\[ERROR\s*\]\s+trans_llm:_translate:\d+ - Failed to parse matching translation count for prompt:", diagnostic):
                 retries += 1
             elif (re.match(r"(?:\[ERROR\s*\]|ERROR\b|Traceback \(most recent call last\))", diagnostic)
                   or re.search(r"module_manager:.* - Image translation pipeline stopped", diagnostic)):
                 fatal_count += 1
                 failures.append(line)
                 if "Image translation pipeline stopped" in diagnostic:
-                    fatal.set()
+                    session.fatal.set()
+            if retry is not None and re.search(
+                    r"(?:llm_chat:request_chat_completion:\d+ - Codex retryable failure:|"
+                    r"trans_llm:_translate:\d+ - (?:LLM translation failed.*Attempt:|"
+                    r"Codex timeout rescue:.*retrying translation once\.))", diagnostic):
+                retry()
             stage_progress = parse_bt_progress(line)
             if stage_progress:
                 stages[stage_progress[0]] = stage_progress[1]
@@ -210,15 +460,21 @@ def run_translation(command, root, env, stop, progress, log_context="", usage=No
                         for part in parts:
                             seconds = seconds * 60 + part
                         timing(stage_progress[0], seconds)
-        code = process.wait()
-        logger.info("[%s] translator_exit=%s completed=%s fatal_errors=%s retry_diagnostics=%s stopped=%s",
-                    log_context, code, completed, fatal_count, retries, stop.is_set())
+        code = 0 if boundary else process.wait()
+        logger.info("[%s] translator_%s=%s completed=%s fatal_errors=%s retry_diagnostics=%s stopped=%s",
+                    log_context, "boundary" if boundary else "exit", code, completed, fatal_count, retries, stop.is_set())
         if stop.is_set():
             raise RuntimeError(tr("已停止；未執行此項目的後續動作"))
-        if fatal.is_set():
+        if session.fatal.is_set():
             raise RuntimeError("\n".join(failures) + tr("；紀錄：{0}").format(log_path()))
-        if code or not completed or failures or any(value < 100 for value in stages.values()):
-            finished_with_anomalies = completed and stages and all(value == 100 for value in stages.values())
+        # Native counters are authoritative; tqdm can omit even its final translation refresh.
+        # Keep the progress fallback for older bridges without a native completion record.
+        pipeline_complete = native_completed if native_completed is not None else stages.get("Translation", 100) == 100
+        if request is not None and request.get("phase") and native_completed is not True:
+            pipeline_complete = False
+        if code or not completed or (request is not None and not boundary) or failures or not pipeline_complete:
+            finished_with_anomalies = (completed and (native_completed is True or stages) and pipeline_complete
+                                       and (request is None or boundary))
             detail = (tr("流程已完成但發現異常（exit={0}）") if finished_with_anomalies else
                       tr("BallonsTranslator 未成功完成（exit={0}）；請查看其 logs")).format(code)
             detail += tr("；紀錄：{0}").format(log_path())
@@ -231,29 +487,179 @@ def run_translation(command, root, env, stop, progress, log_context="", usage=No
                 logger.warning("[%s] completed_with_anomalies %s", log_context, detail)
                 return detail
             raise RuntimeError(detail)
+    except BaseException:
+        session.close()
+        raise
     finally:
-        finished.set()
-        try:
-            if process.poll() is None:
-                process.terminate()
-                try:
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait()
-        finally:
-            try:
-                process.stdin.close()
-            except OSError:
-                pass
-            process.stdout.close()
-            watcher.join()
-            if process_job is not None:
-                process_job.Close()
+        if owned:
+            session.close()
 
 
-def run_jobs(jobs, settings, output, skip, stop, emit, *, pause=None, checkpoint=None, blocked_jobs=()):
+def translate_job(job, index, path, settings, session, phase, stop, emit, job_id):
+    """Run one translation or preprocessing pass.
+
+    Returns None after emitting a terminal prepared/skipped status, otherwise
+    (whole_chapter, completion_note, diagnostic, result_path) for the follow-up steps.
+    """
+    from queue_phases import prepared, prepared_pages, mark_prepared, invalidate_prepared, signature, page_record
+    completion_note = ""
+    sources = image_files(path)
+    if not sources:
+        raise ValueError(tr("指定路徑沒有圖片，請選擇章節或整合輸出"))
+    # Fail before starting the translator: colliding outputs only surface after paid work.
+    duplicates = duplicate_stems(sources)
+    if duplicates:
+        raise ValueError(tr("來源有同名不同副檔名的圖片，翻譯結果會互相覆蓋；請先移除重複檔：{0}").format(
+            "、".join(" / ".join(names) for names in duplicates[:5])))
+    selected = job.select_pages(sources)
+    reusable = set(prepared_pages(path, selected)) if phase == "prepare" else set()
+    pending = [p for p in selected if p not in reusable]
+    ready = not pending if phase == "prepare" else prepared(path, selected) if phase else False
+    if phase == "prepare" and reusable:
+        logger.info("[%s] preprocessing_resume reused=%s pending=%s", job_id, len(reusable), len(pending))
+    if (phase == "prepare" and ready) or (phase == "translate" and not ready):
+        note = "" if ready else tr("尚未完成前處理，或來源／前處理成果已變更；請先跑前處理")
+        emit(("status", index, "prepared" if ready else "skipped", note))
+        return None
+    module = load_json(settings["bt_config"], {}, strict=True).get("module", {})
+    profiles = {profile.get('id'): profile for profile in module.get('llm_profiles', [])}
+    usage_context = {}
+    for scope, key, vision in (('OCR', 'ocr_llm_id', True),
+                                ('translation', 'translator_llm_id', module.get('llm_translate_vision', False))):
+        profile = profiles.get(module.get(key), {})
+        usage_context[scope] = dict(model=(profile.get('vision_model') if vision else '') or profile.get('model'),
+                                    profile_id=profile.get('id'), local=profile.get('id') in ('ollama', 'lmstudio'))
+    enabled = {name: module.get(flag, True) is not False for name, flag in BT_STAGES.items()}
+    if not any(enabled.values()):
+        raise ValueError(tr("請至少啟用一個 BallonsTranslator 處理階段"))
+    emit(("bt_reset", len(pending), enabled))
+    if any(enabled[name] for name in ("Text Detection", "OCR", "Inpaint")):
+        invalidate_prepared(path, pending)
+    source_versions = {p.name: signature(p) for p in pending} if phase == "prepare" else None
+    before_assets = {}
+    if phase == "prepare":
+        for p in pending:
+            before_assets[p.name] = {}
+            for suffix in ('.png', '.jxl'):
+                asset = path / 'inpainted' / (p.stem + suffix)
+                if asset.is_file() and asset.stat().st_size:
+                    before_assets[p.name][str(asset.relative_to(path))] = signature(asset)
+        pending_by_name = {p.name: p for p in pending}
+
+        def save_page(name):
+            source = pending_by_name[name]
+            if signature(source) != source_versions[name]:
+                raise RuntimeError(tr("前處理期間來源圖片已變更，請重新執行"))
+            project = load_json(path / f"imgtrans_{path.name}.json", {}, strict=True)
+            assets = page_record(path, source, project)['assets']
+            # Native inpaint errors can still advance progress; require a newly saved image.
+            if project['pages'][name] and not any(
+                    Path(key).parts[0] == 'inpainted' and value != before_assets[name].get(key)
+                    for key, value in assets.items()):
+                return
+            mark_prepared(path, [source])
+    logger.info("[%s] translation_pages start=%s end=%s selected=%s total=%s", job_id,
+                job.start_page, job.end_page or len(sources), len(selected), len(sources))
+    with tempfile.TemporaryDirectory(prefix="comic-sorting-pages-") as temporary:
+        page_manifest = None
+        request = None
+        if len(pending) != len(sources):
+            page_manifest = Path(temporary) / "pages.json"
+            save_json(page_manifest, [p.name for p in pending])
+        if session is not None:
+            request = dict(path=str(path), pages=[p.name for p in pending] if len(pending) != len(sources) else None,
+                           token=uuid.uuid4().hex)
+            if phase:
+                request["phase"] = phase
+            page_manifest = Path(temporary) / "session.json"
+            save_json(page_manifest, request)
+        command_options = {"page_manifest": page_manifest} if page_manifest else {}
+        if page_manifest is None:
+            page_manifest = Path(temporary) / 'usage.json'
+            save_json(page_manifest, None)
+            command_options['page_manifest'] = page_manifest
+        session_options = dict(session=session, request=request) if session is not None else {}
+        diagnostic = run_translation(*translator_command(settings["bt_path"], settings["bt_config"],
+                                            settings.get("bt_python", ""), path, **command_options), stop,
+                        lambda *values: emit(("bt_progress", *values)), log_context=job_id,
+                        usage=lambda values: emit(("usage", index, values)),
+                        pricing=settings.get('bt_token_rates', {}), usage_context=usage_context,
+                        retry=lambda: emit(("retry",)),
+                        jev=lambda values: emit(("jev_stats", index, values)),
+                        timing=lambda name, seconds: emit(("stage_time", index, name, seconds)),
+                        on_prepared=save_page if phase == "prepare" else None, **session_options)
+        if isinstance(diagnostic, str):
+            completion_note = diagnostic
+    if phase == "prepare":
+        if completion_note or stop.is_set():
+            raise RuntimeError(completion_note or tr("已停止"))
+        if source_versions != {p.name: signature(p) for p in pending}:
+            raise RuntimeError(tr("前處理期間來源圖片已變更，請重新執行"))
+        mark_prepared(path, pending)
+        if not prepared(path, selected):
+            raise RuntimeError(tr("尚未完成前處理，或來源／前處理成果已變更；請先跑前處理"))
+        emit(("status", index, "prepared", ""))
+        return None
+    status, translated = translation_status(path)
+    if not translations_complete(sources, translated, selected):
+        raise RuntimeError(tr("翻譯結果不完整，未執行後續動作"))
+    whole_chapter = status == tr("可匯出")
+    if whole_chapter and isinstance(diagnostic, str) and diagnostic:
+        # A failed LLM step still writes inpainted pages, so a full page count does not prove the text is there.
+        whole_chapter = False
+        completion_note = "\n".join(filter(None, (completion_note, tr("翻譯過程出現錯誤，略過自動匯出與清理；請檢查結果後再手動匯出"))))
+        logger.info("[%s] run_warning export_cleanup_skipped", job_id)
+    elif not whole_chapter:
+        completion_note = "\n".join(filter(None, (completion_note, tr("指定頁面已完成；全章結果尚未齊全，略過自動匯出與清理"))))
+        logger.info("[%s] partial_range_completed export_cleanup_skipped", job_id)
+    result_path = translated[0].parent
+    logger.info("[%s] result_verified sources=%s results=%s", job_id, len(image_files(path)), len(translated))
+    return whole_chapter, completion_note, diagnostic, result_path
+
+
+def complete_job(job, index, path, outcome, settings, output, skip, stop, emit, job_id, export_progress):
+    """Export and clean up after the main step, then report the job's final status."""
+    whole_chapter, completion_note, diagnostic, result_path = outcome
+    action = job.action
+    if stop.is_set():
+        raise RuntimeError(tr("已停止"))
+    if whole_chapter and job.should_export(settings.get("bt_export", False)):
+        if not str(output).strip():
+            raise ValueError(tr("請設定 Komga 輸出路徑"))
+        target = Path(output).resolve()
+        if target.is_relative_to(path) or path.is_relative_to(target):
+            raise ValueError(tr("匯出與漫畫路徑不可互相包含"))
+        state_file = target / ".comic-sorting-state.json"
+        state = load_json(state_file, {}, strict=True)
+        emit(("stage", "匯出", 0))
+        export_action, archive = export_chapter(path.parent, path, target, state, skip,
+                                                progress=export_progress)
+        save_json(state_file, state)
+        result_path = archive
+        logger.info("[%s] export_%s output=%s", job_id, export_action, archive)
+        emit(("stage", "匯出", 100))
+    if stop.is_set():
+        raise RuntimeError(tr("已停止，未執行後續清理"))
+    if action == "cleanup" or (whole_chapter and settings.get("bt_cleanup", False) and action in ("translate", "export")):
+        folders, removed, errors = clear_work_folders(path, output)
+        logger.info("[%s] cleanup_result folders=%s removed=%s errors=%s", job_id, folders, removed, errors)
+        if errors:
+            raise RuntimeError("\n".join(errors))
+    if stop.is_set():
+        raise RuntimeError(tr("已停止"))
+    emit(("status", index, "done_warning" if action == "translate" and isinstance(diagnostic, str) and diagnostic else "done", completion_note))
+    if action == "translate":
+        emit(("result", result_path))
+    logger.info("[%s] job_done", job_id)
+
+
+def run_jobs(jobs, settings, output, skip, stop, emit, *, pause=None, checkpoint=None, blocked_jobs=(), before_job=None):
     """Run a pending-job snapshot; only the event consumer mutates Job state."""
+    from queue_phases import run_phased_jobs
+    if settings.get("bt_workflow", "normal") != "normal":
+        return run_phased_jobs(jobs, settings, output, skip, stop, emit,
+                               pause=pause, checkpoint=checkpoint, blocked_jobs=blocked_jobs)
+    phase = settings.get("bt_phase")
     run_started = time.monotonic()
     paused_seconds = 0
     run_timestamp = datetime.now().astimezone().isoformat(timespec='seconds')
@@ -262,12 +668,18 @@ def run_jobs(jobs, settings, output, skip, stop, emit, *, pause=None, checkpoint
             raise RuntimeError(tr("已停止；未執行此項目的後續動作"))
         emit(("stage", "匯出", int(count * 100 / total)))
 
+    session = TranslationSession(stop) if phase or sum(job.action == "translate" for job in jobs) > 1 else None
     failed_paths = set()
     run_id = uuid.uuid4().hex[:10]
     logger.info("[%s] queue_start jobs=%s export=%s cleanup=%s", run_id, len(jobs),
                 settings.get("bt_export", False), settings.get("bt_cleanup", False))
     try:
         for index, job in enumerate(jobs):
+            if before_job is not None and not before_job(index):
+                if stop.is_set():
+                    break
+                emit(("total", index + 1))
+                continue
             if pause is not None and pause.is_set() and not stop.is_set():
                 paused_at = time.monotonic()
                 logger.info("[%s] queue_paused next_job=%s", run_id, index + 1)
@@ -298,9 +710,6 @@ def run_jobs(jobs, settings, output, skip, stop, emit, *, pause=None, checkpoint
             job_started = time.monotonic()
             job_timestamp = datetime.now().astimezone().isoformat(timespec='seconds')
             try:
-                whole_chapter = True
-                completion_note = ""
-                diagnostic = None
                 if action not in ("translate", "export", "cleanup"):
                     raise ValueError(tr("不支援的佇列動作：{0}").format(action))
                 if not path.is_dir():
@@ -310,82 +719,32 @@ def run_jobs(jobs, settings, output, skip, stop, emit, *, pause=None, checkpoint
                     if target.is_relative_to(path) or path.is_relative_to(target):
                         raise ValueError(tr("匯出與漫畫路徑不可互相包含"))
                 if action == "translate":
-                    sources = image_files(path)
-                    if not sources:
-                        raise ValueError(tr("指定路徑沒有圖片，請選擇章節或整合輸出"))
-                    selected = job.select_pages(sources)
-                    module = load_json(settings["bt_config"], {}, strict=True).get("module", {})
-                    enabled = {name: module.get(flag, True) is not False for name, flag in BT_STAGES.items()}
-                    if not any(enabled.values()):
-                        raise ValueError(tr("請至少啟用一個 BallonsTranslator 處理階段"))
-                    emit(("bt_reset", len(selected), enabled))
-                    logger.info("[%s] translation_pages start=%s end=%s selected=%s total=%s", job_id,
-                                job.start_page, job.end_page or len(sources), len(selected), len(sources))
-                    with tempfile.TemporaryDirectory(prefix="comic-sorting-pages-") as temporary:
-                        page_manifest = None
-                        if len(selected) != len(sources):
-                            page_manifest = Path(temporary) / "pages.json"
-                            save_json(page_manifest, [p.name for p in selected])
-                        command_options = {"page_manifest": page_manifest} if page_manifest else {}
-                        diagnostic = run_translation(*translator_command(settings["bt_path"], settings["bt_config"],
-                                                            settings.get("bt_python", ""), path, **command_options), stop,
-                                        lambda *values: emit(("bt_progress", *values)), log_context=job_id,
-                                        usage=lambda values: emit(("usage", index, values)),
-                                        timing=lambda name, seconds: emit(("stage_time", index, name, seconds)))
-                        if isinstance(diagnostic, str):
-                            completion_note = diagnostic
-                    status, translated = translation_status(path)
-                    if not translations_complete(sources, translated, selected):
-                        raise RuntimeError(tr("翻譯結果不完整，未執行後續動作"))
-                    whole_chapter = status == tr("可匯出")
-                    if not whole_chapter:
-                        completion_note = "\n".join(filter(None, (completion_note, tr("指定頁面已完成；全章結果尚未齊全，略過自動匯出與清理"))))
-                        logger.info("[%s] partial_range_completed export_cleanup_skipped", job_id)
-                    result_path = translated[0].parent
-                    logger.info("[%s] result_verified sources=%s results=%s", job_id, len(image_files(path)), len(translated))
-                if stop.is_set():
-                    raise RuntimeError(tr("已停止"))
-                if whole_chapter and job.should_export(settings.get("bt_export", False)):
-                    if not str(output).strip():
-                        raise ValueError(tr("請設定 Komga 輸出路徑"))
-                    target = Path(output).resolve()
-                    if target.is_relative_to(path) or path.is_relative_to(target):
-                        raise ValueError(tr("匯出與漫畫路徑不可互相包含"))
-                    state_file = target / ".comic-sorting-state.json"
-                    state = load_json(state_file, {}, strict=True)
-                    emit(("stage", "匯出", 0))
-                    export_action, archive = export_chapter(path.parent, path, target, state, skip,
-                                                            progress=export_progress)
-                    save_json(state_file, state)
-                    result_path = archive
-                    logger.info("[%s] export_%s output=%s", job_id, export_action, archive)
-                    emit(("stage", "匯出", 100))
-                if stop.is_set():
-                    raise RuntimeError(tr("已停止，未執行後續清理"))
-                if action == "cleanup" or (whole_chapter and settings.get("bt_cleanup", False) and action in ("translate", "export")):
-                    folders, removed, errors = clear_work_folders(path)
-                    logger.info("[%s] cleanup_result folders=%s removed=%s errors=%s", job_id, folders, removed, errors)
-                    if errors:
-                        raise RuntimeError("\n".join(errors))
-                if stop.is_set():
-                    raise RuntimeError(tr("已停止"))
-                emit(("status", index, "done_warning" if action == "translate" and isinstance(diagnostic, str) and diagnostic else "done", completion_note))
-                if action == "translate":
-                    emit(("result", result_path))
-                logger.info("[%s] job_done", job_id)
+                    outcome = translate_job(job, index, path, settings, session, phase, stop, emit, job_id)
+                else:
+                    outcome = (True, "", None, None)
+                if outcome is not None:
+                    complete_job(job, index, path, outcome, settings, output, skip, stop, emit, job_id, export_progress)
             except Exception as error:
+                if action == "translate" and session is not None:
+                    session.close()
                 status = "cancelled" if stop.is_set() else "failed"
                 code, reason = error_info(status, str(error))
                 logger.exception("[%s] job_%s action=%s path=%s error_code=%s reason=%s", job_id,
                                  status, action, path, code, reason)
                 failed_paths.add(path)
                 emit(("status", index, status, redact(str(error))))
+                if code == "LLM_QUOTA":
+                    # Preserve the failed job's quota diagnostic; leave later jobs pending.
+                    stop.set()
+                    logger.error("[%s] queue_stopped error_code=%s reason=%s", run_id, code, reason)
             emit(("job_time", index, job_timestamp, datetime.now().astimezone().isoformat(timespec='seconds'),
                   time.monotonic() - job_started))
             emit(("total", index + 1))
             if checkpoint is not None and not checkpoint():
                 break
     finally:
+        if session is not None:
+            session.close(graceful=True)
         logger.info("[%s] queue_end stopped=%s failed_paths=%s", run_id, stop.is_set(), len(failed_paths))
         emit(("run_time", run_timestamp, datetime.now().astimezone().isoformat(timespec='seconds'),
               time.monotonic() - run_started - paused_seconds))

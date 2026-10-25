@@ -27,7 +27,7 @@ class UILanguageTests(unittest.TestCase):
                                              for _, field, spec, conversion
                                              in formatter.parse(translations[language])
                                              if field is not None])
-        for name in ("Comic sorting.py", "translation_queue.py", "comic_core.py", "queue_worker.py", "bt_settings.py", "windows_recycle.py", "queue_history.py", "queue_errors.py", "ntfy_notifications.py", "windows_notifications.py"):
+        for name in ("Comic sorting.py", "translation_queue.py", "queue_start_dialog.py", "comic_core.py", "queue_worker.py", "windows_recycle.py", "queue_history.py", "queue_errors.py", "ntfy_notifications.py", "windows_notifications.py"):
             tree = ast.parse((Path(__file__).parents[1] / name).read_text(encoding="utf-8"))
             for node in ast.walk(tree):
                 if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
@@ -44,21 +44,27 @@ class UILanguageTests(unittest.TestCase):
                 try:
                     with mock.patch.object(comic, "settings_path", return_value=settings_file):
                         app = comic.FileAggregatorApp(root)
-                        self.assertEqual(root.title(), tr("漫畫整合工具"))
+                        self.assertEqual(root.title(), tr("漫畫工作台"))
                         self.assertEqual(app.ui_language.get(), LANGUAGES[language])
                         chapter = Path(temp) / "Chapter 1"
                         work = chapter / "mask"
                         work.mkdir(parents=True)
                         (work / "1.png").touch()
+                        (chapter / "1.png").write_bytes(b"source")
+                        (chapter / "result").mkdir()
+                        (chapter / "result/1.png").write_bytes(b"translated")
+                        output, state = Path(temp) / "Komga", {}
+                        comic.export_chapter(chapter.parent, chapter, output, state)
+                        comic.save_json(output / ".comic-sorting-state.json", state)
                         app.translation_queue.add_paths([chapter], action="cleanup")
-                        run_jobs(app.translation_queue.jobs, app.translation_queue.settings(), "", True,
+                        run_jobs(app.translation_queue.jobs, app.translation_queue.settings(), str(output), True,
                                  app.translation_queue.stop, app.translation_queue.events.put)
                         self.assertFalse((work / "1.png").exists())
                         app.ui_language.set(LANGUAGES["ja"])
                         self.assertTrue(app.save_settings())
                         self.assertEqual(comic.load_json(settings_file, {})["ui_language"], "ja")
                         # Choosing a language must not alter running queue action comparisons.
-                        self.assertEqual(root.title(), tr("漫畫整合工具"))
+                        self.assertEqual(root.title(), tr("漫畫工作台"))
                         root.update_idletasks()
                 finally:
                     root.destroy()

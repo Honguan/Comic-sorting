@@ -432,8 +432,8 @@ class UIImprovementsTests(unittest.TestCase):
                     window = tk.Toplevel(self.root)
                     window.geometry("820x640")
                     app = comic.FileAggregatorApp(window)
-                    app.translation_queue.bt_toggle.invoke()
-                    app.translation_queue.usage_toggle.invoke()
+                    app.translation_queue.toggle_progress()
+                    app.translation_queue.toggle_usage()
                     for scope in ('OCR ', 'translation ', ''):
                         record = parse_bt_usage(usage_line(scope))
                         app.translation_queue.usage_records[0, record['scope']] = record
@@ -444,33 +444,40 @@ class UIImprovementsTests(unittest.TestCase):
                         app.translation_queue.bt_progress[name] = (60, 582, 960, "4:00:04", True)
                         app.translation_queue.bt_elapsed[name] = 90061
                         app.translation_queue.show_bt_progress(name)
-                    app.translation_queue.stage.pack(fill="x", before=app.translation_queue.bt_frame)
-                    details = [widget for widget in next(iter(app.translation_queue.bt_bars.values())).master.winfo_children()
-                               if isinstance(widget, tk.ttk.Label)]
+                    app.translation_queue.events.put(("stage", "匯出", 50))
+                    app.translation_queue.poll()
                     for tab, controls in (
-                            (app.queue_tab, (app.translation_queue.start_button, app.translation_queue.pause_button,
-                                             app.translation_queue.stop_button, app.translation_queue.range_button,
-                                             app.translation_queue.total, app.translation_queue.stage,
-                                             app.translation_queue.history_button,
-                                             *(w for w in app.translation_queue.controls if isinstance(w, tk.ttk.Checkbutton)),
-                                             *app.translation_queue.bt_bars.values(), *details,
-                                             *app.translation_queue.usage_frame.winfo_children())),
+                            (app.queue_tab, (app.translation_queue.workflow_choice,
+                                             app.translation_queue.start_button, app.translation_queue.pause_button,
+                                             app.translation_queue.stop_button,
+                                             app.translation_queue.total,
+                                             app.translation_queue.view_button,
+                                             app.add_range_button, app.add_selected_button)),
                             (app.export_tab, (app.export_selected_button, app.export_all_button, app.cleanup_button)),
                             (app.settings_tab, (app.translation_queue.controls[0],))):
                         app.work_tabs.select(tab)
                         self.pump(.04)
-                        if tab == app.queue_tab:
-                            for text in ("等待暫停", "已暫停", "佇列暫停"):
-                                app.translation_queue.pause_button.configure(text=tr(text))
-                                self.pump(.01)
-                                stop = app.translation_queue.stop_button
-                                self.assertLessEqual(stop.winfo_rootx() - window.winfo_rootx() + stop.winfo_reqwidth(), 820)
-                        for widget in (*controls, app.aggregate_button,
-                                       app.remove_sources_checkbox, app.keep_last_source_checkbox):
+                        for widget in controls:
                             self.assertTrue(widget.winfo_ismapped(), str(widget))
                             self.assertGreater(widget.winfo_width(), 1)
-                            self.assertLessEqual(widget.winfo_rootx() - window.winfo_rootx() + widget.winfo_reqwidth(), 820)
+                            self.assertLessEqual(widget.winfo_rootx() - window.winfo_rootx() + widget.winfo_reqwidth(), 820, str(widget))
                             self.assertLessEqual(widget.winfo_rooty() - window.winfo_rooty() + widget.winfo_reqheight(), 640, str(widget))
+                    app.open_aggregate()
+                    self.pump(.04)
+                    for widget in (app.aggregate_button, app.aggregate_translate_button,
+                                   app.remove_sources_checkbox, app.keep_last_source_checkbox):
+                        self.assertTrue(widget.winfo_ismapped(), str(widget))
+                        self.assertLessEqual(widget.winfo_rootx() + widget.winfo_reqwidth(),
+                                             app.aggregate_window.winfo_rootx() + app.aggregate_window.winfo_width(), str(widget))
+                        self.assertLessEqual(widget.winfo_rooty() + widget.winfo_reqheight(),
+                                             app.aggregate_window.winfo_rooty() + app.aggregate_window.winfo_height(), str(widget))
+                    for content in (app.translation_queue.bt_bars['OCR'].master,
+                                    app.translation_queue.usage_table.master):
+                        popup = content.winfo_toplevel()
+                        for widget in content.winfo_children():
+                            self.assertTrue(widget.winfo_ismapped(), str(widget))
+                            self.assertLessEqual(widget.winfo_rootx() + widget.winfo_reqwidth(),
+                                                 popup.winfo_rootx() + popup.winfo_width(), str(widget))
                     window.destroy()
         finally:
             set_language("zh-TW")

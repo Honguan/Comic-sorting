@@ -9,15 +9,111 @@ from queue_history import find_runs, history_totals, save_run, scope_records, us
 
 
 class HistoryStorageTests(unittest.TestCase):
+    def test_grand_totals_keep_bounded_usage_summaries(self):
+        from decimal import Decimal
+        from unittest.mock import patch
+        value = dict(requests=1, total_tokens=120, cost='0.001', unpriced_requests=0, missing_usage_requests=0)
+        record = dict(jobs=[dict(status='done', usage={'total': value})], elapsed_seconds=1)
+        with patch('queue_history.iter_runs', return_value=(record for _ in range(1000))):
+            result = history_totals('unused.sqlite3')
+        self.assertEqual((result['runs'], result['jobs'], result['elapsed_seconds']), (1000, 1000, 1000))
+        self.assertEqual(len(result['usage_records']['total']), 1)
+        summary = result['usage_records']['total'][0]
+        self.assertEqual((summary['requests'], summary['total_tokens']), (1000, 120000))
+        self.assertEqual(Decimal(summary['cost']), Decimal('1'))
+        self.assertEqual(value['requests'], 1)
+
+    def test_updated_checkpoint_search_uses_current_paths(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'history.sqlite3'
+            record = dict(id='same', started_at='2026-10-01', jobs=[dict(path='Old manga')])
+            save_run(path, record)
+            record['jobs'] = [dict(path='New manga')]
+            save_run(path, record)
+            self.assertEqual(find_runs(path, 'Old manga'), [])
+            self.assertEqual(find_runs(path, 'New manga'), [record])
+
+    def test_history_pages_keep_identical_timestamp_order_and_filters(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'history.sqlite3'
+            for i in range(7):
+                save_run(path, dict(id=str(i), started_at='2026-10-01', jobs=[dict(path='Manga')]))
+            seen = []
+            for offset in range(0, 7, 2):
+                seen.extend(r['id'] for r in find_runs(path, 'Manga', limit=2, offset=offset))
+            self.assertEqual(seen, [str(i) for i in reversed(range(7))])
+            self.assertEqual(find_runs(path, 'different', limit=2, offset=2), [])
+
     def test_token_units_match_in_text_and_columns(self):
         for tokens, expected in ((0, '0'), (999, '999'), (1000, '1.00K'),
-                                 (22721625, '22.72M'), (1000000000, '1.00B')):
+                                 (999994, '999.99K'), (999995, '1.00M'),
+                                 (22721625, '22.72M'), (999995000, '1.00B'),
+                                 (1000000000, '1.00B')):
             record = dict(total_tokens=tokens, requests=1, cost='0',
                           unpriced_requests=0, missing_usage_requests=0)
             self.assertEqual(usage_columns([record])[0], expected)
             self.assertTrue(usage_text([record]).startswith(expected + ' tokens'))
             self.assertEqual(record['total_tokens'], tokens)
         self.assertEqual(usage_columns([])[0], '尚未回報')
+        # Codex-style requests that report no usage must not display as 0 tokens.
+        unreported = dict(total_tokens=0, requests=12, cost=None, unpriced_requests=12, missing_usage_requests=12)
+        self.assertEqual(usage_columns([unreported])[0], '尚未回報')
+        self.assertEqual(usage_columns([unreported])[4], '用量不完整')
+
+    def test_model_and_jev_tokens_use_compact_units_without_changing_usage(self):
+        from unittest.mock import Mock
+        from queue_history import fill_model_usage, jev_columns, JEV_FIELDS, MODEL_COLUMNS
+        record = dict(model='model', total_tokens=1999990, requests=3, cost=None,
+                      unpriced_requests=3, missing_usage_requests=1,
+                      prompt=999995, completion=999995, cache_hit=1200)
+        original = copy.deepcopy(record)
+        table = Mock()
+        table.get_children.return_value = ()
+        table.exists.return_value = False
+        fill_model_usage(table, {'total': [record]})
+        fields = dict(zip(MODEL_COLUMNS, table.insert.call_args.kwargs['values']))
+        self.assertEqual({key: fields[key] for key in
+                          ('total_tokens', 'avg_tokens', 'prompt', 'completion', 'cache_hit', 'cache_write')},
+                         dict(total_tokens='2.00M', avg_tokens='1.00M', prompt='1.00M',
+                              completion='1.00M', cache_hit='1.20K', cache_write='—'))
+        self.assertEqual(fields['pricing'], '費用未知')
+        self.assertEqual(fields['missing_usage_requests'], '1')
+        self.assertEqual(record, original)
+        stats = dict(input_tokens=999995, missing_input_usage_requests=1)
+        self.assertEqual(dict(zip(JEV_FIELDS, jev_columns(stats)))['input_tokens'], '1.00M')
+        self.assertEqual(stats['input_tokens'], 999995)
+
+    def test_average_tokens_keep_two_decimal_places_and_unknown_marker(self):
+        from decimal import Decimal
+        from unittest.mock import Mock
+        from queue_history import format_tokens, fill_model_usage, MODEL_COLUMNS
+        for tokens, expected in ((Decimal(500) / 3, '166.67'),
+                                 (Decimal('999.994'), '999.99'),
+                                 (Decimal('999.995'), '1.00K'), (Decimal(0), '0.00')):
+            self.assertEqual(format_tokens(tokens, decimals=2), expected)
+        table = Mock()
+        table.get_children.return_value = ()
+        table.exists.return_value = False
+        record = dict(total_tokens=0, requests=1, cost=None,
+                      unpriced_requests=1, missing_usage_requests=1)
+        fill_model_usage(table, {'total': [record]})
+        fields = dict(zip(MODEL_COLUMNS, table.insert.call_args.kwargs['values']))
+        self.assertEqual(fields['avg_tokens'], '—')
+
+    def test_subcent_costs_stay_precise_without_changing_stored_values(self):
+        for amount, expected in (('0.000021', 'US$0.000021'), ('0.008', 'US$0.008000'),
+                                 ('0.0000001', 'US$0.000001'), ('0', 'US$0.00'),
+                                 ('0.125', 'US$0.13'), (None, '無法預估')):
+            with self.subTest(amount=amount):
+                record = dict(total_tokens=120, requests=1, cost=amount,
+                              missing_usage_requests=0, unpriced_requests=0)
+                self.assertEqual(usage_columns([record])[1], expected)
+                self.assertIn(expected, usage_text([record]))
+                self.assertEqual(record['cost'], amount)
+        partial = dict(record, cost='0.000021', unpriced_requests=1)
+        self.assertIn('僅含已知金額', usage_text([partial]))
+
+
 
     def test_grand_totals_include_all_runs_and_known_costs_without_double_counting(self):
         from queue_worker import parse_bt_usage
@@ -31,7 +127,7 @@ class HistoryStorageTests(unittest.TestCase):
             total = dict(total_tokens=1000, requests=2, cost='0.004', missing_usage_requests=0, unpriced_requests=0)
             for index in range(200):
                 save_run(path, dict(id=str(index), started_at='2026-09-15', elapsed_seconds=1.25, jobs=[
-                    dict(path='Chapter 1', usage={'OCR': dict(total, total_tokens=250, requests=1, cost='0.001'),
+                    dict(path='Chapter 1', status='done', usage={'OCR': dict(total, total_tokens=250, requests=1, cost='0.001'),
                                                'translation': dict(total, total_tokens=750, requests=1, cost='0.003'),
                                                'total': total})]))
             line = usage_line(cost='unavailable', subtotal='0.998713', unpriced=1)
@@ -46,7 +142,7 @@ class HistoryStorageTests(unittest.TestCase):
             original = path.read_bytes()
             self.assertEqual(len(find_runs(path)), 200)
             result = history_totals(path)
-            self.assertEqual((result['runs'], result['jobs'], result['elapsed_seconds']), (203, 203, 300))
+            self.assertEqual((result['runs'], result['jobs'], result['elapsed_seconds']), (203, 200, 300))
             self.assertIn('50.00K tokens｜預估 US$0.20｜200', result['usage']['OCR'])
             self.assertIn('150.00K tokens｜預估 US$0.60｜200', result['usage']['translation'])
             self.assertIn('1.48M tokens｜預估 US$1.80｜498', result['usage']['total'])
@@ -118,7 +214,7 @@ class HistoryStorageTests(unittest.TestCase):
         partial = dict(usage, cost='0.008', missing_usage_requests=1, unpriced_requests=1)
         unknown = dict(usage, cost=None, unpriced_requests=10)
         for records, expected in (([usage, partial, unknown], 'US$1.01'),
-                                  ([partial], 'US$0.01'), ([usage, unknown], 'US$1.01'),
+                                  ([partial], 'US$0.008000'), ([usage, unknown], 'US$1.01'),
                                   ([dict(usage, cost='0'), unknown], 'US$0.00'),
                                   ([unknown], '無法預估')):
             with self.subTest(expected=expected, records=records):
@@ -129,6 +225,11 @@ class HistoryStorageTests(unittest.TestCase):
                     self.assertIn('僅含已知金額', text)
         self.assertIn('Token 回報不完整', usage_text([partial]))
         self.assertEqual(usage_text([], empty_text='無法預估'), '無法預估')
+        from queue_history import usage_columns
+        self.assertEqual(usage_columns([unknown])[1:4], ('無法預估', '10', '費用未知'))
+        self.assertEqual(usage_columns([dict(usage, cost='0')])[1:4], ('US$0.00', '10', '完整'))
+        self.assertEqual(usage_columns([partial])[3:], ('僅含已知金額', '用量不完整'))
+        self.assertEqual(usage_columns([])[3:], ('尚未回報', '尚未回報'))
 
     def test_legacy_subtotals_are_recovered_from_matching_saved_errors_without_writes(self):
         from queue_worker import parse_bt_usage

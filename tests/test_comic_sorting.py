@@ -199,8 +199,8 @@ class ComicSortingTests(unittest.TestCase):
             app.export_worker([str(chapter)], str(output_root), True)
 
             self.assertTrue((output_root / "Killer Shark" / "Chapter 10-42.cbz").is_file())
-            self.assertEqual(list((chapter / "mask").iterdir()), [])
-            self.assertEqual(list((chapter / "inpainted").iterdir()), [])
+            self.assertTrue((chapter / "mask" / "1.png").is_file())
+            self.assertTrue((chapter / "inpainted" / "1.png").is_file())
 
     def test_clear_work_folders_preserves_folders_and_other_data(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -217,7 +217,14 @@ class ComicSortingTests(unittest.TestCase):
             (inpainted / "1.png").write_bytes(b"inpainted")
             (result / "1.png").write_bytes(b"result")
 
-            folders, removed, errors = comic.clear_work_folders(root)
+            output, state = root / 'Komga', {}
+            for chapter in (mask.parent, inpainted.parent):
+                (chapter / '1.png').write_bytes(b'source')
+                (chapter / 'result').mkdir(exist_ok=True)
+                (chapter / 'result/1.png').write_bytes(b'result')
+                comic.export_chapter(chapter.parent, chapter, output, state)
+            comic.save_json(output / '.comic-sorting-state.json', state)
+            folders, removed, errors = comic.clear_work_folders(root, output)
 
             self.assertEqual((folders, removed, errors), (2, 3, []))
             self.assertTrue(mask.is_dir())
@@ -240,7 +247,7 @@ class ComicSortingTests(unittest.TestCase):
 
             self.assertTrue((mask / "1.png").is_file())
 
-    def test_export_cleanup_does_not_touch_unselected_chapters(self):
+    def test_manual_export_preserves_work_files_until_explicit_cleanup(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             selected = root / "Mangas" / "Series" / "Chapter 1"
@@ -255,7 +262,9 @@ class ComicSortingTests(unittest.TestCase):
 
             app.export_worker([selected], root / "Komga", True)
 
-            self.assertEqual(list((selected / "mask").iterdir()), [])
+            self.assertTrue((selected / "mask" / "1.png").is_file())
+            self.assertTrue((unselected / "mask" / "1.png").is_file())
+            self.assertEqual(comic.clear_work_folders(selected, root / "Komga"), (1, 1, []))
             self.assertTrue((unselected / "mask" / "1.png").is_file())
 
     def test_export_rejects_output_inside_source(self):
@@ -365,6 +374,24 @@ class ComicSortingTests(unittest.TestCase):
             result.mkdir(parents=True)
             (result / "1.png").write_bytes(b"image")
             self.assertEqual(comic.translation_status(chapter)[0], "可匯出")
+
+    def test_scan_does_not_stat_each_source_image(self):
+        with tempfile.TemporaryDirectory() as temp:
+            chapter = Path(temp) / 'Series' / 'Chapter 1'
+            chapter.mkdir(parents=True)
+            image = chapter / '1.png'
+            image.touch()
+            os.utime(image, (200, 200))
+            os.utime(chapter, (100, 100))
+            original_stat = Path.stat
+            def checked_stat(path, *args, **kwargs):
+                if path == image:
+                    self.fail('scan must reuse directory metadata instead of stat per image')
+                return original_stat(path, *args, **kwargs)
+            with mock.patch.object(Path, 'stat', checked_stat):
+                data = comic.FileAggregatorApp.scan_folder_data(Path(temp))
+            self.assertEqual(data[2][chapter], 200)
+            self.assertEqual(data[6][chapter], 1)
 
     def test_aggregate_direct_copy(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -477,6 +504,17 @@ class ComicSortingTests(unittest.TestCase):
             os.utime(folder, (50, 50))
 
             self.assertEqual(comic.updated_at(folder, [older, newer]), 200)
+            self.assertEqual(comic.updated_at(folder, [older]), 100)
+            result = folder / 'result'
+            result.mkdir()
+            translated = result / '1.png'
+            translated.touch()
+            os.utime(translated, (300, 300))
+            os.utime(folder, (50, 50))
+            self.assertEqual(comic.updated_at(folder, [older, translated]), 300)
+            newer.unlink()
+            with self.assertRaises(FileNotFoundError):
+                comic.updated_at(folder, [newer])
 
     def test_folder_size_and_format(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -512,9 +550,12 @@ class ComicSortingTests(unittest.TestCase):
                     for number in (1, 2, 3)]
         app = comic.FileAggregatorApp.__new__(comic.FileAggregatorApp)
         app.manga_busy = False
+        app.scan_data = None
         app.selection_text = mock.Mock()
         app.folder_details = mock.Mock()
         app.start_entry, app.end_entry = Entry(), Entry()
+        app.aggregate_start_entry, app.aggregate_end_entry = Entry(), Entry()
+        app.current_series = mock.Mock()
         app.series_groups = {series: chapters}
         app.tree_items = {"series": ("series", series), **{
             str(number): ("chapter", series / f"Chapter {number}") for number in (1, 2, 3)}}
@@ -531,23 +572,12 @@ class ComicSortingTests(unittest.TestCase):
         self.assertEqual((app.start_entry.value, app.end_entry.value), ("2", "2"))
 
     def test_tree_numbers_series_by_time_and_chapters_by_number(self):
-        class Tree:
-            def __init__(self):
-                self.items = []
-
-            def get_children(self):
-                return ()
-
-            def selection(self):
-                return ()
-
-            def delete(self, *_):
-                pass
-
-            def insert(self, parent, _, text, **kwargs):
-                item = f"item{len(self.items)}"
-                self.items.append((item, parent, text, kwargs.get("values")))
-                return item
+        import tkinter as tk
+        from ui_interactions import LibraryTree
+        window = tk.Tk()
+        window.withdraw()
+        window.update_idletasks()
+        self.addCleanup(window.destroy)
 
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -560,26 +590,31 @@ class ComicSortingTests(unittest.TestCase):
                 os.utime(image, (modified, modified))
                 os.utime(result.parent, (modified, modified))
             app = comic.FileAggregatorApp.__new__(comic.FileAggregatorApp)
+            app.folder_tree = LibraryTree(window, app.load_series_children)
             app.base_path = type("Value", (), {"get": lambda self: str(root)})()
-            app.folder_tree = Tree()
             app.scan_data = None
             app.series_sort, app.series_sort_descending = "updated", True
             app.manga_busy = False
             app.selection_text = mock.Mock()
+            app.current_series = mock.Mock()
             app.folder_details = mock.Mock()
             app.start_entry, app.end_entry = mock.Mock(), mock.Mock()
+            app.aggregate_start_entry, app.aggregate_end_entry = mock.Mock(), mock.Mock()
+            app.manga_choice = mock.Mock()
             app.tree_items = {}
             app.search_text = type("Value", (), {"get": lambda self: ""})()
+            app.applied_query, app.expanded_series = "", set()
             app.scan_status_text = type("Value", (), {"set": lambda self, value: None})()
 
             app.apply_scan_data(root, app.scan_folder_data(root))
 
-            parents = [item for item in app.folder_tree.items if not item[1]]
-            self.assertEqual([item[2] for item in parents], ["1. Newer", "2. Older"])
-            newer_children = [item[2] for item in app.folder_tree.items
-                              if item[1] == parents[0][0]]
-            self.assertEqual(newer_children, ["1. Chapter 2", "2. Chapter 10"])
-
+            tree = app.folder_tree
+            parents = tree.get_children()
+            self.assertEqual([tree.item(item, 'text') for item in parents], ['1. Newer', '2. Older'])
+            self.assertEqual(len(app.tree_items), 2)
+            newer_children = tree.get_children(parents[0])
+            self.assertEqual([tree.item(item, 'text') for item in newer_children], ['1. Chapter 2', '2. Chapter 10'])
+            self.assertEqual(len(app.tree_items), 4)
     def test_background_workers_report_completion(self):
         with tempfile.TemporaryDirectory() as temp:
             series, chapter, _, _ = fixture(temp)

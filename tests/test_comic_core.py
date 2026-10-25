@@ -6,10 +6,79 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from comic_core import clear_work_folders, create_cbz, delete_manga_folder, load_json, save_json, validate_cbz
+from comic_core import clear_work_folders, create_cbz, delete_manga_folder, export_chapter, load_json, save_json, validate_cbz
 
 if os.name == "nt":
     from _winapi import CreateJunction
+
+
+class LibraryScanTests(unittest.TestCase):
+    def test_scan_reuses_directory_entries_and_preserves_metadata(self):
+        from collections import Counter
+        from comic_core import scan_folder_data, folder_size, updated_at, image_files
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            chapter = base / 'Series' / 'Chapter 1'
+            result = chapter / 'RESULT'
+            result.mkdir(parents=True)
+            (chapter / '1.png').write_bytes(b'source')
+            (result / '1.webp').write_bytes(b'translated')
+            (chapter / 'mask').mkdir()
+            (chapter / 'mask' / 'work.bin').write_bytes(b'work')
+            expected_size = folder_size(chapter)
+            expected_time = updated_at(chapter, image_files(result))
+            with mock.patch('comic_core.os.scandir', wraps=os.scandir) as listing:
+                data = scan_folder_data(base)
+            counts = Counter(Path(call.args[0]) for call in listing.call_args_list)
+            self.assertEqual(counts[chapter], 1)
+            self.assertEqual(counts[result], 1)
+            self.assertEqual(data[3][chapter], expected_size)
+            self.assertEqual(data[2][chapter], expected_time)
+            self.assertEqual(data[6][chapter], 1)
+            self.assertIn(chapter, data[4])
+
+    def test_scan_path_allocations_do_not_scale_with_page_count(self):
+        from comic_core import scan_folder_data
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            chapter = base / 'Series' / 'Chapter 1'
+            result = chapter / 'result'
+            result.mkdir(parents=True)
+            (chapter / '1.png').write_bytes(b'source')
+            (result / '1.webp').write_bytes(b'translated')
+            with mock.patch('comic_core.Path', wraps=Path) as paths:
+                scan_folder_data(base)
+                allocations = paths.call_count
+            for number in range(2, 129):
+                (chapter / f'{number}.png').write_bytes(b'source')
+                (result / f'{number}.webp').write_bytes(b'translated')
+            with mock.patch('comic_core.Path', wraps=Path) as paths:
+                data = scan_folder_data(base)
+            self.assertEqual(paths.call_count, allocations)
+            self.assertEqual(data[6][chapter], 128)
+            self.assertEqual(data[3][chapter], 128 * (len(b'source') + len(b'translated')))
+            self.assertIn(chapter, data[4])
+            (chapter / '1.jpg').write_bytes(b'additional source')
+            self.assertNotIn(chapter, scan_folder_data(base)[4])
+            (result / '1.png').write_bytes(b'exact png result')
+            self.assertNotIn(chapter, scan_folder_data(base)[4])
+            (result / '1.jpg').write_bytes(b'exact jpg result')
+            self.assertIn(chapter, scan_folder_data(base)[4])
+
+
+    def test_scan_reports_progress_without_changing_data(self):
+        from comic_core import scan_folder_data
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            for number in range(129):
+                chapter = base / 'Series' / f'Chapter {number}'
+                chapter.mkdir(parents=True)
+                (chapter / '1.png').write_bytes(b'page')
+                os.utime(chapter / '1.png', (100, 100))
+                os.utime(chapter, (100, 100))
+            counts = []
+            self.assertEqual(scan_folder_data(base, progress=counts.append), scan_folder_data(base))
+            self.assertEqual(counts, [128])
 
 
 class FolderDeletionTests(unittest.TestCase):
@@ -169,15 +238,22 @@ class CleanupJunctionTests(unittest.TestCase):
             (result / "keep.png").write_bytes(b"result")
             CreateJunction(str(external), str(link))
             try:
-                folders, removed, errors = clear_work_folders(root)
+                output, state = base / 'Komga', {}
+                for chapter in (inpainted.parent, mask.parent):
+                    (chapter / '1.png').write_bytes(b'source')
+                    (chapter / 'result').mkdir(exist_ok=True)
+                    (chapter / 'result/1.png').write_bytes(b'translated')
+                    export_chapter(chapter.parent, chapter, output, state)
+                save_json(output / '.comic-sorting-state.json', state)
+                folders, removed, errors = clear_work_folders(root, output)
 
-                self.assertEqual((folders, removed), (2, 2))
+                self.assertEqual((folders, removed), (2, 1))
                 self.assertEqual(len(errors), 1)
                 self.assertIn(str(link), errors[0])
                 self.assertTrue(link.lstat().st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT)
                 self.assertEqual(sentinel.read_bytes(), b"keep")
                 self.assertEqual((nested / "preserved.png").read_bytes(), b"preserved")
-                self.assertFalse((inpainted / "remove.png").exists())
+                self.assertTrue((inpainted / "remove.png").exists())
                 self.assertTrue(mask.is_dir())
                 self.assertEqual(list(mask.iterdir()), [])
                 self.assertEqual((result / "keep.png").read_bytes(), b"result")

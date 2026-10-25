@@ -7,11 +7,82 @@ from dataclasses import asdict
 from pathlib import Path
 from unittest import mock
 
-from comic_core import output_path_for
+from comic_core import export_chapter, output_path_for, save_json
 from queue_worker import BT_STAGES, Job, parse_bt_progress, run_jobs, run_translation
 
 
 class QueueWorkerTests(unittest.TestCase):
+    def test_native_completion_overrides_stale_progress_for_matching_job_only(self):
+        import io
+        from contextlib import redirect_stdout
+        from types import SimpleNamespace
+        from bt_run_bridge import install_session
+        for finished in (True, False):
+            for matching in (True, False):
+                with self.subTest(finished=finished, matching=matching):
+                    class Window:
+                        def on_run_imgtrans(self): pass
+                        def run_next_dir(self): pass
+                    request = dict(token='job', pages=None)
+                    install_session(Window, SimpleNamespace(pbar={}), request)
+                    window = Window()
+                    window.exec_dirs = []
+                    window.imsave_thread = SimpleNamespace(isRunning=lambda: False)
+                    window.module_manager = SimpleNamespace(proj_finished=lambda: finished)
+                    window.app = mock.Mock()
+                    output = io.StringIO()
+                    with redirect_stdout(output), mock.patch('sys.stdin', io.StringIO('exit\n')):
+                        window.run_next_dir()
+                    progress = '94%| | 16/17' if finished else '100%| | 17/17'
+                    transcript = 'Translation: ' + progress + '\n' + output.getvalue()
+                    if not matching:
+                        transcript = transcript.replace('FINISHED:job:', 'FINISHED:previous:')
+                    process = mock.Mock(stdout=io.StringIO(transcript))
+                    session = mock.Mock(fatal=threading.Event())
+                    session.open.return_value = process
+                    args = ([], self.root, None, threading.Event(), lambda *values: None)
+                    if (finished and matching) or (not finished and not matching):
+                        self.assertIsNone(run_translation(*args, session=session, request=request))
+                    else:
+                        with self.assertRaises(RuntimeError):
+                            run_translation(*args, session=session, request=request)
+
+    def test_stale_progress_uses_completion_and_still_checks_results(self):
+        script = "print('Text Detection: 94%| | 17/18'); print('Translation: 100%| | 18/18'); print('finished translating all dirs')"
+        config = self.root / 'config.json'
+        config.write_text('{}')
+        for complete in (True, False):
+            with self.subTest(complete=complete):
+                chapter = self.chapter(str(complete))
+                if not complete:
+                    (chapter / 'result/0.png').unlink()
+                events = []
+                with mock.patch('queue_worker.translator_command', return_value=(
+                        [sys.executable, '-u', '-c', script], self.root, None)):
+                    run_jobs([Job(chapter, 'translate')],
+                             dict(bt_path='installed', bt_config=str(config), bt_cleanup=True, bt_export=True),
+                             str(self.root / 'output'), True, threading.Event(), events.append)
+                statuses = [event[2] for event in events if event[0] == 'status']
+                self.assertEqual(statuses, ['running', 'done' if complete else 'failed'])
+                self.assertEqual((chapter / 'mask/keep.png').exists(), not complete)
+
+    def test_quota_stops_queue_without_retry_or_export(self):
+        first, second = self.chapter(), self.chapter('Chapter 2')
+        stop, events = threading.Event(), []
+        message = 'Codex turn failed: Your workspace is out of credits. Ask your workspace owner to refill in order to continue.'
+        with mock.patch('queue_worker.translator_command', return_value=([], self.root, None)), \
+                mock.patch('queue_worker.run_translation', side_effect=RuntimeError(message)) as translate, \
+                mock.patch('queue_worker.export_chapter') as export:
+            run_jobs([Job(first, 'translate'), Job(second, 'translate')],
+                     dict(bt_path='installed', bt_config='', bt_export=True),
+                     str(self.root / 'output'), False, stop, events.append)
+        translate.assert_called_once()
+        export.assert_not_called()
+        self.assertTrue(stop.is_set())
+        self.assertEqual([e for e in events if e[0] == 'status'],
+                         [('status', 0, 'running', ''), ('status', 0, 'failed', message)])
+        self.assertIn(('done',), events)
+
     def test_pipeline_stop_terminates_process_without_user_stop(self):
         import time
         stop = threading.Event()
@@ -40,7 +111,7 @@ class QueueWorkerTests(unittest.TestCase):
             run_jobs([Job(self.root / 'missing', 'cleanup'), Job(chapter, 'cleanup')], {}, '', True,
                      threading.Event(), events.append)
         self.assertEqual([event[2] for event in events if event[0] == 'status'], ['running', 'failed', 'running', 'done'])
-        cleanup.assert_called_once_with(chapter)
+        cleanup.assert_called_once_with(chapter, '')
 
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
@@ -125,7 +196,7 @@ class QueueWorkerTests(unittest.TestCase):
     def test_pause_on_last_item_does_not_prevent_queue_completion(self):
         pause = threading.Event()
         events = []
-        def cleanup(_path):
+        def cleanup(_path, _output):
             pause.set()
             return 0, 0, []
         with mock.patch('queue_worker.clear_work_folders', side_effect=cleanup):
@@ -139,7 +210,7 @@ class QueueWorkerTests(unittest.TestCase):
         first, second = self.chapter(), self.chapter('Chapter 2')
         pause, stop = threading.Event(), threading.Event()
         events = []
-        def cleanup(path):
+        def cleanup(path, _output):
             if path == first:
                 pause.set()
                 raise RuntimeError('synthetic failure')
@@ -227,19 +298,19 @@ class QueueWorkerTests(unittest.TestCase):
     def test_completed_translation_reports_final_location_after_cleanup(self):
         chapter = self.chapter("Chapter 1, 測試")
         output = self.root / "output"
-        settings = dict(bt_path="installed", bt_config="", bt_cleanup=True)
+        settings = dict(bt_path="installed", bt_config="")
         for exporting in (False, True, True):  # Include an unchanged CBZ reused on the second export.
             with self.subTest(exporting=exporting), \
                     mock.patch("queue_worker.translator_command", return_value=([], self.root, None)), \
                     mock.patch("queue_worker.run_translation"):
                 events = []
-                run_jobs([Job(chapter, "translate")], dict(settings, bt_export=exporting),
+                run_jobs([Job(chapter, "translate")], dict(settings, bt_export=exporting, bt_cleanup=exporting),
                          str(output), True, threading.Event(), events.append)
                 expected = output_path_for(output, chapter.parent, chapter) if exporting else chapter / "result"
                 self.assertTrue(expected.exists())
                 self.assertEqual([e for e in events if e[0] == "result"], [("result", expected)])
                 self.assertGreater(events.index(("result", expected)), events.index(("status", 0, "done", "")))
-                self.assertFalse((chapter / "mask" / "keep.png").exists())
+                self.assertEqual((chapter / "mask" / "keep.png").exists(), not exporting)
 
     def test_subprocess_failure_keeps_twenty_clean_diagnostic_lines(self):
         script = ("print('\\x1b[31mERROR\\x1b[0m'); "
@@ -252,6 +323,22 @@ class QueueWorkerTests(unittest.TestCase):
         self.assertNotIn("\x1b", detail)
         self.assertEqual(detail.splitlines()[1:],
                          ["ERROR"] + [f"line{i}" for i in range(6, 25)] + ["finished translating all dirs"])
+
+    def test_retry_notifications_count_recovery_once_and_not_usage_or_exhaustion(self):
+        lines = [
+            '[WARNING] llm_chat:request_chat_completion:366 - Codex retryable failure: timeout. Attempt 1/3',
+            '[ERROR] trans_llm:_translate:1253 - Failed to parse matching translation count for prompt:',
+            '[WARNING] trans_llm:_translate:1260 - LLM translation failed due to count mismatch. Attempt: 1',
+            '[INFO] trans_llm:_translate:1334 - Codex timeout rescue: page=1.jpg, Jev checks=1; retrying translation once.',
+            '[INFO] trans_llm:_log_token_usage:1160 - LLM token usage: page=1.jpg, attempt=2',
+            '[ERROR] llm_chat:request_chat_completion:360 - Codex retry budget exhausted after 3 attempts',
+        ]
+        retry = mock.Mock()
+        script = f"lines = {lines!r}; [print(line) for line in lines]; input()"
+        with self.assertRaises(RuntimeError):
+            run_translation([sys.executable, '-u', '-c', script], self.root, None,
+                            threading.Event(), lambda *args: None, retry=retry)
+        self.assertEqual(retry.call_count, 3)
 
     def test_recovered_llm_parse_error_does_not_fail_completed_translation(self):
         lines = [
@@ -316,6 +403,9 @@ class QueueWorkerTests(unittest.TestCase):
 
     def test_failure_blocks_same_path_but_continues_other_path_without_mutating_jobs(self):
         chapter, other = self.chapter(), self.chapter("Chapter 2")
+        state = {}
+        export_chapter(other.parent, other, self.root / 'output', state)
+        save_json(self.root / 'output/.comic-sorting-state.json', state)
         jobs = (Job(chapter, "translate"), Job(chapter, "cleanup"), Job(other, "cleanup"))
         before = [asdict(job) for job in jobs]
         events = []
@@ -344,6 +434,20 @@ class QueueWorkerTests(unittest.TestCase):
         translate.assert_not_called()
         self.assertEqual([e[2] for e in events if e[0] == 'status'], ['running', 'failed'])
         self.assertEqual(config.read_text(), '{broken')
+
+    def test_duplicate_source_names_fail_before_starting_translator(self):
+        from queue_errors import error_info
+        chapter = self.chapter()
+        (chapter / '1.jpg').write_bytes(b'same page')  # Collides with the helper's 1.png.
+        events = []
+        with mock.patch('queue_worker.run_translation') as translate:
+            run_jobs([Job(chapter, 'translate')], dict(bt_config=str(self.root / 'config.json')), '', False,
+                     threading.Event(), events.append)
+        translate.assert_not_called()
+        status = [e for e in events if e[0] == 'status']
+        self.assertEqual(status[-1][2], 'failed')
+        self.assertIn('1.', status[-1][3])
+        self.assertEqual(error_info('failed', status[-1][3])[0], 'SOURCE_DUPLICATE')
 
     def test_export_state_save_failure_prevents_cleanup(self):
         chapter = self.chapter()

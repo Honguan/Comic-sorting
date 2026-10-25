@@ -1,10 +1,24 @@
 """Light Windows desktop theme with native controls and a blue primary action."""
 from tkinter import font, ttk
 
+# Layout sizes are written for 96 DPI; apply_theme measures the real ratio once per process.
+SCALE = 1.0
+
+
+def px(*values):
+    """Scale 96-DPI pixels: one value returns an int, several return a tuple."""
+    scaled = tuple(round(value * SCALE) for value in values)
+    return scaled[0] if len(scaled) == 1 else scaled
+
 
 def apply_theme(root):
+    global SCALE
+    SCALE = root.winfo_fpixels("1i") / 96
+    for name in ('TkDefaultFont', 'TkTextFont', 'TkMenuFont', 'TkHeadingFont'):
+        named = font.nametofont(name, root=root)
+        named.configure(size=max(12, named.cget('size')))
     background, surface = "#f7f9fc", "#ffffff"
-    ink, muted, accent = "#192b40", "#607086", "#0067c0"
+    ink, muted, accent = "#192b40", "#475569", "#0067c0"
     selected = "#dceeff"
     family = font.nametofont("TkDefaultFont", root=root).cget("family")
     heading = (family, font.nametofont("TkDefaultFont", root=root).cget("size"), "bold")
@@ -21,7 +35,7 @@ def apply_theme(root):
     style.configure("Muted.TLabel", foreground=muted)
     style.configure("TLabelframe", borderwidth=1)
     style.configure("TLabelframe.Label", font=heading, foreground=accent)
-    style.configure("TButton", padding=(3, 1))
+    style.configure("TButton", padding=px(6, 3))
     # Share a drawable border so hover colors are visible on native Windows themes.
     if "Primary.border" not in style.element_names():
         style.element_create("Primary.border", "from", "clam", "Button.border")
@@ -43,11 +57,11 @@ def apply_theme(root):
               foreground=[("disabled", "#778599"), ("!disabled", surface)],
               bordercolor=[("disabled", "#d6dfe9")])
     for name in ("TEntry", "TCombobox", "TSpinbox"):
-        style.configure(name, padding=1)
-    style.configure("TNotebook", tabmargins=(0, 2, 0, 0))
-    style.configure("TNotebook.Tab", padding=(10, 2))
+        style.configure(name, padding=px(3))
+    style.configure("TNotebook", tabmargins=px(0, 2, 0, 0))
+    style.configure("TNotebook.Tab", padding=px(10, 2))
     style.map("TNotebook.Tab", foreground=[("selected", accent)])
     style.configure("Treeview", background=surface, fieldbackground=surface,
-                    rowheight=font.nametofont("TkDefaultFont", root=root).metrics("linespace") + 8)
+                    rowheight=font.nametofont("TkDefaultFont", root=root).metrics("linespace") + px(8))
     style.map("Treeview", background=[("selected", selected)], foreground=[("selected", ink)])
-    style.configure("Treeview.Heading", font=heading, padding=(4, 3))
+    style.configure("Treeview.Heading", font=heading, padding=px(4, 3))

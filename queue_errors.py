@@ -8,21 +8,21 @@ from ui_language import TRANSLATIONS, tr
 # Specific causes precede wrapper errors and generic HTTP/exit codes.
 ERRORS = (
     ('LLM_CAPACITY', '模型服務暫時滿載', r'at capacity|server_is_overloaded|model.{0,40}(?:overloaded|over capacity)'),
-    ('LLM_QUOTA', '帳號額度、餘額或支出上限不足', r'insufficient_quota|credit_balance_exhausted|(?:spend|usage)_limit_exceeded|UsageLimitExceeded|(?:exceeded|reached|hit).{0,30}(?:quota|usage limit)|insufficient credits|credit balance.{0,20}(?:low|exhausted|insufficient)'),
-    ('LLM_AUTH', '登入已失效或 API 金鑰無效／未設定', r'LLMApiKeyRequiredError|API key is required|AuthenticationError|invalid_api_key|incorrect api key|unauthorized|Codex ChatGPT login is required|not authenticated|token.{0,20}(?:expired|revoked)'),
-    ('LLM_MODEL', '模型未設定、不存在或不可用', r'LLMModelRequiredError|model_not_found|(?:vision |image )?model is required for LLM|model.{0,60}(?:does not exist|not found|not supported)'),
+    ('LLM_QUOTA', '帳號額度、餘額或支出上限不足', r'insufficient_quota|credit_balance_exhausted|(?:spend|usage)_limit_exceeded|UsageLimitExceeded|(?:exceeded|reached|hit).{0,30}(?:quota|usage limit)|out of credits|insufficient credits|credit balance.{0,20}(?:low|exhausted|insufficient)'),
+    ('LLM_AUTH', '登入已失效或 API 金鑰無效／未設定', r'CodexSignInRequiredError|Sign in to Codex|Sign in with ChatGPT|Codex sign-in|LLMApiKeyRequiredError|API key is required|AuthenticationError|invalid_api_key|incorrect api key|unauthorized|Codex ChatGPT login is required|not authenticated|token.{0,20}(?:expired|revoked)'),
+    ('LLM_MODEL', '模型未設定、不存在或不可用', r'This Codex model is unavailable|LLMModelRequiredError|model_not_found|(?:vision |image )?model is required for LLM|model.{0,60}(?:does not exist|not found|not supported)'),
     ('LLM_CONFIG', '服務網址或請求設定無效', r'LLMBaseURLRequiredError|base URL is required|Codex Timeout must be|Save Codex Sessions must|unsupported codex message|Codex requires (?:text or image|a final user)|does not have text translation enabled'),
-    ('LLM_CONTEXT', '輸入超過模型上下文上限', r'ContextWindowExceeded|context_length_exceeded|maximum context length|context (?:window|length).{0,25}exceed'),
+    ('LLM_CONTEXT', '輸入超過模型上下文上限', r'Codex input exceeds the model context window|ContextWindowExceeded|context_length_exceeded|maximum context length|context (?:window|length).{0,25}exceed'),
     ('LLM_OUTPUT_LIMIT', '模型輸出達到 Token 上限', r'LLMOutputLimitError|LLM output limit reached|max_output_tokens.{0,10}(?:exceeded|reached)'),
     ('LLM_REFUSAL', '服務拒絕處理此內容', r'content_policy_violation|content_filter|safety.{0,15}(?:blocked|rejected)|request.{0,15}refused'),
     ('CODEX_START', 'Codex 執行檔不存在或無法啟動', r'Cannot start Codex|Install the official Codex CLI'),
     ('CODEX_INTERACTIVE', 'Codex 要求互動操作，無法自動繼續', r'Codex requested an interactive tool'),
     ('CODEX_PROTOCOL', 'Codex 回應格式或通訊協定異常', r'Invalid Codex protocol response|Expected a JSON-RPC object'),
     ('CODEX_EXIT', 'Codex 子程序提前結束', r'Codex App Server exited before completion'),
-    ('REQUEST_TIMEOUT', '等待服務回應逾時', r'APITimeoutError|TimeoutError|ReadTimeout|ConnectTimeout|request timed out|read timed out|connect timeout'),
+    ('REQUEST_TIMEOUT', '等待服務回應逾時', r'APITimeoutError|TimeoutError|ReadTimeout|ConnectTimeout|request timed out|read timed out|connect timeout|Codex translation timed out again after Jev cleanup'),
     ('NETWORK_ERROR', '網路、代理伺服器或 TLS 連線失敗', r'APIConnectionError|ConnectionError|ConnectionResetError|ConnectError|ProxyError|SSLError|CERTIFICATE_VERIFY_FAILED|NameResolutionError|getaddrinfo failed|ResponseStreamDisconnected|ResponseStreamConnectionFailed|stream disconnected'),
     ('LLM_RATE_LIMIT', '請求頻率過高，服務已限流', r'rate_limit_exceeded|rate_limit_error|slow_down|too many requests|rate limit reached'),
-    ('LLM_PERMISSION', '服務拒絕存取，帳號或地區權限不足', r'PermissionDeniedError|unsupported_country_region_territory|IP not authorized|country.{0,30}not supported'),
+    ('LLM_PERMISSION', '服務拒絕存取，帳號或地區權限不足', r'does not have permission for this Codex request|PermissionDeniedError|unsupported_country_region_territory|IP not authorized|country.{0,30}not supported'),
     ('GPU_MEMORY', 'GPU 顯示記憶體不足', r'CUDA out of memory|CUDAOutOfMemory|torch\.OutOfMemoryError|CUDA error: out of memory'),
     ('SYSTEM_MEMORY', '系統記憶體不足', r'MemoryError|cannot allocate memory|not enough memory|\[WinError (?:8|14|1455)\]'),
     ('ENV_DEPENDENCY', 'Python 套件或 DLL 載入失敗', r'ModuleNotFoundError|ImportError|DLL load failed|No module named|\[WinError 193\]'),
@@ -45,6 +45,7 @@ LOCAL_ERRORS = (
     ('JSON_INVALID', '設定檔或專案 JSON 無法讀取', ('請選擇既有 BallonsTranslator config JSON', '無法讀取 JSON：{0}。請檢查權限與內容，或還原備份後再試；原檔未變更。')),
     ('MANGA_MISSING', '漫畫資料夾不存在', ('漫畫路徑不存在',)),
     ('NO_IMAGES', '資料夾內沒有可處理的圖片', ('指定路徑沒有圖片，請選擇章節或整合輸出',)),
+    ('SOURCE_DUPLICATE', '來源有同名不同副檔名的圖片', ('來源有同名不同副檔名的圖片，翻譯結果會互相覆蓋；請先移除重複檔：{0}',)),
     ('PAGE_RANGE', '翻譯頁數範圍無效或頁面已不存在', ('翻譯頁數必須介於 1 至 {0}，且起始頁不可大於結束頁',)),
     ('NO_STAGE', '未啟用任何處理階段', ('請至少啟用一個 BallonsTranslator 處理階段',)),
     ('RESULT_INCOMPLETE', '翻譯結果不完整，已略過後續動作', ('翻譯結果不完整，未執行後續動作',)),
@@ -62,7 +63,7 @@ OTHER_ERRORS = {
     'PIPELINE_STOPPED': '翻譯流程提前停止，未回報更明確原因',
     'PROCESS_EXIT': '翻譯程序以非零代碼結束',
     'RUN_INCOMPLETE': '翻譯程序未完成所有階段',
-    'QUEUE_BLOCKED': '同一資料夾的前置工作失敗，已略過此項',
+    'QUEUE_BLOCKED': '前置工作失敗',
     'RUN_INTERRUPTED': '上次執行中斷，需確認成果後重試',
     'USER_CANCELLED': '使用者或主佇列要求停止',
     'UNKNOWN_ERROR': '未能分類的錯誤，請查看原始訊息',
@@ -74,6 +75,8 @@ _RULES = [(code, re.compile(pattern, re.I)) for code, _, pattern in ERRORS]
 
 def error_info(status: str, error: str) -> tuple[str, str]:
     """Classify terminal diagnostics, never progress text or a successful job's notes."""
+    if status == 'skipped':
+        return '', redact(error)
     if status not in ('failed', 'cancelled', 'blocked', 'done_warning'):
         return '', ''
     if status == 'blocked':

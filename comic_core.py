@@ -70,29 +70,62 @@ def image_files(folder):
 
 def translations_complete(sources, translated, selected=None):
     """Allow extension changes only when the source basename is unambiguous."""
-    counts = Counter(path.stem.casefold() for path in sources)
+    def stem(path):
+        return (os.path.splitext(path.name)[0] if isinstance(path, os.DirEntry) else path.stem).casefold()
+    counts = Counter(stem(path) for path in sources)
     names = {path.name.casefold() for path in translated}
-    stems = {path.stem.casefold() for path in translated}
+    stems = {stem(path) for path in translated}
     return all(path.name.casefold() in names or
-               (counts[path.stem.casefold()] == 1 and path.stem.casefold() in stems)
+               (counts[stem(path)] == 1 and stem(path) in stems)
                for path in (sources if selected is None else selected))
 
 
-def translation_status(chapter_folder):
+def duplicate_stems(images):
+    """Names sharing a basename; translated output is PNG, so they overwrite each other."""
+    groups = {}
+    for path in images:
+        groups.setdefault(path.stem.casefold(), []).append(path.name)
+    return [names for names in groups.values() if len(names) > 1]
+
+
+def image_count(folder):
+    folder = Path(folder)
+    if not folder.is_dir():
+        return 0
+    with os.scandir(folder) as entries:
+        return sum(entry.is_file(follow_symlinks=False)
+                   and os.path.splitext(entry.name)[1].casefold() in IMAGE_EXTENSIONS
+                   for entry in entries)
+
+
+def translation_status(chapter_folder, *, source_images=None):
     result = Path(chapter_folder) / "result"
     if not result.is_dir():
         result = next((child for child in Path(chapter_folder).iterdir()
-                       if child.is_dir() and child.name.casefold() == "result"), result)
+                       if child.name.casefold() == "result" and child.is_dir()), result)
     if not result.is_dir() or is_link_or_junction(result):
         return tr("未翻譯"), []
     images = image_files(result)
-    if images and not translations_complete(image_files(chapter_folder), images):
+    if images and not translations_complete(image_files(chapter_folder) if source_images is None else source_images, images):
         return tr("部分翻譯"), images
     return (tr("可匯出") if images else tr("結果為空")), images
 
 
 def updated_at(folder, images):
-    return max([Path(folder).stat().st_mtime, *(image.stat().st_mtime for image in images)])
+    latest = Path(folder).stat().st_mtime
+    groups = {}
+    for image in images:
+        groups.setdefault(image.parent, set()).add(image.name)
+    for parent, names in groups.items():
+        # DirEntry reuses enumeration metadata on Windows, avoiding per-image I/O.
+        with os.scandir(parent) as entries:
+            for entry in entries:
+                if entry.name in names:
+                    latest = max(latest, entry.stat().st_mtime)
+                    names.remove(entry.name)
+        for name in names:
+            latest = max(latest, (parent / name).stat().st_mtime)
+    return latest
 
 
 def folder_size(folder):
@@ -133,7 +166,7 @@ def summarize_names(names):
 
 
 def is_link_or_junction(path):
-    info = Path(path).lstat()
+    info = path.stat(follow_symlinks=False) if isinstance(path, os.DirEntry) else Path(path).lstat()
     return bool(stat.S_ISLNK(info.st_mode)
                 or getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT)
 
@@ -171,7 +204,51 @@ def delete_manga_folder(folder, root):
     recycle_folder(folder)
 
 
-def clear_work_folders(root):
+def validate_cleanup_export(chapter, komga_root, state):
+    """Require a complete, unchanged export before removing preprocessing data."""
+    if not komga_root:
+        raise ValueError(tr("請先匯出並驗證 CBZ，再清理前處理資料"))
+    chapter, komga_root = Path(chapter), Path(komga_root).resolve()
+    status, images = translation_status(chapter)
+    if status != tr("可匯出"):
+        raise ValueError(tr("尚未完整翻譯，保留前處理資料"))
+    archive = output_path_for(komga_root, chapter.parent, chapter)
+    record = state.get(f"{chapter.parent.name}/{chapter.name}", {})
+    if (not isinstance(record, dict) or not isinstance(record.get("source"), str)
+            or not isinstance(record.get("output"), str)
+            or Path(record["source"]).resolve() != images[0].parent.resolve()
+            or Path(record["output"]).resolve() != archive.resolve()
+            or record.get("fingerprint") != source_fingerprint(images)["fingerprint"]):
+        raise ValueError(tr("未找到相符的匯出紀錄，保留前處理資料"))
+    _check_cleanup_path(archive, komga_root)
+    info = archive.stat()
+    archive_stat = [info.st_size, info.st_mtime_ns]
+    if record.get("outputStat") != archive_stat:
+        raise ValueError(tr("CBZ 已變更，請重新匯出後再清理"))
+    if any(source.stat().st_mtime_ns > info.st_mtime_ns for source in image_files(chapter)):
+        raise ValueError(tr("來源或前處理資料已更新，請重新匯出後再清理"))
+    def fail(error):
+        raise error
+
+    for folder in chapter.iterdir():
+        if folder.name.casefold() not in WORK_FOLDER_NAMES:
+            continue
+        _check_cleanup_path(folder, chapter.resolve())
+        for current, directories, files in os.walk(folder, onerror=fail):
+            for name in directories + files:
+                candidate = Path(current) / name
+                _check_cleanup_path(candidate, chapter.resolve())
+                if candidate.stat().st_mtime_ns > info.st_mtime_ns:
+                    raise ValueError(tr("來源或前處理資料已更新，請重新匯出後再清理"))
+    validate_cbz(archive, images)
+    current = archive.stat()
+    if ([current.st_size, current.st_mtime_ns] != archive_stat
+            or source_fingerprint(images)["fingerprint"] != record["fingerprint"]):
+        raise ValueError(tr("匯出資料在檢查期間變更，已停止清理"))
+    return info.st_mtime_ns
+
+
+def clear_work_folders(root, komga_root=None):
     root = Path(root)
     root_resolved = root.resolve()
     targets = []
@@ -200,10 +277,26 @@ def clear_work_folders(root):
                 continue
             if matched:
                 directory_names.remove(name)
+    try:
+        state = load_json(Path(komga_root) / ".comic-sorting-state.json", {}, strict=True) if komga_root else {}
+    except (OSError, ValueError) as error:
+        return len(targets), 0, [str(error)]
+    checked = {}
     for folder in targets:
         try:
             _check_cleanup_path(folder, root_resolved)
             children = list(folder.iterdir())
+            if not children:
+                continue
+            chapter = folder.parent
+            if chapter not in checked:
+                try:
+                    checked[chapter] = validate_cleanup_export(chapter, komga_root, state)
+                except (OSError, ValueError, zipfile.BadZipFile) as error:
+                    checked[chapter] = None
+                    errors.append(f"{chapter}: {error}")
+            if checked[chapter] is None:
+                continue
         except (OSError, ValueError) as error:
             errors.append(f"{folder}: {error}")
             continue
@@ -383,4 +476,164 @@ def export_chapter(series_path, chapter_path, komga_root, state, skip_unchanged=
     }
     return action, output
 
+
+
+
+def _library_directories(base_path):
+    base = Path(base_path)
+    if is_link_or_junction(base):
+        return
+    pending = [(base, None)]
+    while pending:
+        folder, directory = pending.pop()
+        with os.scandir(folder) as listing:
+            entries = list(listing)
+        directories = [entry for entry in entries if entry.is_dir()]
+        files = [entry for entry in entries if not entry.is_dir()]
+        modified = directory.stat(follow_symlinks=False).st_mtime if directory else folder.stat().st_mtime
+        yield folder, directories, files, modified
+        pending.extend((Path(entry.path), entry) for entry in reversed(directories)
+                       if entry.name.casefold() not in {"result", "inpainted", "mask"}
+                       and not (entry.name.casefold().startswith(".chapter ")
+                                and entry.name.casefold().endswith((".tmp", ".backup")))
+                       and not is_link_or_junction(entry))
+
+
+def get_folders_with_numbers(base_path):
+    base = Path(base_path)
+    folders = []
+    for folder, directories, files, _modified in _library_directories(base):
+        number = chapter_number(folder.name)
+        has_result = any(entry.name.casefold() == "result" for entry in directories)
+        has_images = any(os.path.splitext(entry.name)[1].casefold() in IMAGE_EXTENSIONS for entry in files)
+        if folder != base and number is not None and (has_result or has_images):
+            folders.append((str(folder), folder.name, number))
+    return sorted(folders, key=lambda item: (
+        natural_sort_key(str(Path(item[0]).parent.relative_to(base))),
+        item[2], natural_sort_key(item[1])))
+
+
+def _chapter_inventory(chapter, directories, files, modified):
+    """Read source/result names, size, and timestamps from the same enumeration."""
+    sources, translated = [], []
+    latest = {'source': modified, 'result': modified}
+    total = 0
+    result = next((entry for entry in directories if entry.name.casefold() == 'result'
+                   and not is_link_or_junction(entry)), None)
+    pending = [(None, files, 'source')]
+    pending.extend((entry, None, 'result' if entry is result else None) for entry in directories
+                   if not is_link_or_junction(entry))
+    while pending:
+        directory, entries, role = pending.pop()
+        if entries is None:
+            try:
+                with os.scandir(directory.path) as listing:
+                    entries = list(listing)
+            except OSError:
+                if role == 'result':
+                    raise
+                continue
+        for entry in entries:
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    if not is_link_or_junction(entry):
+                        pending.append((entry, None, None))
+                elif entry.is_file(follow_symlinks=False) and not is_link_or_junction(entry):
+                    info = entry.stat(follow_symlinks=False)
+                    total += info.st_size
+                    if role and os.path.splitext(entry.name)[1].casefold() in IMAGE_EXTENSIONS:
+                        (sources if role == 'source' else translated).append(entry)
+                        latest[role] = max(latest[role], info.st_mtime)
+            except OSError:
+                if role:
+                    raise
+    status = (tr('可匯出') if translations_complete(sources, translated) else tr('部分翻譯')) if translated else tr('結果為空') if result else tr('未翻譯')
+    return sources, translated, status, total, latest['result' if result else 'source']
+
+
+def scan_folder_data(base, progress=None):
+    base = Path(base)
+    folders = []
+    series_groups = {}
+    chapter_updates = {}
+    chapter_sizes = {}
+    ready_chapters = set()
+    details = {}
+    page_counts = {}
+    for chapter, directories, files, modified in _library_directories(base):
+        number = chapter_number(chapter.name)
+        if chapter == base or number is None or not (any(entry.name.casefold() == 'result' for entry in directories)
+                or any(os.path.splitext(entry.name)[1].casefold() in IMAGE_EXTENSIONS for entry in files)):
+            continue
+        folder_path, folder_name = str(chapter), chapter.name
+        folders.append((folder_path, folder_name, number))
+        sources, translated, status, size, latest = _chapter_inventory(chapter, directories, files, modified)
+        page_counts[chapter] = len(sources)
+        if status == tr("可匯出"):
+            detail = tr("{0} 張翻譯圖片｜可匯出").format(len(translated))
+            ready_chapters.add(chapter)
+        elif status == tr("結果為空"):
+            detail = tr("結果資料夾為空")
+        elif status == tr("部分翻譯"):
+            detail = tr("{0} 張翻譯圖片｜部分翻譯").format(len(translated))
+        else:
+            detail = tr("{0} 張圖片｜未翻譯").format(len(sources))
+        chapter_updates[chapter] = latest
+        chapter_sizes[chapter] = size
+        details[chapter] = detail
+        series_groups.setdefault(chapter.parent, []).append(
+            (str(chapter), folder_name, number))
+        if progress and len(folders) % 128 == 0:
+            progress(len(folders))
+    folders.sort(key=lambda item: (natural_sort_key(str(Path(item[0]).parent.relative_to(base))),
+                                  item[2], natural_sort_key(item[1])))
+    for chapters in series_groups.values():
+        chapters.sort(key=lambda item: (item[2], natural_sort_key(item[1])))
+    return (folders, series_groups, chapter_updates, chapter_sizes,
+            ready_chapters, details, page_counts)
+
+
+def aggregate_folders(chapters, start_idx, end_idx, progress=None):
+    selected = chapters[start_idx:end_idx + 1]
+    output = aggregate_output(selected)
+    if len(selected) == 1 and Path(selected[0][0]).resolve() == output:
+        return output
+    sources = []
+    for folder_path, _, _ in selected:
+        images = image_files(folder_path)
+        if not images:
+            raise ValueError(tr("來源沒有可整合的圖片：{0}").format(folder_path))
+        sources.extend(images)
+    temporary = output.with_name(f".{output.name}.tmp")
+    backup = output.with_name(f".{output.name}.backup")
+    if temporary.exists():
+        shutil.rmtree(temporary)
+    if backup.exists():
+        if output.exists():
+            shutil.rmtree(backup)
+        else:
+            os.replace(backup, output)
+    if output.exists() and not output.is_dir():
+        raise ValueError(tr("輸出路徑不是資料夾：{0}").format(output))
+    temporary.mkdir()
+    try:
+        for index, source in enumerate(sources, 1):
+            shutil.copy2(source, temporary / f"{index}{source.suffix}")
+            if progress:
+                progress(index, len(sources))
+        if output.exists():
+            os.replace(output, backup)
+        os.replace(temporary, output)
+    except Exception:
+        if temporary.exists():
+            shutil.rmtree(temporary)
+        if backup.exists() and not output.exists():
+            os.replace(backup, output)
+        raise
+    if backup.exists():
+        try:
+            shutil.rmtree(backup)
+        except OSError:
+            pass
+    return output
 

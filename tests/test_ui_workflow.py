@@ -9,6 +9,7 @@ from unittest import mock
 from test_comic_sorting import comic
 from queue_worker import Job
 from ui_language import set_language
+import ui_theme
 
 
 def detail_values(window):
@@ -17,6 +18,341 @@ def detail_values(window):
 
 
 class WorkflowTests(unittest.TestCase):
+    def test_model_shares_and_averages_use_scope_and_complete_data(self):
+        import json
+        from queue_history import fill_model_usage
+
+        def record(model, requests, tokens, cost, missing=0, unpriced=0):
+            return dict(model=model, requests=requests, total_tokens=tokens, cost=cost,
+                        missing_usage_requests=missing, unpriced_requests=unpriced)
+
+        q = self.app.translation_queue
+        q.stats_button.invoke()
+        table = q.model_usage_table
+        q.model_window.update_idletasks()
+        self.assertLessEqual(sum(table.column(key, 'width') for key in table['displaycolumns']) + 2,
+                             table.winfo_width())
+
+        a = record('a', 2, 300, '0.0000001')
+        b = record('b', 1, 900, '0.0000002')
+        unknown = dict(record('x', 1, 0, None, missing=1, unpriced=1), models=['x', 'y'])
+        fill_model_usage(table, {'OCR': [a], 'translation': [a, b, unknown], 'total': [a, b, unknown]})
+        self.assertEqual(table.set(json.dumps(['OCR', 'a']), 'token_share'), '100.00%')
+        for scope in ('translation', 'total'):
+            row = json.dumps([scope, 'a'])
+            self.assertEqual(table.set(row, 'token_share'), '25.00%')
+            self.assertEqual(table.set(row, 'request_share'), '50.00%')
+            self.assertEqual(table.set(row, 'cost_share'), '33.33%')
+            self.assertEqual(table.set(row, 'avg_tokens'), '150.00')
+            self.assertEqual(table.set(row, 'avg_cost'), 'US$0.000001')
+            other = json.dumps([scope, 'b'])
+            self.assertEqual(table.set(other, 'cost_share'), '66.67%')
+            self.assertEqual(table.set(other, 'cost'), table.set(row, 'cost'))
+            unallocated = json.dumps([scope, ''])
+            self.assertEqual(table.set(unallocated, 'request_share'), '25.00%')
+            for column in ('cost_share', 'avg_tokens', 'avg_cost'):
+                self.assertEqual(table.set(unallocated, column), '—')
+        self.assertEqual(a['cost'], '0.0000001')
+
+        fill_model_usage(table, {'translation': [record('a', 2, 300, '1'),
+                                                record('a', 1, 0, None, missing=1, unpriced=1),
+                                                record('b', 1, 100, '2')]})
+        row = json.dumps(['translation', 'a'])
+        self.assertEqual(table.set(row, 'avg_tokens'), '150.00')
+        self.assertEqual(table.set(row, 'avg_cost'), '—')
+        self.assertEqual(table.set(row, 'cost_share'), '33.33%')
+        self.assertEqual(table.set(row, 'pricing'), '僅含已知金額')
+
+        fill_model_usage(table, {'translation': [dict(record('a', 2, 300, '1'), cost_incomplete=True)]})
+        self.assertEqual(table.set(row, 'avg_cost'), '—')
+
+
+        fill_model_usage(table, {'total': [record('free', 2, 0, '0'), record('empty', 0, 0, '0')]})
+        free, empty = json.dumps(['total', 'free']), json.dumps(['total', 'empty'])
+        self.assertEqual(table.set(free, 'request_share'), '100.00%')
+        self.assertEqual(table.set(free, 'avg_tokens'), '0.00')
+        self.assertEqual(table.set(free, 'avg_cost'), 'US$0.000000')
+        for column in ('token_share', 'cost_share'):
+            self.assertEqual(table.set(free, column), '—')
+        for column in ('avg_tokens', 'avg_cost'):
+            self.assertEqual(table.set(empty, column), '—')
+        fill_model_usage(table, {})
+        self.assertEqual(table.get_children(), ())
+
+
+    def test_model_statistics_live_and_history_remain_clear_and_exact(self):
+        import json
+        from queue_worker import parse_bt_request_usage
+        from queue_stats import merge_snapshots
+        from queue_history import save_run
+        from model_pricing import get_price
+        q = self.app.translation_queue
+        ocr = parse_bt_request_usage('[INFO] ocr_llm:run:1 - LLM token usage: prompt=100, completion=20, total=120, cache_hit=80', 'gpt-4o-mini')
+        translation = parse_bt_request_usage('[INFO] trans_llm:run:1 - LLM token usage: prompt=100, completion=20, total=120',
+                                             'private-model', get_price('private-model', {'private-model': ['2', '2', '2', '10']}))
+        q.usage_records[0, 'OCR'] = ocr
+        q.usage_records[0, 'translation'] = translation
+        q.usage_records[0, 'total'] = dict(merge_snapshots((ocr, translation)), scope='total')
+        q.stats_button.invoke()
+        table = q.model_usage_table
+        ocr_row = json.dumps(['OCR', 'gpt-4o-mini'])
+        translation_row = json.dumps(['translation', 'private-model'])
+        self.assertEqual(table.set(ocr_row, 'prompt'), '100')
+        self.assertEqual(table.set(ocr_row, 'cache_hit'), '80')
+        self.assertEqual(table.set(ocr_row, 'cost'), 'US$0.000021')
+        self.assertEqual(len(table.get_children()), 4)
+        translation = merge_snapshots((translation, translation))
+        q.usage_records[0, 'translation'] = translation
+        q.usage_records[0, 'total'] = dict(merge_snapshots((ocr, translation)), scope='total')
+        q.show_usage()
+        self.assertEqual(table.set(translation_row, 'requests'), '2')
+        self.assertEqual(table.set(translation_row, 'cost'), 'US$0.000800')
+        with mock.patch.object(table, 'item', wraps=table.item) as update:
+            q.show_usage()
+        self.assertFalse(any('values' in call.kwargs for call in update.call_args_list))
+        usage = {scope: dict(value, cost=str(value['cost']) if value['cost'] is not None else None)
+                 for (_index, scope), value in q.usage_records.items()}
+        record = dict(id='model-statistics', started_at='2026-10-01T12:00:00', status='done', elapsed_seconds=10,
+                      jobs=[dict(path=str(self.folder), action='translate', status='done', usage=usage, stage_seconds={})])
+        save_run(self.app.history_path, record)
+        q.open_history()
+        window = q.history_window
+        self.assertEqual(window.total_details.winfo_manager(), '')
+        window.toggle_totals()
+        self.assertEqual(window.total_details.winfo_manager(), 'pack')
+        window.toggle_totals()
+        self.assertEqual(window.total_details.winfo_manager(), '')
+        window.tree.selection_set('model-statistics')
+        window.show_details()
+        history_table = window.detail_tables['models']
+        self.assertEqual(history_table.set(translation_row, 'cost'), table.set(translation_row, 'cost'))
+        self.assertEqual(history_table.set(ocr_row, 'cache_hit'), '80')
+        for column, expected in (('token_share', '100.00%'), ('request_share', '100.00%'),
+                                 ('cost_share', '100.00%'), ('avg_tokens', '120.00'), ('avg_cost', 'US$0.000400')):
+            self.assertEqual(table.set(translation_row, column), expected)
+            self.assertEqual(history_table.set(translation_row, column), expected)
+
+        legacy = dict(model='a', models=['a', 'b'], requests=2, total_tokens=240, cost='0.004',
+                      missing_usage_requests=0, unpriced_requests=0)
+        record['jobs'][0]['usage']['total'] = legacy
+        save_run(self.app.history_path, record)
+        window.refresh()
+        window.tree.selection_set('model-statistics')
+        window.show_details()
+        unknown = json.dumps(['total', ''])
+        self.assertEqual(history_table.set(unknown, 'model'), '模型未分項')
+        self.assertEqual(history_table.set(unknown, 'prompt'), '—')
+        self.assertEqual(history_table.set(unknown, 'cost'), 'US$0.004000')
+
+
+    def test_status_batch_updates_controls_and_counts_once(self):
+        q = self.app.translation_queue
+        q.jobs = [Job(self.folder / f'Chapter {i}', 'translate') for i in range(3)]
+        q.active_jobs = tuple(q.jobs)
+        q.render()
+        for index in range(3):
+            q.events.put(('status', index, 'failed', 'synthetic failure'))
+            q.events.put(('retry',))
+        with mock.patch.object(q, 'update_controls', wraps=q.update_controls) as controls, \
+                mock.patch.object(q, 'update_summary', wraps=q.update_summary) as summary:
+            q.poll()
+        self.assertEqual(controls.call_count, 1)
+        self.assertEqual(summary.call_count, 1)
+        self.assertIn('失敗 3', q.summary.get())
+        self.assertIn('本次重試 3', q.summary.get())
+
+    def test_export_state_error_does_not_count_as_a_failed_chapter(self):
+        chapters = [self.folder / 'Chapter 1', self.folder / 'Chapter 2']
+        archives = [('created', self.folder / 'output' / f'{i}.cbz') for i in range(2)]
+        with mock.patch.object(comic, 'export_chapter', side_effect=archives), \
+                mock.patch.object(comic, 'save_json', side_effect=OSError('state write failed')), \
+                mock.patch.object(comic, 'clear_work_folders') as cleanup:
+            self.app.export_worker(chapters, str(self.folder / 'output'), True)
+        done = list(self.app.events.queue)[-1]
+        self.assertEqual(done[1], dict(created=2, updated=0, skipped=0, failed=0))
+        self.assertIn('state write failed', done[2][0])
+        self.assertIsNone(done[4])
+        cleanup.assert_not_called()
+
+    def test_statistics_render_once_after_event_batch(self):
+        q = self.app.translation_queue
+        usage = dict(scope='total', requests=1, total_tokens=10, cost=None,
+                     missing_usage_requests=0, unpriced_requests=1)
+        q.events.put(('usage', 0, usage))
+        q.events.put(('usage', 0, dict(usage, requests=2, total_tokens=20)))
+        q.events.put(('jev_stats', 0, dict(calls=1, elapsed_seconds=2)))
+        with mock.patch.object(q, 'show_usage', wraps=q.show_usage) as show:
+            q.poll()
+        show.assert_called_once()
+        self.assertIn('20 tokens', q.usage_labels['total'].get())
+        self.assertEqual(q.jev_elapsed_label.get(), '00:00:02')
+
+    def test_settings_offer_native_interface_and_keep_jev_controls(self):
+        from tkinter import ttk
+        q = self.app.translation_queue
+        widgets, labels = [self.app.settings_tab, self.app.queue_tab], []
+        while widgets:
+            widget = widgets.pop()
+            widgets.extend(widget.winfo_children())
+            if isinstance(widget, ttk.Button):
+                labels.append(str(widget['text']))
+        self.assertNotIn('編輯設定檔', labels)
+        self.assertIn('開啟原生設定介面', labels)
+        self.assertIn('開啟紀錄資料夾', labels)
+        self.assertEqual(q.view_menu.entrycget(1, 'label'), 'Jev 統計')
+        q.view_menu.invoke(1)
+        self.assertTrue(q.jev_window.winfo_exists())
+        command = ['python.exe', '-u', '-m', 'ballontranslator', '--config', 'native.json']
+        with mock.patch.object(q, 'command', return_value=(command, self.folder, {})), \
+                mock.patch('translation_queue.subprocess.Popen') as launch:
+            launch.return_value.poll.return_value = None
+            q.open_settings()
+            q.open_settings()
+        launch.assert_called_once_with(command, cwd=self.folder, env={}, creationflags=mock.ANY)
+        with mock.patch.object(self.app, 'save_settings', return_value=True), \
+                mock.patch.object(self.root, 'destroy') as close:
+            self.app.close()
+        close.assert_called_once()
+
+    def test_parallel_progress_keeps_both_chapters_visible(self):
+        q = self.app.translation_queue
+        q.jobs = [Job(self.folder / 'Manga/Chapter 1', 'translate'),
+                  Job(self.folder / 'Manga/Chapter 2', 'translate')]
+        q.active_jobs = tuple(q.jobs)
+        q.render()
+        for phase, index, total in [('translate', 0, 10), ('prepare', 1, 20)]:
+            q.events.put(('phase_event', phase, ('status', index, 'running', '')))
+            q.events.put(('phase_event', phase, ('bt_reset', total, {})))
+            if phase == 'translate':
+                q.events.put(('phase_event', phase, ('bt_progress', 'Translation', 50, 5, 10, '1s')))
+        q.poll()
+        self.assertEqual(q.bt_progress['Translation'][:3], (50, 5, 10))
+        self.assertEqual(q.bt_progress['OCR'][2], 20)
+        self.assertIn('Manga/Chapter 1', q.label.get())
+        self.assertIn('Manga/Chapter 2', q.label.get())
+        self.assertEqual(q.tree.set(str(id(q.jobs[1])), 'status'), '前處理中')
+
+    def test_failure_and_retry_summary_updates_from_events(self):
+        q = self.app.translation_queue
+        q.jobs = [Job(self.folder / 'Chapter 1', 'translate'),
+                  Job(self.folder / 'Chapter 2', 'translate', 'blocked')]
+        q.active_jobs = tuple(q.jobs)
+        q.render()
+        q.events.put(('retry',))
+        q.events.put(('retry',))
+        q.events.put(('status', 0, 'failed', 'timeout'))
+        q.poll()
+        self.assertIn('失敗 1｜本次重試 2', q.summary.get())
+        q.events.put(('status', 0, 'prepared', ''))
+        q.poll()
+        self.assertIn('失敗 0｜本次重試 2', q.summary.get())
+
+    def test_retry_restores_valid_preprocessing_for_selected_page_range(self):
+        from comic_core import save_json, load_json
+        from queue_phases import mark_prepared
+        q = self.app.translation_queue
+        path = self.folder / 'Prepared/Chapter 1'
+        path.mkdir(parents=True)
+        for name in ('1.png', '2.png'):
+            (path / name).write_bytes(b'source')
+        save_json(path / 'imgtrans_Chapter 1.json', {'pages': {'1.png': [], '2.png': []}})
+        mark_prepared(path, [path / '1.png'])
+        q.jobs = [Job(path, 'translate', 'failed', 'timeout', start_page=1, end_page=1),
+                  Job(path, 'translate', 'failed', 'timeout'),
+                  Job(path, 'cleanup', 'failed', 'error'),
+                  Job(path, 'translate', 'failed', 'range', start_page=3)]
+        q.render()
+        q.retry()
+        self.assertEqual([j.status for j in q.jobs], ['prepared', 'pending', 'pending', 'pending'])
+        self.assertTrue(all(j.error == '' for j in q.jobs))
+        self.assertEqual(load_json(self.settings, {})['bt_jobs'][0]['status'], 'prepared')
+        self.assertEqual(q.tree.set(str(id(q.jobs[0])), 'status'), '待翻譯')
+        self.assertFalse(q.running)
+        (path / '1.png').write_bytes(b'changed source')
+        q.jobs[0].status = 'failed'
+        q.tree.selection_set(str(id(q.jobs[0])))
+        q.retry()
+        self.assertEqual(q.jobs[0].status, 'pending')
+
+    def test_phase_modes_restore_prepared_jobs_and_scope_schedules(self):
+        from queue_phases import MODES
+        from ui_language import tr
+        q = self.app.translation_queue
+        q.jobs = [Job(self.folder / 'Manga/Chapter 1', 'translate', 'prepared'),
+                  Job(self.folder / 'Manga/Chapter 2', 'translate', 'skipped'),
+                  Job(self.folder / 'Manga/Chapter 3', 'translate', 'done'),
+                  Job(self.folder / 'Manga/Chapter 4', 'export')]
+        q.workflow.set(tr(MODES['translate']))
+        q.render()
+        q.update_controls()
+        self.assertEqual(q.start_targets(), tuple(q.jobs[:2]))
+        self.assertEqual(str(q.start_button['state']), 'normal')
+        self.assertEqual(q.settings()['bt_workflow'], 'translate')
+        before = q.scheduler.options()
+        q.workflow.set(tr(MODES['prepare']))
+        self.assertNotEqual(q.scheduler.options(), before)
+        q.cleanup.set(True)
+        with mock.patch('translation_queue.messagebox.askyesno') as confirm:
+            self.assertTrue(q.confirm_cleanup())
+            confirm.assert_not_called()
+        self.assertTrue(self.app.save_settings())
+        from comic_core import load_json
+        settings = load_json(self.settings, {})
+        self.assertEqual(settings['bt_workflow'], 'prepare')
+        self.assertEqual(settings['bt_jobs'][0]['status'], 'prepared')
+        with mock.patch('translation_queue.threading.Thread') as worker:
+            for index, (mode, label) in enumerate(zip(MODES, ('開始執行', '開始前處理', '開始翻譯', '開始兩輪', '開始並行'))):
+                q.workflow_menu.invoke(index)
+                self.assertEqual(q.workflow_mode(), mode)
+                self.assertEqual(q.start_button['text'], tr(label))
+                self.assertEqual(q.settings()['bt_workflow'], mode)
+            worker.assert_not_called()
+        q.running = True
+        q.update_controls()
+        self.assertEqual(str(q.workflow_choice['state']), 'disabled')
+        self.assertTrue(all(q.workflow_menu.entrycget(i, 'state') == 'disabled' for i in range(len(MODES))))
+        q.running = False
+
+    def test_jev_current_and_history_statistics_preserve_totals(self):
+        from queue_history import HistoryWindow, history_totals
+        from translation_queue import ACTIONS, STATUSES
+        q = self.app.translation_queue
+        stats = dict(calls=2, changed_calls=1, cleared_blocks=1, trimmed_blocks=2,
+                     kept_blocks=3, removed_characters=9, elapsed_seconds=12.5,
+                     cost_nano_usd=187950, estimated_cost_requests=4, unpriced_requests=0)
+        usage = dict(requests=4, total_tokens=1500, missing_usage_requests=0, unpriced_requests=4, cost=None)
+        q.jev_records[0] = stats
+        q.usage_records[0, 'Jev'] = usage
+        q.usage_records[0, 'total'] = usage
+        q.show_usage()
+        self.assertEqual(q.jev_elapsed_label.get(), '00:00:12')
+        self.assertEqual(q.usage_table.item('Jev', 'values')[1], '1.50K')
+        q.open_jev_stats()
+        self.assertEqual(len(q.jev_table.get_children()), 13)
+        self.assertEqual(q.jev_table.item(q.jev_table.get_children()[-1], 'values')[1], '00:00:12')
+        q.jev_window.destroy()
+        record = dict(id='jev', started_at='2026-09-24', status='cancelled', elapsed_seconds=20,
+                      jobs=[dict(path='Chapter', action='translate', status='failed', error='',
+                                 jev_stats=stats, usage={'Jev': usage, 'total': usage})])
+        q.active_jobs = [Job(Path('Chapter'), 'translate', 'failed')]
+        q.history_run = record
+        self.assertTrue(q.save_history())
+        totals = history_totals(self.app.history_path)
+        self.assertEqual(totals['elapsed_seconds'], 20)
+        self.assertEqual(totals['jev_stats']['elapsed_seconds'], 12.5)
+        self.assertEqual(totals['usage_records']['total'], [usage])
+        window = HistoryWindow(self.root, self.app.history_path, ACTIONS, STATUSES)
+        self.assertEqual(window.totals.item('Jev', 'values')[1], '1.50K')
+        self.assertIn('00:00:12', detail_values(window))
+        with mock.patch('queue_history.history_totals', return_value=totals) as scan:
+            window.change_page(1)
+            window.change_page(-1)
+            scan.assert_not_called()
+            window.refresh()
+            scan.assert_called_once()
+        self.assertIn('US$0.000187950', detail_values(window))
+        window.destroy()
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.folder = Path(self.temp.name).resolve()
@@ -106,13 +442,13 @@ class WorkflowTests(unittest.TestCase):
         q.render()
         q.update_controls()
         with mock.patch.object(q, 'start') as start:
-            q.selection_buttons['重新選取'].invoke()
+            q.run_action('重試')
             start.assert_not_called()
         self.assertEqual([j.status for j in q.jobs], ['done', 'pending', 'pending', 'pending', 'cancelled', 'blocked'])
         self.assertEqual(q.selected_job_ids(), {str(id(q.jobs[1])), str(id(q.jobs[2]))})
         self.assertEqual([j.error for j in q.jobs], ['original', '', '', 'original', 'original', 'original'])
         self.assertFalse(q.running)
-        self.assertEqual(str(q.selection_buttons['重新選取']['state']), 'disabled')
+        self.assertEqual(q.action_states['重試'], 'disabled')
         q.jobs[1].status = 'failed'
         q.running = True
         q.retry()
@@ -133,7 +469,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual([j.status for j in q.jobs], ['done', 'pending', 'pending'])
         q.tree.selection_set(ids[0])
         q.update_controls()
-        self.assertEqual(str(q.selection_buttons['重新選取']['state']), 'normal')
+        self.assertEqual(q.action_states['重試'], 'normal')
         q.retry()
         self.assertEqual(q.jobs[0].status, 'pending')
         self.assertFalse(q.running)
@@ -165,6 +501,7 @@ class WorkflowTests(unittest.TestCase):
     def test_queue_checkpoint_failure_never_starts_second_job(self):
         from comic_core import load_json
         q = self.app.translation_queue
+        self.app.komga_path.set(str(self.folder / 'Komga'))
         for fail_at in ('settings', 'history'):
             q.jobs = [Job(self.chapter(f'Checkpoint {fail_at} 1'), 'cleanup'), Job(self.chapter(f'Checkpoint {fail_at} 2'), 'cleanup')]
             q.render()
@@ -195,7 +532,7 @@ class WorkflowTests(unittest.TestCase):
         q.add_paths(paths)
         self.wait_counts(q)
         q.tree.selection_set(str(id(q.jobs[1])))
-        with mock.patch('translation_queue.image_files', side_effect=AssertionError('must not read disk')):
+        with mock.patch('translation_queue.image_count', side_effect=AssertionError('must not read disk')):
             q.move(-1)
             q.render()
             self.assertFalse(q.counting)
@@ -204,11 +541,650 @@ class WorkflowTests(unittest.TestCase):
         self.wait_counts(q)
         self.assertEqual(sum(q.pending_file_counts.values()), 3)
 
+    def test_readding_a_job_recounts_pages_without_breaking_the_library(self):
+        q = self.app.translation_queue
+        path = self.chapter('Chapter 1')
+        for name in ('1.png', '2.png'):
+            (path / name).touch()
+        base = path.parent.parent
+        self.app.apply_scan_data(base, self.app.scan_folder_data(base))
+        q.add_paths([path], 'translate')
+        self.wait_counts(q)
+        (path / '3.png').touch()
+        q.add_paths([path], 'translate')
+        self.wait_counts(q)
+        self.assertEqual(q.count_cache[path, 1, None], 3)
+        self.app.apply_scan_data(*self.app.scan_data)
+        self.assertEqual(self.app.chapter_page_counts[path], 2)
+
+    def test_scan_page_index_shared_with_queue_and_rebuilt(self):
+        q = self.app.translation_queue
+        path = self.chapter('Chapter 1')
+        for name in ('1.png', '2.jpg', '3.webp'):
+            (path / name).touch()
+        base = path.parent.parent
+        self.app.apply_scan_data(base, self.app.scan_folder_data(base))
+        self.assertEqual(self.app.chapter_page_counts[path], 3)
+        q.jobs = [Job(path, 'translate'), Job(path, 'translate', start_page=2, end_page=3)]
+        with mock.patch('translation_queue.image_count', side_effect=AssertionError('index must avoid disk reads')):
+            q.render(refresh_counts=True)
+            self.wait_counts(q)
+            self.assertEqual(q.count_cache[path, 1, None], 3)
+            self.assertEqual(q.count_cache[path, 2, 3], 2)
+        (path / '3.webp').unlink()
+        self.app.scan_events.put(('progress', 128))
+        self.app.scan_events.put(('progress', 256))
+        self.app.scan_events.put(('done', base, self.app.scan_folder_data(base)))
+        self.app.poll_scan_events()
+        self.wait_counts(q)
+        self.assertEqual(q.count_cache[path, 1, None], 2)
+        self.assertIsNone(q.count_cache[path, 2, 3])
+        (path / '3.webp').touch()
+        q.jobs[1].status = 'failed'
+        q.tree.selection_set(str(id(q.jobs[1])))
+        q.retry()
+        self.wait_counts(q)
+        self.assertEqual(q.count_cache[path, 1, None], 3)
+        self.assertEqual(q.count_cache[path, 2, 3], 2)
+
+    def test_readding_scanned_chapter_refreshes_its_page_index(self):
+        q = self.app.translation_queue
+        path = self.chapter('Chapter 1')
+        (path / '1.png').touch()
+        base = path.parent.parent
+        self.app.apply_scan_data(base, self.app.scan_folder_data(base))
+        q.add_paths([path], 'translate')
+        self.wait_counts(q)
+        self.assertEqual(q.count_cache[path, 1, None], 1)
+        (path / '2.png').touch()
+        q.add_paths([path], 'translate')
+        self.wait_counts(q)
+        self.assertEqual(q.count_cache[path, 1, None], 2)
+
     def chapter(self, name):
         path = self.folder / "Comics" / "Series" / name
         (path / "result").mkdir(parents=True)
         (path / "result/1.png").write_bytes(b"image")
         return path
+
+    def test_queue_move_to_edges_preserves_order_selection_and_settings(self):
+        import json
+        q = self.app.translation_queue
+        jobs = [Job(self.chapter(f'Chapter {i}'), 'export') for i in range(5)]
+        q.jobs = jobs.copy()
+        q.render()
+        selected = [str(id(jobs[i])) for i in (1, 3)]
+        q.tree.selection_set(selected)
+        q.update_controls()
+        q.run_action('移到最上')
+        self.assertEqual(q.jobs, [jobs[i] for i in (1, 3, 0, 2, 4)])
+        self.assertEqual(set(q.tree.selection()), set(selected))
+        self.assertEqual(q.action_states['移到最上'], 'disabled')
+        q.run_action('移到最下')
+        self.assertEqual(q.jobs, [jobs[i] for i in (0, 2, 4, 1, 3)])
+        saved = json.loads(self.settings.read_text(encoding='utf-8'))
+        self.assertEqual([j['path'] for j in saved['bt_jobs']], [str(j.path) for j in q.jobs])
+        self.assertEqual(q.action_states['移到最下'], 'disabled')
+        before = q.jobs.copy()
+        for running, busy in ((True, False), (False, True)):
+            q.running, self.app.manga_busy = running, busy
+            q.move(-1, to_edge=True)
+            self.assertEqual(q.jobs, before)
+        q.running = self.app.manga_busy = False
+        q.tree.selection_set('series:' + str(jobs[0].path.parent))
+        q.move(-1, to_edge=True)
+        self.assertEqual(q.jobs, before)
+        q.update_controls()
+        self.assertEqual(q.action_states['移到最上'], 'disabled')
+        self.assertEqual(q.action_states['移到最下'], 'disabled')
+        other = Job(self.folder / 'Comics' / 'Other' / 'Chapter 1', 'export')
+        q.jobs.insert(0, other)
+        q.render()
+        q.move(-1, to_edge=True)
+        self.assertEqual(q.jobs, before + [other])
+        q.move(1, to_edge=True)
+        self.assertEqual(q.jobs, [other] + before)
+
+    def test_queue_group_chapter_and_page_totals_include_completed_and_ranges(self):
+        q = self.app.translation_queue
+        first, second = self.chapter('Chapter 1'), self.chapter('Chapter 2-3')
+        for path in (first, second):
+            for number in range(1, 4):
+                (path / f'{number}.png').touch()
+        q.jobs = [Job(first, 'translate', 'done'), Job(first, 'export'),
+                  Job(second, 'translate', start_page=2, end_page=3)]
+        q.render()
+        self.wait_counts(q)
+        series = 'series:' + str(first.parent)
+        root = 'path:' + str(first.parent.parent)
+        for group in (series, root):
+            self.assertEqual(q.tree.set(group, 'kind'), '1 單一｜1 整合')
+            self.assertEqual(q.tree.set(group, 'pages'), '5 頁')
+        self.assertEqual(q.tree.set(str(id(q.jobs[0])), 'pages'), '3 頁')
+        self.assertEqual(q.tree.set(str(id(q.jobs[2])), 'pages'), '2 頁（第 2–3 頁）')
+        q.search.set('Chapter 2')
+        q.apply_queue_filter()
+        self.assertEqual(q.tree.set(series, 'kind'), '0 單一｜1 整合')
+        self.assertEqual(q.tree.set(series, 'pages'), '2 頁')
+        q.count_cache[(second, 2, 3)] = None
+        q.update_group_counts()
+        self.assertIn('無法計數', q.tree.set(series, 'pages'))
+
+    def test_context_menus_copy_manga_names_without_paths_or_duplicates(self):
+        q = self.app.translation_queue
+        paths = [self.chapter('Chapter 1'), self.chapter('Chapter 2')]
+        base = self.folder / 'Comics'
+        self.app.base_path.set(str(base))
+        self.app.apply_scan_data(base, self.app.scan_folder_data(base))
+        tree = self.app.folder_tree
+        parent = tree.get_children()[0]
+        for item in (parent, tree.get_children(parent)[0]):
+            tree.selection_set(item)
+            self.app.folder_context_menu.invoke('複製漫畫名稱')
+            self.assertEqual(tree.clipboard_get(), 'Series')
+        other = base / '另一部 Manga' / 'Chapter 3'
+        q.jobs = [Job(path, 'export') for path in [*paths, other]]
+        q.render()
+        for selection in ([str(id(job)) for job in q.jobs], q.tree.get_children()):
+            q.tree.selection_set(selection)
+            q.context_menu.invoke('複製漫畫名稱')
+            self.assertEqual(q.tree.clipboard_get(), 'Series\n另一部 Manga')
+        q.tree.selection_set(())
+        q.context_menu.invoke('複製漫畫名稱')
+        self.assertEqual(q.tree.clipboard_get(), 'Series\n另一部 Manga')
+
+    def test_primary_manga_picker_adds_a_range_even_when_library_is_filtered(self):
+        app, q = self.app, self.app.translation_queue
+        base = self.folder / "Comics"
+        paths = []
+        for group in ("A", "B"):
+            for number in (1, 5, 10, 30):
+                path = base / group / "Series" / f"Chapter {number}"
+                path.mkdir(parents=True)
+                (path / "1.png").write_bytes(b"image")
+                if group == "B":
+                    paths.append(path)
+        app.base_path.set(str(base))
+        app.apply_scan_data(base, app.scan_folder_data(base))
+        self.assertEqual(set(app.manga_choice.cget("values")), {str(Path("A/Series")), str(Path("B/Series"))})
+        app.search_text.set(str(base / "A/Series"))
+        time.sleep(.22)
+        self.root.update()
+        self.assertEqual(len(app.folder_tree.get_children()), 1)
+        app.search_text.set("not yet applied")
+        app.work_tabs.select(app.settings_tab)
+        app.manga_choice.set(str(Path("B/Series")))
+        app.manga_choice.event_generate("<<ComboboxSelected>>")
+        self.root.update()
+        self.assertEqual(app.search_text.get(), "")
+        self.assertIsNone(app.search_after)
+        self.assertEqual(app.selected_tree_item()[1], base / "B/Series")
+        self.assertEqual(app.work_tabs.select(), str(app.queue_tab))
+        app.range_start.set("2")
+        app.range_end.set("3")
+        time.sleep(.22)
+        self.root.update()
+        self.assertEqual((app.range_start.get(), app.range_end.get()), ("2", "3"))
+        q.action.set(comic.tr("匯出"))
+        with mock.patch.object(q, "start") as start:
+            app.add_range_button.invoke()
+            app.add_range_button.invoke()
+            self.assertEqual([(job.path, job.action) for job in q.jobs], [(path, "export") for path in paths[1:3]])
+            app.range_start.set("4")
+            app.range_end.set("")
+            app.add_range_button.invoke()
+            self.assertEqual([job.path for job in q.jobs], paths[1:])
+            start.assert_not_called()
+        q.running = True
+        q.update_controls()
+        for widget in (app.manga_choice, app.add_range_button, app.add_selected_button,
+                       app.aggregate_button, app.aggregate_translate_button):
+            self.assertTrue(widget.instate(["disabled"]))
+        q.running = False
+        q.update_controls()
+        self.assertTrue(app.manga_choice.instate(["readonly"]))
+        self.assertFalse(app.add_range_button.instate(["disabled"]))
+        self.assertFalse(app.aggregate_button.instate(["disabled"]))
+        app.folder_tree.selection_set(())
+        app.on_tree_select()
+        for widget in (app.add_range_button, app.aggregate_button, app.aggregate_translate_button):
+            self.assertTrue(widget.instate(["disabled"]), str(widget))
+
+    def test_applied_search_clears_safely_and_primary_add_uses_multi_selection(self):
+        app, q = self.app, self.app.translation_queue
+        base = self.folder / "Comics"
+        paths = []
+        for group in ("A", "B"):
+            for number in (1, 2):
+                path = base / group / "Series" / f"Chapter {number}"
+                path.mkdir(parents=True)
+                (path / "1.png").write_bytes(b"image")
+                paths.append(path)
+        app.base_path.set(str(base))
+        app.apply_scan_data(base, app.scan_folder_data(base))
+        for pick in (lambda: (app.manga_choice.set(str(Path("B/Series"))), app.choose_series()),
+                     lambda: app.select_all_chapters(base / "B" / "Series", base)):
+            app.search_text.set(str(base / "A" / "Series"))
+            app.apply_filter()
+            self.assertIsNone(app.search_after)
+            self.assertEqual(len(app.folder_tree.get_children()), 1)
+            pick()
+            self.assertEqual(app.search_text.get(), "")
+            self.assertEqual(len(app.folder_tree.get_children()), 2)
+        self.assertEqual(app.selected_chapters(), paths[2:])
+        leaves = [item for parent in app.folder_tree.get_children() for item in app.folder_tree.get_children(parent)
+                  if app.tree_items[item][1] in (paths[0], paths[3])]
+        app.folder_tree.selection_set(leaves)
+        app.on_tree_select()
+        for entry in (app.start_entry, app.end_entry, app.aggregate_start_entry, app.aggregate_end_entry):
+            self.assertEqual(str(entry.cget("state")), "disabled")
+        self.assertFalse(app.add_range_button.instate(["disabled"]))
+        app.add_range_button.invoke()
+        self.assertEqual({job.path for job in q.jobs}, {paths[0], paths[3]})
+        app.folder_tree.selection_set(app.folder_tree.get_children())
+        app.on_tree_select()
+        self.assertEqual(str(app.aggregate_start_entry.cget("state")), "normal")
+        with mock.patch("translation_queue.messagebox.showwarning") as warning:
+            app.add_range_button.invoke()
+        warning.assert_not_called()
+        self.assertEqual(sorted(job.path for job in q.jobs), sorted(paths))
+        self.assertEqual(q.context_menu.entrycget(1, "label"), "重試")
+
+    def test_merge_is_a_reusable_tool_window_outside_main_tabs(self):
+        app, q = self.app, self.app.translation_queue
+        self.root.geometry("820x640")
+        self.root.deiconify()
+        self.root.update()
+        tabs = app.work_tabs.tabs()
+        self.assertNotIn(str(app.aggregate_tab), tabs)
+        self.assertEqual(app.aggregate_window.state(), "withdrawn")
+        menu = self.root.nametowidget(app.library_menu.cget("menu"))
+        index = next(i for i in range(menu.index("end") + 1) if menu.entrycget(i, "label") == comic.tr("章節整合"))
+        menu.invoke(index)
+        self.root.update()
+        popup = app.aggregate_window
+        self.assertTrue(app.aggregate_button.winfo_ismapped())
+        app.range_start.set("2")
+        self.root.tk.call(popup.protocol("WM_DELETE_WINDOW"))
+        self.assertEqual(popup.state(), "withdrawn")
+        q.options_menu.invoke("end")
+        self.root.update()
+        self.assertIs(app.aggregate_window, popup)
+        self.assertEqual(app.range_start.get(), "2")
+        self.assertEqual(app.work_tabs.tabs(), tabs)
+        self.assertEqual(app.work_tabs.select(), str(app.queue_tab))
+
+
+    def test_add_number_range_uses_series_indices_and_open_end(self):
+        q = self.app.translation_queue
+        paths = [self.chapter(name) for name in ('Chapter 1', 'Chapter 5', 'Chapter 10-20', 'Chapter 30')]
+        base = self.folder / 'Comics'
+        self.app.base_path.set(str(base))
+        self.app.apply_scan_data(base, self.app.scan_folder_data(base))
+        parent = self.app.folder_tree.get_children()[0]
+        self.app.folder_tree.selection_set(parent)
+        self.app.on_tree_select()
+        def set_range(start, end):
+            for entry, value in ((self.app.start_entry, start), (self.app.end_entry, end)):
+                entry.delete(0, 'end')
+                entry.insert(0, value)
+        set_range('2', '3')
+        with mock.patch.object(q, 'start') as start:
+            q.add_number_range()
+            self.assertEqual([job.path for job in q.jobs], paths[1:3])
+            set_range('3', '')
+            q.add_number_range()
+            self.assertEqual([job.path for job in q.jobs], paths[1:])
+            start.assert_not_called()
+        with mock.patch('translation_queue.messagebox.showwarning') as warning:
+            for first, last in (('0', '2'), ('4', '2'), ('2', '9'), ('bad', '3'), ('', '')):
+                set_range(first, last)
+                q.add_number_range()
+            self.assertEqual(warning.call_count, 5)
+            self.assertEqual([job.path for job in q.jobs], paths[1:])
+        set_range('1', '1')
+        q.running = True
+        q.add_number_range()
+        q.running = False
+        self.assertEqual([job.path for job in q.jobs], paths[1:])
+
+    def test_enqueue_reveals_jobs_without_changing_selection_or_start_scope(self):
+        q = self.app.translation_queue
+        paths = [self.chapter(f'Chapter {i}') for i in range(1, 5)]
+        q.add_paths(paths[:2])
+        self.assertEqual(q.tree.selection(), ())
+        self.assertEqual(q.start_targets(), tuple(q.jobs))
+        first = str(id(q.jobs[0]))
+        q.tree.selection_set(first)
+        q.tree.focus(first)
+        q.tree.item(q.tree.parent(first), open=False)
+        q.add_paths([paths[2], paths[2]])
+        added = str(id(q.jobs[-1]))
+        self.assertEqual(q.label.get(), '已加入 1 項')
+        self.assertEqual(q.tree.selection(), (first,))
+        self.assertEqual(q.tree.focus(), first)
+        self.assertEqual(q.start_targets(), (q.jobs[0],))
+        parent = q.tree.parent(added)
+        while parent:
+            self.assertTrue(q.tree.item(parent, 'open'))
+            parent = q.tree.parent(parent)
+        q.search.set('Chapter 1')
+        q.add_paths([paths[3]])
+        self.assertEqual(q.search.get(), 'Chapter 1')
+        self.assertFalse(q.tree.exists(str(id(q.jobs[-1]))))
+        self.assertEqual(q.tree.selection(), (first,))
+        self.assertEqual(q.start_targets(), (q.jobs[0],))
+        self.assertEqual(len(q.jobs), 4)
+
+    def test_search_shortcuts_stay_in_the_current_list_and_flush_filters(self):
+        paths = [self.chapter(f'Chapter {i}') for i in (1, 2)]
+        base = self.folder / 'Comics'
+        self.app.apply_scan_data(base, self.app.scan_folder_data(base))
+        q = self.app.translation_queue
+        q.add_paths(paths)
+        self.root.deiconify()
+        self.root.update()
+        for entry, variable, tree, owner in (
+                (self.app.search_entry, self.app.search_text, self.app.folder_tree, self.app),
+                (q.search_entry, q.search, q.tree, q)):
+            with self.subTest(entry=str(entry)):
+                variable.set('Chapter 2')
+                scheduled = owner.search_after
+                tree.focus_force()
+                tree.event_generate('<Control-f>')
+                self.root.update()
+                self.assertEqual(self.root.focus_get(), entry)
+                self.assertTrue(entry.selection_present())
+                self.assertEqual(entry.index('sel.first'), 0)
+                self.assertEqual(entry.index('sel.last'), len(variable.get()))
+                entry.event_generate('<Return>')
+                self.root.update()
+                self.assertIsNone(owner.search_after)
+                self.assertNotIn(scheduled, self.root.tk.call('after', 'info'))
+                self.assertEqual(self.root.focus_get(), tree)
+                if owner is q:
+                    self.assertFalse(tree.exists(str(id(q.jobs[0]))))
+                    self.assertTrue(tree.exists(str(id(q.jobs[1]))))
+                else:
+                    children = tree.get_children(tree.get_children()[0])
+                    self.assertEqual([self.app.tree_items[item][1] for item in children], [paths[1]])
+                entry.focus_force()
+                entry.event_generate('<Escape>')
+                self.root.update()
+                self.assertEqual(variable.get(), '')
+                self.assertIsNone(owner.search_after)
+                self.assertEqual(self.root.focus_get(), tree)
+        self.assertEqual(len(q.jobs), 2)
+
+    def test_range_enter_enqueues_once_and_respects_busy_controls(self):
+        paths = [self.chapter(f'Chapter {i}') for i in (1, 2, 3)]
+        base = self.folder / 'Comics'
+        self.app.base_path.set(str(base))
+        self.app.apply_scan_data(base, self.app.scan_folder_data(base))
+        self.app.folder_tree.selection_set(self.app.folder_tree.get_children()[0])
+        self.app.on_tree_select()
+        self.app.range_start.set('2')
+        self.app.range_end.set('3')
+        command = self.app.end_entry.bind('<Return>').split('[', 1)[1].split()[0]
+        with mock.patch.object(self.app.translation_queue, 'add_number_range',
+                               wraps=self.app.translation_queue.add_number_range) as add:
+            self.assertEqual(self.root.tk.call(command), 'break')
+            add.assert_called_once()
+        self.assertEqual([job.path for job in self.app.translation_queue.jobs], paths[1:])
+        self.assertEqual(self.app.range_end.get(), '3')
+        self.app.manga_busy = True
+        self.app.translation_queue.update_controls()
+        with mock.patch.object(self.app.translation_queue, 'add_number_range') as add:
+            self.assertEqual(self.root.tk.call(command), 'break')
+            add.assert_not_called()
+        self.app.manga_busy = False
+
+
+    def test_queue_search_batches_typing_and_flushes_before_selection_actions(self):
+        q = self.app.translation_queue
+        q.jobs = [Job(self.folder / 'Series' / name, 'export') for name in ('Chapter 1', 'Chapter 2')]
+        q.render()
+        self.root.update()
+        with mock.patch.object(q, 'render', wraps=q.render) as render:
+            for term in ('C', 'Ch', 'Chap', 'Chapter 1'):
+                q.search.set(term)
+            render.assert_not_called()
+            self.assertIsNotNone(q.search_after)
+            deadline = time.monotonic() + 1
+            while q.search_after is not None and time.monotonic() < deadline:
+                self.root.update()
+                time.sleep(.01)
+            self.assertEqual(render.call_count, 1)
+        q.tree.selection_set(str(id(q.jobs[0])))
+        q.search.set('Chapter 2')
+        q.remove()  # Flush the filter before using the old, now-hidden selection.
+        self.assertEqual(len(q.jobs), 2)
+        self.assertFalse(q.tree.exists(str(id(q.jobs[0]))))
+        self.assertIsNone(q.search_after)
+
+    def test_queue_search_filters_names_paths_and_keeps_hidden_jobs_running(self):
+        q = self.app.translation_queue
+        first = Job(self.folder / 'Comics' / 'Hero 漫畫' / 'Chapter 1', 'cleanup')
+        second = Job(first.path.parent / 'Chapter 2', 'cleanup', 'failed', 'error')
+        other = Job(self.folder / 'Comics' / 'Other' / 'Chapter 3', 'cleanup')
+        q.jobs = [first, second, other]
+        q.render()
+        q.search.set('hERO 漫畫')
+        q.apply_queue_filter()
+        self.assertTrue(q.tree.exists(str(id(first))))
+        self.assertTrue(q.tree.exists(str(id(second))))
+        self.assertFalse(q.tree.exists(str(id(other))))
+        self.assertEqual(q.search_count.get(), '顯示 2 / 3 項')
+        series = 'series:' + str(first.path.parent)
+        self.assertTrue(q.tree.item(series, 'open'))
+        q.tree.selection_set(series)
+        self.assertEqual(q.start_targets(), (first,))
+        q.search.set(str(first.path).replace('\\', '/').upper())
+        q.apply_queue_filter()
+        self.assertEqual(q.search_count.get(), '顯示 1 / 3 項')
+        q.active_jobs = (other,)
+        q.events.put(('status', 0, 'running', ''))
+        q.poll()
+        self.assertEqual(other.status, 'running')
+        self.assertFalse(q.tree.exists(str(id(other))))
+        q.search.set('missing manga')
+        q.apply_queue_filter()
+        self.assertEqual(q.tree.get_children(), ())
+        self.assertEqual(q.search_count.get(), '顯示 0 / 3 項')
+        self.assertEqual(q.start_targets(), (first,))  # Search filters display, not the full queue.
+        q.retry()  # No selection retries all failures, even hidden ones.
+        self.assertEqual(q.search.get(), '')
+        self.assertEqual(second.status, 'pending')
+        self.assertEqual(q.tree.selection(), (str(id(second)),))
+        self.assertEqual(q.jobs, [first, second, other])
+        q.search.set('  chapter 1  ')
+        q.apply_queue_filter()
+        self.assertEqual(q.search_count.get(), '顯示 1 / 3 項')
+        q.search.set('')
+        q.apply_queue_filter()
+        self.assertEqual(q.search_count.get(), '顯示 3 / 3 項')
+        self.assertEqual(q.tree.set(str(id(other)), 'status'), '執行中')
+
+    def test_selected_translation_range_and_manga_priority(self):
+        q = self.app.translation_queue
+        a = self.folder / 'A'
+        b = self.folder / 'B'
+        jobs = [Job(a / 'Chapter 1', 'translate'), Job(b / 'Chapter 1', 'translate'),
+                Job(a / 'Chapter 2', 'translate'), Job(a / 'Chapter 1-10', 'translate'),
+                Job(a / 'Chapter 3', 'translate', 'done'), Job(a / 'Chapter 1', 'cleanup')]
+        q.jobs = jobs
+        q.render()
+        with mock.patch('translation_queue.QueueStartDialog') as dialog:
+            q.tree.selection_set('series:' + str(a))
+            targets = q.start_targets()
+            dialog.return_value.result = [jobs[2].path]
+            self.assertEqual(q.configure_start(targets), (jobs[2], jobs[3]))
+            self.assertEqual(dialog.call_args.args[1], [jobs[0].path, jobs[2].path])
+            dialog.return_value.result = None
+            self.assertEqual(q.configure_start(targets), ())
+            with mock.patch('translation_queue.threading.Thread') as worker:
+                q.start(configure=True)
+                worker.assert_not_called()
+                self.assertFalse(q.running)
+                self.assertIsNone(q.history_run)
+            q.tree.selection_set(str(id(jobs[0])))
+            dialog.reset_mock()
+            self.assertEqual(q.configure_start(q.start_targets()), (jobs[0],))
+            dialog.assert_not_called()
+            q.tree.selection_set(('series:' + str(a), 'series:' + str(b)))
+            targets = q.start_targets()
+            dialog.return_value.result = [a, b]
+            self.assertEqual(q.configure_start(targets), targets)  # Preserve even interleaved defaults.
+            dialog.return_value.result = [b, a]
+            self.assertEqual(q.configure_start(targets), (jobs[1], jobs[0], jobs[2], jobs[3], jobs[5]))
+            self.assertTrue(dialog.call_args.kwargs['reorder'])
+            with mock.patch.object(q, 'validate', return_value=True), \
+                    mock.patch.object(q, 'confirm_cleanup', return_value=True), \
+                    mock.patch('translation_queue.threading.Thread') as worker:
+                q.start(configure=True)
+                self.assertEqual(worker.call_args.kwargs['args'][0], (jobs[1], jobs[0], jobs[2], jobs[3], jobs[5]))
+                self.assertEqual(q.history_run['jobs'][0]['path'], str(jobs[1].path))
+            q.running = self.app.manga_busy = False
+            q.tree.selection_remove(q.tree.selection())
+            dialog.reset_mock()
+            self.assertEqual(q.configure_start(q.start_targets()), targets)
+            dialog.assert_not_called()
+            q.jobs = [jobs[0], jobs[3]]  # One single chapter plus a merged chapter needs no question.
+            q.render()
+            q.tree.selection_set('series:' + str(a))
+            self.assertEqual(q.configure_start(q.start_targets()), tuple(q.jobs))
+            dialog.assert_not_called()
+
+    def test_start_runs_selected_manga_without_extra_range_dialog(self):
+        q = self.app.translation_queue
+        q.add_paths([self.chapter('Chapter 1'), self.chapter('Chapter 2')])
+        q.tree.selection_set('series:' + str(q.jobs[0].path.parent))
+        q.update_controls()
+        with mock.patch.object(q, 'command'), mock.patch.object(q, 'confirm_cleanup', return_value=True), \
+                mock.patch('translation_queue.QueueStartDialog') as dialog, \
+                mock.patch('translation_queue.threading.Thread') as worker:
+            q.start_button.invoke()
+            dialog.assert_not_called()
+            self.assertEqual(worker.call_args.kwargs['args'][0], tuple(q.jobs))
+        q.running = self.app.manga_busy = False
+
+    def test_cleanup_requires_export_and_direct_windows_reopen(self):
+        q = self.app.translation_queue
+        q.export.set(True)
+        q.cleanup.set(True)
+        q.options_menu.invoke(1)  # Turning off export also turns off automatic cleanup.
+        self.assertFalse(q.cleanup.get())
+        q.jobs = [Job(self.chapter('Chapter 1'), 'cleanup')]
+        self.app.komga_path.set('')
+        with mock.patch('translation_queue.messagebox.showerror') as error:
+            self.assertFalse(q.validate())
+        self.assertIn('Komga', error.call_args.args[1])
+        for button, window_name in ((q.history_button, 'history_window'), (q.stats_button, 'model_window')):
+            button.invoke()
+            window = getattr(q, window_name)
+            window.withdraw()
+            button.invoke()
+            self.root.update_idletasks()
+            self.assertIs(getattr(q, window_name), window)
+            self.assertEqual(window.state(), 'normal')
+            window.destroy()
+
+    def test_start_dialog_range_validation_drag_and_cancel(self):
+        from queue_start_dialog import QueueStartDialog
+        from types import SimpleNamespace
+        paths = [self.folder / name for name in ('A', 'B', 'C')]
+        with mock.patch.object(QueueStartDialog, 'wait_window'):
+            dialog = QueueStartDialog(self.root, paths)
+        self.assertEqual((dialog.first.get(), dialog.last.get()), ('1', '3'))
+        dialog.first.set('3')
+        dialog.last.set('1')
+        with mock.patch('queue_start_dialog.messagebox.showerror'):
+            self.assertFalse(dialog.validate())
+        dialog.first.set('2')
+        dialog.last.set('3')
+        self.assertTrue(dialog.validate())
+        dialog.apply()
+        self.assertEqual(dialog.result, paths[1:])
+        dialog.destroy()
+        with mock.patch.object(QueueStartDialog, 'wait_window'):
+            dialog = QueueStartDialog(self.root, paths, reorder=True)
+        dialog.update_idletasks()
+        first_y = dialog.list.bbox('0')[1] + 3
+        last_y = dialog.list.bbox('2')[1] + 3
+        dialog.begin_drag(SimpleNamespace(y=first_y))
+        dialog.drag(SimpleNamespace(y=last_y))
+        dialog.apply()
+        self.assertEqual(dialog.result, [paths[1], paths[2], paths[0]])
+        dialog.destroy()
+        with mock.patch.object(QueueStartDialog, 'wait_window'):
+            dialog = QueueStartDialog(self.root, paths, reorder=True)
+        dialog.cancel()
+        self.assertIsNone(dialog.result)
+
+    def test_start_uses_selected_scope_and_clear_restores_full_order(self):
+        q = self.app.translation_queue
+        self.app.komga_path.set(str(self.folder / 'Komga'))
+        paths = [self.chapter(f'Chapter {i}') for i in range(3)]
+        jobs = [Job(paths[0], 'cleanup'), Job(paths[1], 'cleanup'),
+                Job(paths[2], 'cleanup', 'done'),
+                Job(self.folder / 'Elsewhere' / 'Other' / 'Chapter 1', 'translate', 'failed'),
+                Job(self.folder / 'Elsewhere' / 'Other' / 'Chapter 1', 'translate')]
+        q.jobs = jobs
+        q.cleanup.set(False)
+        q.render()
+        q.tree.selection_set(str(id(jobs[0])))
+        q.update_controls()
+        self.assertEqual(q.start_button['text'], '開始執行')
+        self.assertEqual(q.start_targets(), (jobs[0],))
+        q.tree.selection_set('series:' + str(paths[0].parent))
+        self.assertEqual(q.start_targets(), tuple(jobs[:2]))
+        q.tree.selection_set('path:' + str(paths[0].parent.parent))
+        self.assertEqual(q.start_targets(), tuple(jobs[:2]))
+        with mock.patch('translation_queue.threading.Thread') as worker, \
+                mock.patch.object(q, 'command', side_effect=AssertionError('unselected translator must not validate')), \
+                mock.patch('translation_queue.messagebox.askyesno', return_value=True):
+            q.context_menu.invoke(q.run_menu_index)
+            self.assertEqual(worker.call_args.kwargs['args'][0], tuple(jobs[:2]))
+            self.assertEqual(worker.call_args.kwargs['kwargs']['blocked_jobs'], set())
+            self.assertEqual(len(q.history_run['jobs']), 2)
+            self.assertEqual(jobs[4].status, 'pending')
+            q.tree.selection_set(str(id(jobs[4])))
+            q.pause_requested.set()
+            q.start()
+            self.assertEqual(worker.call_count, 1)
+            self.assertEqual(q.active_jobs, tuple(jobs[:2]))
+        q.running = self.app.manga_busy = False
+        q.tree.selection_set(str(id(jobs[2])))
+        q.update_controls()
+        self.assertTrue(q.start_button.instate(['disabled']))
+        q.run_action('取消選取')
+        self.assertEqual(q.tree.selection(), ())
+        self.assertEqual(q.start_button['text'], '開始執行')
+        self.assertEqual(q.start_targets(), (jobs[0], jobs[1], jobs[4]))
+
+    def test_details_boxes_hide_while_empty(self):
+        for variable, label in ((self.app.folder_details, self.app.folder_details_label),
+                                (self.app.translation_queue.selection_details, self.app.translation_queue.selection_label)):
+            variable.set('')
+            self.assertEqual(label.master.winfo_manager(), '')
+            variable.set('detail')
+            self.assertEqual(label.master.winfo_manager(), 'grid')
+            self.assertEqual(label.master.grid_info()['row'], 2)
+            variable.set('')
+            self.assertEqual(label.master.winfo_manager(), '')
+
+    def test_render_restores_selection_with_one_select_event(self):
+        q = self.app.translation_queue
+        q.jobs = [Job(self.chapter(f'Chapter {number}'), 'translate', 'pending') for number in range(1, 6)]
+        q.render()
+        ids = [str(id(job)) for job in q.jobs]
+        q.tree.selection_set(ids)
+        self.root.update()
+        with mock.patch.object(q, 'update_controls') as update:
+            q.render()
+            self.root.update()
+        self.assertEqual(set(q.tree.selection()), set(ids))
+        self.assertLessEqual(update.call_count, 2)
 
     def test_queue_actions_follow_selection_and_running_state(self):
         q = self.app.translation_queue
@@ -216,18 +1192,24 @@ class WorkflowTests(unittest.TestCase):
                   Job(self.chapter('Chapter 2'), 'translate', 'done')]
         q.render()
         q.update_controls()
-        self.assertEqual(str(q.selection_buttons['移除選取']['state']), 'disabled')
-        self.assertEqual(str(q.selection_buttons['重新選取']['state']), 'normal')
+        self.assertEqual(q.action_states['移除選取'], 'disabled')
+        self.assertEqual(q.action_states['重試'], 'normal')
         q.tree.selection_set(str(id(q.jobs[0])))
         q.update_controls()
-        self.assertEqual(str(q.selection_buttons['上移']['state']), 'disabled')
-        self.assertEqual(str(q.selection_buttons['下移']['state']), 'normal')
-        self.assertEqual(str(q.selection_buttons['重新選取']['state']), 'normal')
+        self.assertEqual(q.action_states['上移'], 'disabled')
+        self.assertEqual(q.action_states['下移'], 'normal')
+        q.sync_menu(q.context_menu)
+        q.sync_menu(q.operations_menu)
+        self.assertEqual(q.context_menu.entrycget(2, 'state'), 'disabled')
+        self.assertEqual(q.context_menu.entrycget(3, 'state'), 'normal')
+        self.assertEqual(q.operations_menu.entrycget(7, 'label'), '取消選取')
+        self.assertEqual(q.operations_menu.entrycget(7, 'state'), 'normal')
+        self.assertEqual(q.action_states['重試'], 'normal')
         before = [(id(job), job.status, job.error) for job in q.jobs]
         q.running = True
         try:
             q.update_controls()
-            self.assertTrue(all(str(button['state']) == 'disabled' for button in q.selection_buttons.values()))
+            self.assertTrue(all(state == 'disabled' for label, state in q.action_states.items() if label != '取消選取'))
             q.add_paths([q.jobs[0].path])
             q.add_paths([self.folder / 'extra'])
             q.retry()
@@ -261,9 +1243,9 @@ class WorkflowTests(unittest.TestCase):
     def test_live_usage_is_shown_in_separate_columns(self):
         q = self.app.translation_queue
         self.assertEqual(q.usage_table.set('total', 'tokens'), '尚未回報')
-        q.usage_records = {(0, 'total'): dict(total_tokens=12345, cost='0.125', requests=4, unpriced_requests=1, missing_usage_requests=1)}
+        q.usage_records[0, 'total'] = dict(total_tokens=12345, cost='0.125', requests=4, unpriced_requests=1, missing_usage_requests=1)
         q.show_usage()
-        self.assertEqual(q.usage_table.item('total', 'values'), ('合計', '12.35K', 'US$0.13', '4', '僅含已知金額', '回報不完整'))
+        self.assertEqual(q.usage_table.item('total', 'values'), ('合計', '12.35K', 'US$0.13', '4', '僅含已知金額', '用量不完整'))
         q.show_usage()
         self.assertEqual(len(q.usage_table.get_children()), 3)
         self.assertEqual(q.elapsed_label.get(), '00:00:00')
@@ -276,14 +1258,62 @@ class WorkflowTests(unittest.TestCase):
         tree = self.app.folder_tree
         for width in (760, 1200, 1600):
             self.app.fit_folder_columns(SimpleNamespace(width=width))
-            self.assertLessEqual(sum(tree.column(c, "width") for c in ("#0", *tree['columns'])), width)
+            self.assertLessEqual(sum(tree.column(c, "width") for c in ("#0", *tree["displaycolumns"])), width)
         parent = tree.get_children()[0]
         leaf = tree.get_children(parent)[0]
         tree.selection_set(leaf)
         self.app.on_tree_select()
+        preview = "\n".join(self.app.folder_details.get().splitlines()[:2])
+        self.assertNotIn(str(chapter), preview)
+        self.assertNotIn(tree.set(leaf, 'updated'), preview)
         self.assertIn(str(chapter), self.app.folder_details.get())
         self.assertIn(tree.set(leaf, 'updated'), self.app.folder_details.get())
         self.assertIn(tree.set(leaf, 'status'), self.app.folder_details.get())
+        self.assertEqual(self.app.scan_status_text.get(), '1 部漫畫 · 1 個資料夾')
+        tree.selection_set(parent)
+        self.app.on_tree_select()
+        self.assertIn('1 個資料夾', self.app.folder_details.get().splitlines()[1])
+
+    def test_compact_summary_preserves_full_totals_and_unknown_counts(self):
+        q = self.app.translation_queue
+        q.jobs = [Job(self.chapter(f'Chapter {i}'), 'translate', status=status)
+                  for i, status in enumerate(('pending', 'prepared', 'done', 'blocked'), 1)]
+        q.retry_count = 7
+        pending = q.jobs[:2]
+        for job in pending:
+            q.pending_file_counts[str(id(job))] = None
+            q.count_cache[job.path, job.start_page, job.end_page] = None
+        q.update_summary()
+        self.assertEqual(q.summary_preview.get().splitlines()[0], '待執行 2 · 完成 1 · 需處理 1')
+        self.assertIn('頁數尚未確認', q.summary_preview.get())
+        self.assertNotIn('待翻譯 0 頁', q.summary_preview.get())
+        self.assertIn('頁數尚未確認', q.summary.get())
+        self.assertNotIn('待翻譯 0 頁', q.summary.get())
+        self.assertIn('尚未確認', q.selection_page_count(pending))
+        self.assertIn('本次重試 7', q.summary.get())
+        for job in pending:
+            q.pending_file_counts[str(id(job))] = 0
+            q.count_cache[job.path, job.start_page, job.end_page] = 0
+        q.update_summary()
+        self.assertIn('待翻譯 0 頁', q.summary_preview.get())
+        self.assertEqual(q.selection_page_count(pending), '0 頁')
+        for job, count in zip(pending, (3, 4)):
+            q.pending_file_counts[str(id(job))] = count
+            q.count_cache[job.path, job.start_page, job.end_page] = count
+        q.update_summary()
+        self.assertIn('待翻譯 7 頁', q.summary_preview.get())
+        with mock.patch('translation_queue.messagebox.showinfo') as info:
+            q.view_menu.invoke(2)
+        self.assertIn('本次重試 7', info.call_args.args[1])
+        self.assertNotIn('｜', info.call_args.args[1])
+        for job in pending:
+            job.status = 'done'
+        q.update_summary()
+        self.assertEqual(q.summary_preview.get(), '待執行 0 · 完成 3 · 需處理 1')
+        q.jobs[-1].status = 'done'
+        q.update_summary()
+        self.assertEqual(q.summary_preview.get(), '待執行 0 · 完成 4')
+
 
     def test_queue_columns_fit_window_and_selected_details_keep_full_path(self):
         from types import SimpleNamespace
@@ -294,16 +1324,23 @@ class WorkflowTests(unittest.TestCase):
         item = str(id(q.jobs[0]))
         q.tree.selection_set(item)
         q.update_controls()
-        for width in (760, 1200, 1600):
+        for width in (340, 520, 760, 1200, 1600):
             q.fit_columns(SimpleNamespace(width=width))
-            self.assertLessEqual(sum(q.tree.column(c, "width") for c in ("#0", *q.tree['columns'])), width)
-            self.assertTrue(all(q.tree.column(c, "width") > 0 for c in q.tree['columns']))
+            self.assertIn("status", q.tree["displaycolumns"])
+            self.assertLessEqual(sum(q.tree.column(c, "width") for c in ("#0", *q.tree["displaycolumns"])), width)
+            self.assertTrue(all(q.tree.column(c, "width") >= 40 for c in q.tree["displaycolumns"]))
+        self.assertIn("error_reason", q.tree["displaycolumns"])
+        self.assertTrue(q.selection_details.get().splitlines()[0].startswith(path.name))
+        self.assertIn("滿載", q.selection_details.get().splitlines()[1])
         self.assertIn(str(path), q.selection_details.get())
         self.assertIn('滿載', q.selection_details.get())
         self.assertNotIn('LLM_CAPACITY', q.selection_details.get())
         q.tree.selection_set(q.tree.parent(item))
         q.update_controls()
-        self.assertEqual(q.selection_details.get(), str(path.parent))
+        self.assertEqual(q.selection_details.get().splitlines()[0], path.parent.name)
+        self.assertIn(str(path.parent), q.selection_details.get())
+        self.assertIn('翻譯頁數：', q.selection_details.get())
+        self.assertIn('0 單一｜1 整合', q.selection_details.get())
 
     def test_queue_groups_paths_series_and_chapters_without_reordering_jobs(self):
         q = self.app.translation_queue
@@ -313,7 +1350,7 @@ class WorkflowTests(unittest.TestCase):
         q.render()
         root = q.tree.get_children()[0]
         series = q.tree.get_children(root)
-        self.assertEqual(q.tree.item(root, "text"), str(base))
+        self.assertEqual(q.tree.item(root, "text"), base.name)
         self.assertEqual([q.tree.item(item, "text") for item in series], ["漫畫 A", "漫畫 B"])
         self.assertEqual([q.tree.item(item, "text") for item in q.tree.get_children(series[0])], ["1. Chapter 1-10", "3. Chapter 11-20"])
         self.assertTrue(q.tree.item(root, "open"))
@@ -359,6 +1396,22 @@ class WorkflowTests(unittest.TestCase):
         with mock.patch.object(comic.filedialog, "asksaveasfilename", return_value=str(output)), mock.patch.object(Path, "write_text", side_effect=PermissionError("locked")), mock.patch.object(comic.messagebox, "showerror") as error:
             self.app.export_manga_names()
             error.assert_called_once()
+
+    def test_clearing_search_restores_expansion_from_before_the_search(self):
+        base = self.folder / "Comics"
+        for name in ("Alpha", "Beta"):
+            folder = base / name / "Chapter 1" / "result"
+            folder.mkdir(parents=True)
+            (folder / "1.png").write_bytes(b"image")
+        app, tree = self.app, self.app.folder_tree
+        app.apply_scan_data(base, app.scan_folder_data(base))
+        opened = {app.tree_items[item][1]: item for item in tree.get_children()}[base / "Alpha"]
+        tree.item(opened, open=True)
+        for query in ("Chapter", ""):
+            app.search_text.set(query)
+            app.apply_filter()
+        self.assertEqual({app.tree_items[item][1] for item in tree.get_children() if tree.item(item, "open")},
+                         {base / "Alpha"})
 
     def test_multi_selection_filter_and_rescan_preserve_scope(self):
         first, second = self.chapter("Chapter 1"), self.chapter("Chapter 2")
@@ -465,6 +1518,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual((q.jobs[0].status, q.jobs[0].error), ("pending", ""))
         q.jobs[0].status = "done"
         self.app.komga_path.set(str(self.folder / "Komga"))
+        q.clear_selection()
         q.start()
         deadline = time.monotonic() + 5
         while q.running and time.monotonic() < deadline:
@@ -491,6 +1545,7 @@ class WorkflowTests(unittest.TestCase):
         base = self.folder / 'Comics'
         self.app.apply_scan_data(base, self.app.scan_folder_data(base))
         tree, q = self.app.folder_tree, self.app.translation_queue
+        tree.get_children(tree.get_children()[0])
         items = {path: item for item, (_, path) in self.app.tree_items.items()}
         self.assertEqual(tree.set(items[first], 'kind'), '單一章節')
         self.assertEqual(tree.set(items[merged], 'kind'), '整合資料夾')
@@ -565,6 +1620,7 @@ class WorkflowTests(unittest.TestCase):
         q.open_history()
         history = q.history_window
         batch = history.tree.get_children()[0]
+        history.load_children(batch)
         folder = history.tree.get_children(batch)[0]
         self.assertIn('滿載', history.tree.set(folder, 'error_reason'))
         history.tree.selection_set(folder)
@@ -586,6 +1642,7 @@ class WorkflowTests(unittest.TestCase):
         finally:
             restored_root.destroy()
         history.refresh()
+        history.load_children(history.tree.get_children()[0])
         folder = history.tree.get_children(history.tree.get_children()[0])[0]
         self.assertIn('滿載', history.tree.set(folder, 'error_reason'))
 
@@ -724,7 +1781,7 @@ class WorkflowTests(unittest.TestCase):
                 mock.patch.object(q, "confirm_cleanup", return_value=False) as cleanup, \
                 mock.patch("translation_queue.threading.Thread") as worker:
             q.start()
-            validate.assert_called_once_with()
+            validate.assert_called_once_with(jobs=q.active_jobs)
             cleanup.assert_called_once_with()
             worker.assert_not_called()
 
@@ -967,6 +2024,8 @@ class WorkflowTests(unittest.TestCase):
         self.root.update()
 
         def right_click(path):
+            for parent in tree.get_children():
+                tree.get_children(parent)
             item = next(key for key, (_, value) in self.app.tree_items.items() if value == path)
             tree.see(item)
             self.root.update()
@@ -1106,6 +2165,7 @@ class WorkflowTests(unittest.TestCase):
     def test_cancelled_predecessor_cannot_be_bypassed(self):
         chapter = self.chapter("Chapter 1")
         q = self.app.translation_queue
+        self.app.komga_path.set(str(self.folder / 'Komga'))
         q.jobs = [Job(chapter, "export", "cancelled"), Job(chapter, "cleanup")]
         with mock.patch.object(comic.messagebox, "showerror") as error:
             self.assertTrue(q.validate())
@@ -1126,7 +2186,7 @@ class WorkflowTests(unittest.TestCase):
         q = self.app.translation_queue
         q.add_paths([first, second], "translate")
         self.wait_counts(q)
-        self.assertIn("待翻譯檔案 10 張", q.summary.get())
+        self.assertIn("待翻譯 10 頁", q.summary.get())
         q.jobs[0].status = "done"
         q.tree.selection_set(str(id(q.jobs[0])))
         dialog = q.edit_page_range()
@@ -1145,14 +2205,14 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual((q.jobs[0].start_page, q.jobs[0].end_page, q.jobs[0].status), (2, 4, "pending"))
         self.assertEqual((q.jobs[1].start_page, q.jobs[1].end_page), (1, None))
         self.wait_counts(q)
-        self.assertIn("待翻譯檔案 8 張", q.summary.get())
+        self.assertIn("待翻譯 8 頁", q.summary.get())
         self.assertEqual([j.range_export for j in q.jobs], [True, False])
         self.assertIn("2", q.tree.set(str(id(q.jobs[0])), "pages"))
         self.assertEqual(load_json(self.settings, {})["bt_jobs"][0]["end_page"], 4)
         another = tk.Toplevel(self.root)
         restored = comic.FileAggregatorApp(another).translation_queue
         self.wait_counts(restored)
-        self.assertIn("待翻譯檔案 8 張", restored.summary.get())
+        self.assertIn("待翻譯 8 頁", restored.summary.get())
         self.assertEqual([(j.start_page, j.end_page) for j in restored.jobs], [(2, 4), (1, None)])
         self.assertEqual([j.range_export for j in restored.jobs], [True, False])
         another.destroy()
@@ -1172,7 +2232,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual((q.jobs[0].start_page, q.jobs[0].end_page), (1, None))
         self.assertFalse(q.jobs[0].range_export)
         self.wait_counts(q)
-        self.assertIn("待翻譯檔案 10 張", q.summary.get())
+        self.assertIn("待翻譯 10 頁", q.summary.get())
 
     def test_pending_file_total_tracks_jobs_retries_removal_and_rescan(self):
         first, second = self.chapter("Chapter 1"), self.chapter("Chapter 2")
@@ -1184,27 +2244,27 @@ class WorkflowTests(unittest.TestCase):
         q.add_paths([first, second], "translate")
         q.add_paths([first], "export")
         self.wait_counts(q)
-        self.assertIn("待翻譯檔案 5 張", q.summary.get())
+        self.assertIn("待翻譯 5 頁", q.summary.get())
         q.active_jobs = tuple(q.jobs)
         q.events.put(("status", 0, "running", ""))
-        with mock.patch("translation_queue.image_files", side_effect=AssertionError("status must not rescan")):
+        with mock.patch("translation_queue.image_count", side_effect=AssertionError("status must not rescan")):
             q.poll()
         self.wait_counts(q)
-        self.assertIn("待翻譯檔案 2 張", q.summary.get())
+        self.assertIn("待翻譯 2 頁", q.summary.get())
         q.events.put(("status", 0, "failed", "synthetic failure"))
         q.poll()
         q.tree.selection_set(str(id(q.jobs[0])))
         q.retry()
         self.wait_counts(q)
-        self.assertIn("待翻譯檔案 5 張", q.summary.get())
+        self.assertIn("待翻譯 5 頁", q.summary.get())
         q.tree.selection_set(str(id(q.jobs[1])))
         q.remove()
         self.wait_counts(q)
-        self.assertIn("待翻譯檔案 3 張", q.summary.get())
+        self.assertIn("待翻譯 3 頁", q.summary.get())
         q.add_paths([self.folder / "missing"], "translate")
         self.wait_counts(q)
-        self.assertIn("待翻譯檔案 3 張（1 項無法計數）", q.summary.get())
-        with mock.patch("translation_queue.image_files", side_effect=PermissionError("synthetic denied")):
+        self.assertIn("待翻譯 3 頁（1 項無法計數）", q.summary.get())
+        with mock.patch("translation_queue.image_count", side_effect=PermissionError("synthetic denied")):
             q.render(refresh_counts=True)
             self.wait_counts(q)
         self.assertIn("2 項無法計數", q.summary.get())
@@ -1213,7 +2273,7 @@ class WorkflowTests(unittest.TestCase):
         self.app.scan_events.put(("done", base, self.app.scan_folder_data(base)))
         self.app.poll_scan_events()
         self.wait_counts(q)
-        self.assertIn("待翻譯檔案 4 張（1 項無法計數）", q.summary.get())
+        self.assertIn("待翻譯 4 頁（1 項無法計數）", q.summary.get())
 
     def test_range_export_controls_output_validation_and_legacy_jobs_default_off(self):
         from comic_core import save_json
@@ -1253,14 +2313,14 @@ class WorkflowTests(unittest.TestCase):
         for selection in selections:
             q.tree.selection_set(*selection)
             q.update_controls()
-            self.assertEqual(str(q.range_button["state"]), "disabled")
+            self.assertEqual(q.action_states["翻譯頁數"], "disabled")
             self.assertIsNone(q.edit_page_range())
         q.tree.selection_set(str(id(q.jobs[0])))
         self.app.set_manga_busy(True)
         self.assertIsNone(q.edit_page_range())
         self.app.set_manga_busy(False)
         q.update_controls()
-        self.assertEqual(str(q.range_button["state"]), "normal")
+        self.assertEqual(q.action_states["翻譯頁數"], "normal")
         dialog = q.edit_page_range()
         box = dialog.winfo_children()[0]
         box.grid_slaves(row=2, column=1)[0].set("0")
@@ -1309,12 +2369,12 @@ class WorkflowTests(unittest.TestCase):
         self.assertFalse(self.app.translation_queue.open_after_completion.get())
         for expected in (True, False):
             q = self.app.translation_queue
-            check = next(w for w in q.controls if isinstance(w, tk.ttk.Checkbutton)
-                         and w.cget("text") == "完成後開啟資料夾")
-            check.invoke()
+            index = next(i for i in range(q.options_menu.index("end") + 1)
+                         if q.options_menu.entrycget(i, "label") == "完成後開啟資料夾")
+            q.options_menu.invoke(index)
             self.assertIs(comic.load_json(self.settings, {})["bt_open_after_completion"], expected)
             self.app.set_manga_busy(True)
-            self.assertTrue(check.instate(["disabled"]))
+            self.assertTrue(q.options_menu.master.instate(["disabled"]))
             self.app.set_manga_busy(False)
             self.root.update_idletasks()
             for handle in self.root.tk.call("after", "info"):
@@ -1357,6 +2417,28 @@ class WorkflowTests(unittest.TestCase):
         self.assertFalse(q.running)
         self.assertFalse(self.app.manga_busy)
 
+    def test_translation_errors_skip_automatic_export_and_cleanup(self):
+        from queue_worker import run_jobs
+        from ui_language import tr
+        chapter = self.chapter("Chapter 1")
+        (chapter / "1.png").write_bytes(b"source")
+        q = self.app.translation_queue
+        q.add_paths([chapter], "translate")
+        q.active_jobs = tuple(q.jobs)
+        diagnostic = "[ERROR  ] trans_llm:_translate:1385 - LLM translation failed: unexpected keyword"
+        with mock.patch("queue_worker.translator_command", return_value=([], self.folder, None)), \
+                mock.patch("queue_worker.run_translation", return_value=diagnostic), \
+                mock.patch("queue_worker.export_chapter") as export, \
+                mock.patch("queue_worker.clear_work_folders") as cleanup, \
+                mock.patch("translation_queue.os.startfile"):
+            run_jobs(q.active_jobs, dict(bt_path="installed", bt_config="", bt_export=True, bt_cleanup=True),
+                     str(self.folder / "Komga"), True, q.stop, q.events.put)
+            q.poll()
+        export.assert_not_called()
+        cleanup.assert_not_called()
+        self.assertEqual(q.jobs[0].status, "done_warning")
+        self.assertIn(tr("翻譯過程出現錯誤，略過自動匯出與清理；請檢查結果後再手動匯出"), q.jobs[0].error)
+
     def test_completed_anomaly_is_visible_persisted_and_can_be_retried(self):
         from comic_core import load_json
         from queue_worker import run_jobs
@@ -1372,12 +2454,155 @@ class WorkflowTests(unittest.TestCase):
             run_jobs(q.active_jobs, dict(bt_path="installed", bt_config=""), "", True, q.stop, q.events.put)
             q.poll()
         self.assertEqual(q.jobs[0].status, "done_warning")
-        self.assertEqual(q.tree.set(str(id(q.jobs[0])), "status"), tr("完成（有異常）"))
+        self.assertEqual(q.tree.set(str(id(q.jobs[0])), "status"), tr("完成需檢查"))
         self.assertIn("3221225477", q.jobs[0].error)
         self.assertEqual(load_json(self.settings, {})["bt_jobs"][0]["status"], "done_warning")
         q.tree.selection_set(str(id(q.jobs[0])))
         q.retry()
         self.assertEqual((q.jobs[0].status, q.jobs[0].error), ("pending", ""))
+
+    def test_statistics_overview_and_progress_times_fit_each_language(self):
+        import json
+        from ui_language import tr
+        from queue_history import MODEL_COLUMNS
+        for language in ('zh-TW', 'en', 'ja'):
+            with self.subTest(language=language):
+                case = WorkflowTests()
+                with mock.patch.object(comic, 'load_json', return_value={'ui_language': language}):
+                    case.setUp()
+                try:
+                    root, q = case.root, case.app.translation_queue
+                    root.deiconify()
+                    q.usage_records[0, 'OCR'] = dict(model='demo', total_tokens=12345, prompt=12000,
+                                                    requests=2, cost='0.000021', missing_usage_requests=0,
+                                                    unpriced_requests=0)
+                    q.open_model_stats()
+                    root.update()
+                    table = q.model_usage_table
+                    overview = ('scope', 'model', 'total_tokens', 'requests', 'cost')
+                    self.assertEqual(table['displaycolumns'], overview)
+                    self.assertLessEqual(sum(table.column(key, 'width') for key in overview), table.winfo_width())
+                    row = json.dumps(['OCR', 'demo'])
+                    table.selection_set(row)
+                    values = table.item(row, 'values')
+                    table.column_toggle.invoke()
+                    self.assertEqual(table['displaycolumns'], tuple(MODEL_COLUMNS))
+                    table.xview_moveto(1)
+                    table.column_toggle.invoke()
+                    self.assertEqual(table.item(row, 'values'), values)
+                    self.assertEqual(table.selection(), (row,))
+                    self.assertEqual(table.xview()[0], 0)
+                    self.assertEqual(q.usage_table.set('OCR', 'cost'), 'US$0.000021')
+                    q.toggle_progress()
+                    popup = q.bt_bars['OCR'].winfo_toplevel()
+                    popup.geometry('760x340')
+                    for name, eta in zip(q.bt_bars, ('12:34', '25:01:01', None, '00:00')):
+                        q.bt_progress[name] = (10, 1234, 12340, eta, True)
+                        q.bt_elapsed[name] = 100
+                        q.time_labels[name].set(tr('累計耗時：{0}').format('25:01:01'))
+                        q.show_bt_progress(name)
+                    root.update()
+                    self.assertIn('00:12:34', q.bt_labels['Text Detection'].get())
+                    self.assertIn('25:01:01', q.bt_labels['OCR'].get())
+                    self.assertIn(tr('估算中'), q.bt_labels['Inpaint'].get())
+                    self.assertIn('1,234/12,340', q.bt_labels['Translation'].get())
+                    q.show_bt_progress('Translation', '失敗')
+                    self.assertIn(tr('{0}%｜{1}/{2} 頁｜狀態 {3}').format(10, '1,234', '12,340', tr('失敗')),
+                                  q.bt_labels['Translation'].get())
+                    for widget in q.bt_bars['OCR'].master.winfo_children():
+                        self.assertTrue(widget.winfo_ismapped())
+                        self.assertLessEqual(widget.winfo_rootx() + widget.winfo_width(),
+                                             popup.winfo_rootx() + popup.winfo_width())
+                        self.assertLessEqual(widget.winfo_rooty() + widget.winfo_height(),
+                                             popup.winfo_rooty() + popup.winfo_height())
+                finally:
+                    case.tearDown()
+
+
+
+    def test_long_selection_details_keep_lists_stable_and_allow_copy(self):
+        self.root.geometry('1024x780')
+        self.root.deiconify()
+        q = self.app.translation_queue
+        self.app.folder_details.set('short')
+        q.selection_details.set('short')
+        self.root.update()
+        heights = (self.app.folder_tree.winfo_height(), q.tree.winfo_height())
+        content = '漫畫 / Manga / 漫画 ' * 100 + '\n' + '錯誤原因 ' * 200
+        self.app.folder_details.set(content)
+        q.selection_details.set(content)
+        self.root.update()
+        self.assertEqual((self.app.folder_tree.winfo_height(), q.tree.winfo_height()), heights)
+        self.assertTrue(self.app.folder_tree.winfo_ismapped())
+        self.assertTrue(q.tree.winfo_ismapped())
+        for text in (self.app.folder_details_label, q.selection_label):
+            self.assertEqual(str(text.cget('state')), 'disabled')
+            self.assertEqual(text.get('1.0', 'end-1c'), content)
+            text.insert('end', 'must not edit')
+            self.assertEqual(text.get('1.0', 'end-1c'), content)
+            text.focus_force()
+            text.event_generate('<Control-a>')
+            text.event_generate('<Control-c>')
+            self.root.update()
+            self.assertEqual(self.root.clipboard_get(), content)
+            text.yview_moveto(1)
+            self.assertGreater(text.yview()[0], 0)
+        self.assertTrue(q.view_button.winfo_ismapped())
+
+
+    def test_main_actions_fit_small_windows_in_each_language(self):
+        for language in ('zh-TW', 'en', 'ja'):
+            with self.subTest(language=language):
+                case = WorkflowTests()
+                with mock.patch.object(comic, 'load_json', return_value={'ui_language': language}):
+                    case.setUp()
+                try:
+                    root, app = case.root, case.app
+                    q = app.translation_queue
+                    q.add_paths([case.chapter(f'Chapter {i}') for i in range(1, 4)])
+                    q.jobs[0].status, q.jobs[0].error = 'failed', 'Selected model is at capacity'
+                    q.render()
+                    q.tree.selection_set(str(id(q.jobs[0])))
+                    q.update_controls()
+                    root.geometry('820x640')
+                    root.deiconify()
+                    root.update()
+                    widgets = (app.library_menu, app.manga_choice, q.action_choice, app.start_entry, app.end_entry, app.add_range_button,
+                               app.add_selected_button, q.start_button, q.pause_button, q.stop_button,
+                               q.operations_button, q.view_button, q.workflow_choice,
+                               q.history_button, q.stats_button, q.progress_button)
+                    self.assertTrue(q.tree.bbox(str(id(q.jobs[-1]))))  # every queued job stays visible
+                    for widget in widgets:
+                        self.assertTrue(widget.winfo_ismapped())
+                        self.assertGreaterEqual(widget.winfo_width(), widget.winfo_reqwidth())
+                        self.assertGreaterEqual(widget.winfo_rootx(), root.winfo_rootx())
+                        self.assertLessEqual(widget.winfo_rootx() + widget.winfo_width(),
+                                             root.winfo_rootx() + root.winfo_width())
+                        self.assertLessEqual(widget.winfo_rooty() + widget.winfo_height(),
+                                             root.winfo_rooty() + root.winfo_height())
+                    self.assertLessEqual(app.folder_tree.column('#0', 'width') + app.folder_tree.column('pages', 'width'),
+                                         app.folder_tree.winfo_width())
+                    for index in range(5):
+                        q.workflow_menu.invoke(index)
+                        root.update()
+                        for widget in (q.workflow_choice, q.start_button, q.pause_button, q.stop_button):
+                            self.assertTrue(widget.winfo_ismapped())
+                            self.assertGreaterEqual(widget.winfo_width(), widget.winfo_reqwidth())
+                            self.assertLessEqual(widget.winfo_rootx() + widget.winfo_width(),
+                                                 root.winfo_rootx() + root.winfo_width())
+                    app.panes.sashpos(0, 180)
+                    root.update()
+                    self.assertTrue(app.add_selected_button.winfo_ismapped())
+                    app.panes.sashpos(0, 430)
+                    root.update()
+                    for widget in (app.manga_choice, app.start_entry, app.end_entry, app.add_range_button, q.action_choice,
+                                   q.view_button):
+                        self.assertGreaterEqual(widget.winfo_width(), widget.winfo_reqwidth())
+                        self.assertLessEqual(widget.winfo_rootx() + widget.winfo_width(),
+                                             root.winfo_rootx() + root.winfo_width())
+                finally:
+                    case.tearDown()
+
 
     def test_layout_fits_standard_desktop(self):
         self.root.geometry('1024x780')
@@ -1385,7 +2610,7 @@ class WorkflowTests(unittest.TestCase):
         self.app.work_tabs.select(self.app.queue_tab)
         self.root.update()
         self.root.update_idletasks()
-        footer = self.app.translation_queue.usage_frame
+        footer = self.app.translation_queue.view_button
         self.assertTrue(footer.winfo_ismapped())
         self.assertLessEqual(footer.winfo_rooty() - self.root.winfo_rooty() + footer.winfo_reqheight(), 780)
         self.assertEqual(len(self.app.work_tabs.tabs()), 4)
@@ -1416,67 +2641,165 @@ class WorkflowTests(unittest.TestCase):
         self.root.update()
         self.assertEqual((self.root.winfo_width(), self.root.winfo_height()), (820, 640))
 
-    def test_expanded_queue_sections_borrow_manga_space_and_restore_it(self):
-        # Test the roomy layout even on CI's 1024x768 desktop; small-screen coverage follows below.
-        self.root.maxsize(1200, 1100)
-        self.root.geometry('980x900')
+    def test_zoom_reversal_preserves_motion_and_resized_target(self):
+        self.root.geometry('1024x780')
         self.root.deiconify()
         self.root.update()
         q, panes = self.app.translation_queue, self.app.panes
-        manga = panes.nametowidget(panes.panes()[0])
-        panes.sashpos(0, 450)
+        panes.sashpos(0, 300)
         self.root.update()
-        original_sash = panes.sashpos(0)
-        original_tree = q.tree.winfo_height()
-        original_manga = manga.winfo_height()
-        for _ in range(2):
-            q.bt_toggle.invoke()
+        clock, callbacks, handles = [100.0], {}, iter(range(10000))
+        def schedule(_delay, callback):
+            handle = str(next(handles))
+            callbacks[handle] = callback
+            return handle
+        def advance(seconds):
+            clock[0] += seconds
+            callback = callbacks.pop(q.sash_after)
+            callback()
             self.root.update()
-            self.assertLess(manga.winfo_height(), original_manga)
-            self.assertAlmostEqual(q.tree.winfo_height(), original_tree, delta=1)
-            progress_sash = panes.sashpos(0)
-            q.usage_toggle.invoke()
+        with mock.patch('translation_queue.time.monotonic', side_effect=lambda: clock[0]), \
+                mock.patch.object(self.root, 'after', side_effect=schedule), \
+                mock.patch.object(self.root, 'after_cancel', side_effect=lambda handle: callbacks.pop(handle, None)):
+            q.animate_sash(0)
+            advance(.06)
+            before = panes.sashpos(0)
+            q.animate_sash(300)
+            advance(.005)
+            self.assertLess(panes.sashpos(0), before, 'reversal must decelerate existing motion first')
+            ratio = 300 / panes.winfo_width()
+            self.root.geometry('900x700')
             self.root.update()
-            self.assertLess(panes.sashpos(0), progress_sash)
-            self.assertAlmostEqual(q.tree.winfo_height(), original_tree, delta=1)
-            # Close in a different order from opening; no cumulative sash drift.
-            q.bt_toggle.invoke()
+            for _ in range(100):
+                if q.sash_after is None:
+                    break
+                advance(.016)
+            self.assertIsNone(q.sash_after)
+            self.assertAlmostEqual(panes.sashpos(0) / panes.winfo_width(), ratio, delta=.002)
+
+    def test_zoom_defers_column_and_wrapping_reflow(self):
+        path = self.chapter('Chapter 1')
+        self.app.apply_scan_data(path.parent.parent, self.app.scan_folder_data(path.parent.parent))
+        tree = self.app.folder_tree
+        tree.selection_set(tree.get_children()[0])
+        self.app.on_tree_select()
+        self.root.geometry('1024x780')
+        self.root.deiconify()
+        self.root.update()
+        q = self.app.translation_queue
+        height = self.app.folder_details_label.winfo_reqheight()
+        clock, callbacks, handles = [100.0], {}, iter(range(10000))
+        def schedule(_delay, callback):
+            handle = str(next(handles))
+            callbacks[handle] = callback
+            return handle
+        with mock.patch.object(q.tree, 'column', wraps=q.tree.column) as columns, \
+                mock.patch('translation_queue.time.monotonic', side_effect=lambda: clock[0]), \
+                mock.patch.object(self.root, 'after', side_effect=schedule):
+            q.toggle_queue_size()
+            clock[0] += .06
+            callbacks.pop(q.sash_after)()
             self.root.update()
-            self.assertAlmostEqual(q.tree.winfo_height(), original_tree, delta=1)
-            q.usage_toggle.invoke()
+            self.assertIsNotNone(q.sash_after)
+            self.assertFalse(any('width' in call.kwargs for call in columns.call_args_list))
+            self.assertEqual(self.app.folder_details_label.winfo_reqheight(), height)
+            for _ in range(100):
+                if q.sash_after is None:
+                    break
+                clock[0] += .016
+                callbacks.pop(q.sash_after)()
+                self.root.update()
+            self.assertIsNone(q.sash_after)
+            self.assertTrue(any('width' in call.kwargs for call in columns.call_args_list))
+
+    def test_queue_can_expand_restore_and_resize_with_progress_open(self):
+        self.root.geometry('1024x780')
+        self.root.deiconify()
+        self.root.update()
+        q, panes = self.app.translation_queue, self.app.panes
+        panes.sashpos(0, 300)
+        self.root.update()
+        before = q.tree.winfo_width()
+        ratio = panes.sashpos(0) / panes.winfo_width()
+        def finish_animation():
+            deadline = time.monotonic() + 1
+            while q.sash_after is not None and time.monotonic() < deadline:
+                self.root.update()
+                time.sleep(.01)
+            self.assertIsNone(q.sash_after)
+        q.toggle_queue_size()
+        self.assertIsNotNone(q.sash_after)
+        finish_animation()
+        self.assertEqual(panes.sashpos(0), 0)
+        self.assertGreater(q.tree.winfo_width(), before)
+        for toggle in (q.toggle_progress, q.toggle_usage):
+            toggle()
             self.root.update()
-            self.assertEqual(panes.sashpos(0), original_sash)
-            self.assertAlmostEqual(q.tree.winfo_height(), original_tree, delta=1)
-        # On a small desktop, the manga controls must remain accessible.
+            self.assertEqual(panes.sashpos(0), 0)
+            self.assertTrue(q.tree.winfo_ismapped())
+            toggle()
+        self.root.geometry('900x700')
+        self.root.update()
+        self.assertEqual(panes.sashpos(0), 0)
+        q.toggle_queue_size()
+        finish_animation()
+        self.assertAlmostEqual(panes.sashpos(0) / panes.winfo_width(), ratio, delta=.01)
+        # Rapid reversal resumes from the current frame and restores the same ratio.
+        q.toggle_queue_size()
+        self.root.update()
+        q.toggle_queue_size()
+        finish_animation()
+        self.assertAlmostEqual(panes.sashpos(0) / panes.winfo_width(), ratio, delta=.01)
+        panes.sashpos(0, 200)
+        self.root.update()
+        self.assertEqual(panes.sashpos(0), 200)
+        q.toggle_queue_size()
+        handle = q.sash_after
+        self.assertIsNotNone(handle)
+        panes.event_generate('<ButtonPress-1>', x=panes.sashpos(0), y=10)
+        panes.event_generate('<ButtonRelease-1>', x=panes.sashpos(0), y=10)
+        self.assertIsNone(q.sash_after)
+        self.assertIsNone(q.queue_restore_ratio)
+        self.assertEqual(q.sash_velocity, 0)
+        self.assertNotIn(handle, self.root.tk.call('after', 'info'))
+        panes.sashpos(0, 200)
+        self.root.update()
+        self.assertEqual(panes.sashpos(0), 200)
+        q.toggle_queue_size()
+        handle = q.sash_after
+        with mock.patch.object(self.app, 'save_settings', return_value=True), \
+                mock.patch.object(self.root, 'destroy') as destroy:
+            self.app.close()
+            destroy.assert_called_once()
+        self.assertIsNone(q.sash_after)
+        self.assertNotIn(handle, self.root.tk.call('after', 'info'))
+
+
+    def test_queue_details_preserve_library_and_queue_space(self):
         self.root.geometry('980x720')
+        self.root.deiconify()
         self.root.update()
+        q, panes = self.app.translation_queue, self.app.panes
         panes.sashpos(0, 335)
         self.root.update()
-        q.bt_toggle.invoke()
-        q.usage_toggle.invoke()
+        initial = (panes.sashpos(0), q.tree.winfo_width(), q.tree.winfo_height())
+        for _ in range(2):
+            q.progress_button.invoke()
+            q.view_menu.invoke(0)
+            self.root.update()
+            self.assertTrue(q.bt_bars['OCR'].master.winfo_ismapped())
+            self.assertTrue(q.usage_table.master.winfo_ismapped())
+            self.assertTrue(self.app.add_range_button.winfo_ismapped())
+            self.assertEqual((panes.sashpos(0), q.tree.winfo_width(), q.tree.winfo_height()), initial)
+            q.toggle_progress()
+            q.toggle_usage()
+            self.root.update()
+            self.assertEqual((panes.sashpos(0), q.tree.winfo_width(), q.tree.winfo_height()), initial)
+        q.history_button.invoke()
         self.root.update()
-        self.assertTrue(q.tree.winfo_ismapped())
-        self.assertTrue(self.app.aggregate_button.winfo_ismapped())
-        self.assertLessEqual(self.app.aggregate_button.winfo_rooty() + self.app.aggregate_button.winfo_reqheight(),
-                             manga.winfo_rooty() + manga.winfo_height())
-        q.usage_toggle.invoke()
-        q.bt_toggle.invoke()
-        self.root.update()
-        self.assertEqual(panes.sashpos(0), 335)
-        # A user's divider adjustment while expanded remains after collapsing.
-        self.root.geometry('980x900')
-        self.root.update()
-        panes.sashpos(0, 450)
-        self.root.update()
-        q.bt_toggle.invoke()
-        self.root.update()
-        panes.sashpos(0, panes.sashpos(0) + 15)
-        self.root.update()
-        adjusted_tree = q.tree.winfo_height()
-        q.bt_toggle.invoke()
-        self.root.update()
-        self.assertEqual(panes.sashpos(0), 465)
-        self.assertAlmostEqual(q.tree.winfo_height(), adjusted_tree, delta=1)
+        self.assertTrue(q.history_window.winfo_exists())
+        self.assertTrue(q.stats_button.winfo_ismapped())
+
 
     def test_queue_sections_collapse_independently_and_keep_receiving_updates(self):
         from queue_worker import parse_bt_usage
@@ -1489,11 +2812,11 @@ class WorkflowTests(unittest.TestCase):
         self.app.panes.sashpos(0, 120)
         self.root.update()
         progress_grid = q.bt_bars['OCR'].master
-        usage_grid = q.usage_frame.winfo_children()[0]
+        usage_grid = q.usage_table.master
         self.assertFalse(progress_grid.winfo_ismapped())
         self.assertFalse(usage_grid.winfo_ismapped())
-        q.bt_toggle.invoke()
-        q.usage_toggle.invoke()
+        q.toggle_progress()
+        q.toggle_usage()
         self.root.update()
         self.assertTrue(progress_grid.winfo_ismapped())
         self.assertTrue(usage_grid.winfo_ismapped())
@@ -1501,18 +2824,17 @@ class WorkflowTests(unittest.TestCase):
         expanded_height = q.tree.winfo_height()
         self.app.set_manga_busy(True)
         q.running, q.started_at = True, 100
-        self.assertFalse(q.bt_toggle.instate(['disabled']))
-        self.assertFalse(q.usage_toggle.instate(['disabled']))
-        q.bt_toggle.invoke()
+        self.assertFalse(q.progress_button.instate(['disabled']))
+        self.assertFalse(q.view_button.instate(['disabled']))
+        q.toggle_progress()
         self.root.update()
         self.assertFalse(progress_grid.winfo_ismapped())
         self.assertTrue(usage_grid.winfo_ismapped())
-        self.assertGreater(q.tree.winfo_height(), expanded_height)
-        q.usage_toggle.invoke()
+        self.assertEqual(q.tree.winfo_height(), expanded_height)
+        q.toggle_usage()
         self.root.update_idletasks()
         self.assertFalse(usage_grid.winfo_ismapped())
-        self.assertTrue(q.bt_toggle.winfo_ismapped())
-        self.assertTrue(q.usage_toggle.winfo_ismapped())
+        self.assertTrue(q.view_button.winfo_ismapped())
         for event in [('bt_progress', 'OCR', 50, 24, 48, '01:00'),
                       ('stage_time', 0, 'OCR', 60),
                       ('usage', 0, parse_bt_usage(usage_line())),
@@ -1520,8 +2842,8 @@ class WorkflowTests(unittest.TestCase):
             q.events.put(event)
         with mock.patch('translation_queue.time.monotonic', return_value=220):
             q.poll()
-        q.bt_toggle.invoke()
-        q.usage_toggle.invoke()
+        q.toggle_progress()
+        q.toggle_usage()
         self.root.update_idletasks()
         self.assertTrue(progress_grid.winfo_ismapped())
         self.assertTrue(usage_grid.winfo_ismapped())
@@ -1538,8 +2860,8 @@ class WorkflowTests(unittest.TestCase):
         self.root.deiconify()
         self.root.update()
         q = self.app.translation_queue
-        q.bt_toggle.invoke()
-        q.usage_toggle.invoke()
+        q.toggle_progress()
+        q.toggle_usage()
         self.root.update()
         self.app.close()
         saved = comic.load_json(self.settings, {})
@@ -1551,8 +2873,112 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual((self.root.winfo_width(), self.root.winfo_height()), (900, 700))
         q = self.app.translation_queue
         self.assertFalse(q.bt_bars['OCR'].master.winfo_ismapped())
-        self.assertFalse(q.usage_frame.winfo_children()[0].winfo_ismapped())
+        self.assertFalse(q.usage_table.master.winfo_ismapped())
+    def test_secondary_actions_add_path_summary_komga_and_ntfy_url(self):
+        import translation_queue
+        q = self.app.translation_queue
+        chapter = self.folder / 'Series' / 'Chapter 1'
+        chapter.mkdir(parents=True)
+        with mock.patch.object(translation_queue.filedialog, 'askdirectory', return_value=''):
+            q.add_directory()
+        self.assertEqual(q.jobs, [])
+        with mock.patch.object(translation_queue.filedialog, 'askdirectory', return_value=str(chapter)):
+            q.add_directory()
+        self.assertEqual([job.path for job in q.jobs], [chapter])
+        index = next(i for i in range(q.view_menu.index('end') + 1)
+                     if q.view_menu.type(i) == 'command' and q.view_menu.entrycget(i, 'label') == '佇列摘要')
+        with mock.patch.object(translation_queue.messagebox, 'showinfo') as info:
+            q.view_menu.invoke(index)
+        self.assertEqual(info.call_args.args[1].splitlines()[0], '佇列 1 項')
+        komga = self.folder / 'Komga'
+        with mock.patch.object(comic.filedialog, 'askdirectory', return_value=str(komga)):
+            self.app.browse_komga()
+        self.assertEqual(comic.load_json(self.settings, {})['komga_path'], str(komga))
+        ntfy = q.notifications
+        ntfy.server.set('https://ntfy.example/ ')
+        ntfy.topic.set('comics')
+        ntfy.copy_url()
+        self.assertEqual(self.root.clipboard_get(), 'https://ntfy.example/comics')
+        ntfy.server.set('not a url')
+        ntfy.copy_url()
+        self.assertTrue(ntfy.status.get().startswith('NTFY_CONFIG'))
+        self.assertEqual(self.root.clipboard_get(), 'https://ntfy.example/comics')
 
+    def test_every_button_and_menu_entry_runs_without_error(self):
+        import subprocess, translation_queue
+        from tkinter import filedialog, messagebox, simpledialog
+        for series in ('Alpha', 'Beta'):
+            for number in (1, 2):
+                chapter = self.folder / 'lib' / series / f'Chapter {number}'
+                chapter.mkdir(parents=True)
+                (chapter / '1.png').write_bytes(b'x')
+        errors = []
+        self.root.report_callback_exception = lambda kind, error, trace: errors.append(''.join(__import__('traceback').format_exception(kind, error, trace)))
+        dialogs = {name: mock.patch.object(messagebox, name, return_value=False)
+                   for name in ('showinfo', 'showwarning', 'showerror', 'askyesno', 'askokcancel', 'askyesnocancel')}
+        # Dialogs answer cancel and nothing external starts; a real run is covered by the worker tests.
+        with (mock.patch.object(filedialog, 'askdirectory', return_value=''),
+              mock.patch.object(filedialog, 'askopenfilename', return_value=''),
+              mock.patch.object(filedialog, 'asksaveasfilename', return_value=''),
+              mock.patch.object(simpledialog, 'askstring', return_value=None),
+              mock.patch.object(tk.Misc, 'wait_window', lambda self, window=None: None),
+              mock.patch.object(tk.Misc, 'grab_set', lambda self: None),
+              mock.patch.object(subprocess, 'Popen'), mock.patch.object(comic.os, 'startfile', create=True),
+              mock.patch.object(translation_queue.TranslationQueue, 'start')):
+            for patch in dialogs.values():
+                patch.start()
+            try:
+                self.app.base_path.set(str(self.folder / 'lib'))
+                self.app.load_folders()
+                deadline = time.monotonic() + 10
+                while time.monotonic() < deadline and (self.app.manga_busy or not self.app.folder_tree.get_children()):
+                    self.root.update()
+                    time.sleep(.02)
+                q = self.app.translation_queue
+                q.add_paths([self.folder / 'lib' / 'Alpha' / 'Chapter 1', self.folder / 'lib' / 'Beta' / 'Chapter 2'], 'translate')
+                for series in self.app.folder_tree.get_children():
+                    self.app.folder_tree.item(series, open=True)
+                    self.app.load_series_children(series)
+                windows = [self.root]
+                for opener in (self.app.open_aggregate, q.open_history, q.open_model_stats, q.open_jev_stats, q.scheduler.show,
+                               lambda: translation_queue.open_pricing(self.root, q.token_rates, self.app.save_settings)):
+                    before = set(self.root.winfo_children())
+                    opener()
+                    self.root.update()
+                    windows += set(self.root.winfo_children()) - before
+
+                def actions(widget):
+                    for child in widget.winfo_children():
+                        if child.winfo_class() in ('TButton', 'TCheckbutton'):
+                            yield child.cget('text'), child.invoke
+                        if isinstance(child, tk.Menu) and child.index('end') is not None:
+                            for index in range(child.index('end') + 1):
+                                if child.type(index) in ('command', 'checkbutton', 'radiobutton'):
+                                    yield child.entrycget(index, 'label'), lambda menu=child, index=index: menu.invoke(index)
+                        yield from actions(child)
+                count = 0
+                for window in windows:
+                    for label, invoke in list(actions(window)):
+                        chapters = [item for item, (kind, _) in self.app.tree_items.items() if kind != 'series']
+                        if chapters:
+                            self.app.folder_tree.selection_set(chapters[:2])
+                        if q.tree.get_children():
+                            q.tree.selection_set(q.tree.get_children()[:1])
+                        self.root.update()
+                        invoke()
+                        self.root.update()
+                        count += 1
+                        self.assertEqual(errors, [], label)
+            finally:
+                for patch in dialogs.values():
+                    patch.stop()
+        self.assertGreater(count, 80)
+
+    def test_window_size_is_saved_in_96_dpi_pixels(self):
+        with mock.patch.object(ui_theme, 'SCALE', 1.25), mock.patch.object(self.root, 'state', return_value='normal'):
+            self.assertEqual((ui_theme.px(4), ui_theme.px(4, 0)), (5, (5, 0)))
+            self.app.remember_window_size(mock.Mock(widget=self.root, width=1125, height=875))
+        self.assertEqual(self.app.window_size, [900, 700])
     @unittest.skipUnless(comic.os.name == 'nt', 'Windows maximized state')
     def test_maximized_window_keeps_normal_size_through_minimize_and_restart(self):
         self.root.geometry('900x700')
@@ -1625,7 +3051,7 @@ class WorkflowTests(unittest.TestCase):
         self.root.update()
         expected = [window.totals.item(row, 'values') for row in window.totals.get_children()]
         self.assertEqual({key: var.get() for key, var in window.total_counts.items()}, {'runs': '2', 'jobs': '2', 'elapsed': '02:00:00'})
-        self.assertEqual(window.totals.item('total', 'values'), ('合計', '2.00K', 'US$0.01', '2', '完整', '完整'))
+        self.assertEqual(window.totals.item('total', 'values'), ('合計', '2.00K', 'US$0.008000', '2', '完整', '完整'))
         window.tree.selection_set('run-0')
         window.show_details()
         self.assertEqual([window.totals.item(row, 'values') for row in window.totals.get_children()], expected)
@@ -1651,6 +3077,26 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(window.totals.set('total', 'cost'), 'US$0.02')
         window.refresh()
         self.assertEqual(window.total_counts['runs'].get(), '3')
+
+    def test_history_counts_only_completed_jobs_in_stopped_batch(self):
+        from queue_history import save_run
+        statuses = ('done', 'done_warning', 'pending', 'running', 'failed', 'blocked', 'cancelled')
+        record = dict(id='stopped', started_at='2026-09-23', status='cancelled', jobs=[
+            dict(path=f'Chapter {index}', action='translate', status=status)
+            for index, status in enumerate(statuses)])
+        save_run(self.app.history_path, record)
+        original = self.app.history_path.read_bytes()
+        self.app.translation_queue.open_history()
+        window = self.app.translation_queue.history_window
+        self.assertEqual(window.tree.heading('jobs', 'text'), '完成數')
+        self.assertEqual(window.tree.set('stopped', 'jobs'), '2')
+        self.assertEqual(window.total_counts['jobs'].get(), '2')
+        fields = dict(window.detail_tables['basic'].item(row, 'values')
+                      for row in window.detail_tables['basic'].get_children())
+        self.assertEqual(fields['完成數'], '2')
+        window.load_children('stopped')
+        self.assertEqual(len(window.tree.get_children('stopped')), len(statuses))
+        self.assertEqual(self.app.history_path.read_bytes(), original)
 
     def test_queue_totals_match_collapsed_history_and_folder_breakdown(self):
         from queue_history import find_runs
@@ -1683,6 +3129,7 @@ class WorkflowTests(unittest.TestCase):
         window = q.history_window
         self.root.update()
         batch = window.tree.get_children()[0]
+        window.load_children(batch)
         folders = window.tree.get_children(batch)
         self.assertEqual(len(folders), 2)
         self.assertFalse(window.tree.item(batch, 'open'))
@@ -1700,6 +3147,7 @@ class WorkflowTests(unittest.TestCase):
             self.assertTrue(window.tree.bbox(folder))
             self.assertEqual(tokens, window.tree.set(folder, 'tokens'))
             self.assertIn(cost, window.tree.set(folder, 'cost'))
+        window.load_children(folders[0])
         scopes = window.tree.get_children(folders[0])
         self.assertEqual([window.tree.item(item, 'text') for item in scopes], ['OCR', '翻譯', '合計'])
         self.assertFalse(window.tree.bbox(scopes[0]))
@@ -1714,8 +3162,9 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn(str(second), detail_values(window))
         self.assertIn('00:00:15', detail_values(window))
         window.refresh()
-        self.assertFalse(window.tree.item(batch, 'open'))
-        self.assertTrue(all(not window.tree.item(item, 'open') for item in window.tree.get_children(batch)))
+        self.assertTrue(window.tree.item(batch, 'open'))
+        self.assertTrue(window.tree.item(folders[0], 'open'))
+        self.assertEqual(window.tree.selection(), (scopes[0],))
         q.add_paths([self.chapter('Chapter 3')], 'translate')
         with mock.patch.object(q, 'validate', return_value=True), mock.patch('translation_queue.threading.Thread'):
             q.start()
@@ -1793,6 +3242,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn('US$2.61', detail_values(window))
         batch = window.tree.get_children()[0]
         self.assertFalse(window.tree.item(batch, 'open'))
+        window.load_children(batch)
         folder = window.tree.get_children(batch)[1]
         self.assertIn('US$2.61', window.tree.set(batch, 'cost'))
         self.assertIn('US$0.13', window.tree.set(folder, 'cost'))
@@ -1853,6 +3303,7 @@ class WorkflowTests(unittest.TestCase):
     def test_pause_resume_keeps_one_batch_usage_and_excludes_waiting_time(self):
         from queue_history import find_runs
         q = self.app.translation_queue
+        self.app.komga_path.set(str(self.folder / 'Komga'))
         q.add_paths([self.chapter('Chapter 1'), self.chapter('Chapter 2')], 'cleanup')
         usage = dict(scope='total', total_tokens=1000, requests=1, cost='0.004',
                      missing_usage_requests=0, unpriced_requests=0)
@@ -1879,9 +3330,9 @@ class WorkflowTests(unittest.TestCase):
             self.assertTrue(q.running)
             self.assertTrue(self.app.manga_busy)
             self.assertEqual([job.status for job in q.active_jobs], ['done', 'pending'])
-            self.assertIn('佇列已暫停', q.label.get())
+            self.assertEqual(q.label.get(), '已暫停；按「繼續佇列」恢復')
             self.assertFalse(q.stop_button.instate(['disabled']))
-            self.assertTrue(q.range_button.instate(['disabled']))
+            self.assertEqual(q.action_states['翻譯頁數'], 'disabled')
             notify.assert_not_called()
             before = q.usage_labels['total'].get()
             clock.return_value = 1000
@@ -1912,7 +3363,7 @@ class WorkflowTests(unittest.TestCase):
             self.assertIsNone(q.paused_at)
             self.assertFalse(self.app.manga_busy)
             self.assertIn('2.00K', q.usage_labels['total'].get())
-            self.assertIn('US$0.01', q.usage_labels['total'].get())
+            self.assertIn('US$0.008000', q.usage_labels['total'].get())
             self.assertIn('00:00:10', q.elapsed_label.get())
             self.assertEqual(q.total['value'], 2)
             notify.assert_called_once()
@@ -1936,6 +3387,63 @@ class WorkflowTests(unittest.TestCase):
         with mock.patch('translation_queue.time.monotonic', return_value=9000):
             q.poll()
         self.assertIn('01:01:01', q.elapsed_label.get())
+
+    def test_cancelled_pending_jobs_do_not_overwrite_stage_owner_or_terminal(self):
+        q = self.app.translation_queue
+        q.jobs = [Job(self.folder / 'Chapter 1', 'translate'),
+                  Job(self.folder / 'Chapter 2', 'translate')]
+        q.active_jobs = tuple(q.jobs)
+        q.render()
+        for event in [('status', 0, 'running', ''), ('bt_reset', 10, {}),
+                      ('bt_progress', 'Text Detection', 100, 10, 10, '00:00'),
+                      ('bt_progress', 'OCR', 50, 5, 10, '00:30'),
+                      ('status', 0, 'cancelled', 'stop'),
+                      ('stage_time', 0, 'OCR', 20),
+                      ('status', 1, 'cancelled', 'stop')]:
+            q.events.put(event)
+        q.poll()
+        self.assertIn('狀態 完成', q.bt_labels['Text Detection'].get())
+        self.assertIn('狀態 已停止', q.bt_labels['OCR'].get())
+        self.assertNotIn('剩餘', q.bt_labels['OCR'].get())
+        self.assertIn('狀態 未執行', q.bt_labels['Translation'].get())
+        # A late report for this same stopped worker must not restore its ETA.
+        q.events.put(('bt_progress', 'OCR', 60, 6, 10, '00:20'))
+        q.poll()
+        self.assertIn('狀態 已停止', q.bt_labels['OCR'].get())
+
+    def test_parallel_cancel_and_pause_preserve_independent_progress(self):
+        q = self.app.translation_queue
+        q.jobs = [Job(self.folder / 'Chapter 1', 'translate'),
+                  Job(self.folder / 'Chapter 2', 'translate'),
+                  Job(self.folder / 'Chapter 3', 'translate')]
+        q.active_jobs = tuple(q.jobs)
+        q.render()
+        q.running, q.started_at = True, 100
+        for phase, index, name in [('translate', 0, 'Translation'), ('prepare', 1, 'OCR')]:
+            for event in [('status', index, 'running', ''), ('bt_reset', 10, {}),
+                          ('bt_progress', name, 50, 5, 10, '00:30')]:
+                q.events.put(('phase_event', phase, event))
+        q.events.put(('phase_event', 'prepare', ('status', 2, 'cancelled', 'stop')))
+        q.poll()
+        self.assertIn('剩餘 00:00:30', q.bt_labels['OCR'].get())
+        q.events.put(('phase_event', 'prepare', ('status', 1, 'failed', 'error')))
+        q.poll()
+        self.assertIn('狀態 失敗', q.bt_labels['OCR'].get())
+        self.assertIn('剩餘 00:00:30', q.bt_labels['Translation'].get())
+        q.events.put(('paused', 130))
+        q.poll()
+        self.assertIn('狀態 已暫停', q.bt_labels['Translation'].get())
+        self.assertIn('狀態 失敗', q.bt_labels['OCR'].get())
+        q.events.put(('resumed', 30))
+        q.poll()
+        self.assertIn('剩餘 00:00:30', q.bt_labels['Translation'].get())
+        self.assertIn('狀態 失敗', q.bt_labels['OCR'].get())
+        q.request_stop()
+        self.assertIn('停止中', q.label.get())
+        q.events.put(('stage', 'Translation', 60))
+        q.poll()
+        self.assertIn('停止中', q.label.get())
+
 
     def test_four_stage_progress_remains_independent_and_resets_per_job(self):
         from queue_worker import BT_STAGES

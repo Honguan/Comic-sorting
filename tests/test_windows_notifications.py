@@ -49,6 +49,14 @@ class WindowsNotificationTests(unittest.TestCase):
         self.notifications.send('done', 'complete', 'test')
         self.shell.assert_not_called()
 
+    def test_toggles_save_immediately(self):
+        box = self.notifications.tab.winfo_children()[0]
+        toggle = next(widget for row in box.winfo_children() for widget in row.winfo_children()
+                      if isinstance(widget, tk.ttk.Checkbutton) and str(widget.cget('variable')) == str(self.windows.fields['success']))
+        toggle.invoke()
+        self.assertTrue(self.windows.saved['success'])
+        self.app.save_settings.assert_called()
+
 
 if __name__ == '__main__':
     unittest.main()

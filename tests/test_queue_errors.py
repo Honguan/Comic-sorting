@@ -10,11 +10,20 @@ class QueueErrorTests(unittest.TestCase):
 
     def test_real_diagnostics_distinguish_causes_from_wrappers(self):
         cases = (
+            ('CodexSignInRequiredError: Sign in to Codex', 'LLM_AUTH'),
+            ('[ERROR  ] codex_account:show_codex_sign_in_required:26 - Sign in with ChatGPT to use Codex.\n'
+             '[INFO   ] module_manager:_imgtrans_pipeline_impl:1329 - Image translation pipeline stopped by user', 'LLM_AUTH'),
+            ('This Codex model is unavailable.', 'LLM_MODEL'),
+            ('Codex input exceeds the model context window.', 'LLM_CONTEXT'),
+            ('The account does not have permission for this Codex request.', 'LLM_PERMISSION'),
+            ('The ChatGPT account has reached its Codex usage limit. Check the account limits before retrying.', 'LLM_QUOTA'),
             ('Codex turn failed: Selected model is at capacity. Please try a different model.\n'
              '[INFO] module_manager:_imgtrans_pipeline:1142 - Image translation pipeline stopped by user', 'LLM_CAPACITY'),
             ('RateLimitError: Error code: 429 - {"code":"insufficient_quota"}', 'LLM_QUOTA'),
             ('RateLimitError: Error code: 429 - {"code":"credit_balance_exhausted"}', 'LLM_QUOTA'),
             ('Codex turn failed: You have hit your usage limit', 'LLM_QUOTA'),
+            ('Codex turn failed: Your workspace is out of credits. Ask your workspace owner to refill in order to continue.\n'
+             '[INFO] module_manager:_imgtrans_pipeline:1142 - Image translation pipeline stopped by user', 'LLM_QUOTA'),
             ('Error code: 429 - {"code":"rate_limit_exceeded"}', 'LLM_RATE_LIMIT'),
             ('Error code: 429', 'HTTP_429'),
             ('HTTP 503: server_is_overloaded', 'LLM_CAPACITY'),

@@ -5,7 +5,7 @@ a = Analysis(
     ['Comic sorting.py'],
     pathex=[],
     binaries=[],
-    datas=[('assets/comic-sorting.ico', 'assets'), ('bt_config_bridge.py', '.'), ('bt_run_bridge.py', '.')],
+    datas=[('assets/comic-sorting.ico', 'assets'), ('bt_run_bridge.py', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -36,4 +36,5 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon='assets/comic-sorting.ico',
+    manifest='assets/app.manifest',
 )

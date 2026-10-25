@@ -1,8 +1,10 @@
+import ctypes
 import os
 import queue
 import shutil
 import sys
 import threading
+import time
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
@@ -11,14 +13,16 @@ from tkinter import filedialog, messagebox, ttk, font as tkfont
 from translation_queue import TranslationQueue
 from app_logging import configure_logging, logger, log_path, redact
 from ui_language import LANGUAGES, set_language, tr
-from ui_theme import apply_theme
-from ui_interactions import bind_table_shortcuts
+import ui_theme
+from ui_theme import apply_theme, px
+from ui_interactions import LibraryTree, bind_search_shortcuts, bind_table_shortcuts, copy_manga_names, details_text
 from comic_core import (
     IMAGE_EXTENSIONS, FOLDER_KINDS, chapter_number, folder_kind, image_files, translation_status,
     natural_sort_key, updated_at, folder_size, format_size, summarize_names,
     clear_work_folders, remove_aggregated_folders, delete_manga_folder, source_fingerprint,
     output_path_for, validate_cbz, create_cbz, load_json, save_json, export_chapter,
     aggregate_output, is_link_or_junction,
+    get_folders_with_numbers, scan_folder_data, aggregate_folders,
 )
 
 
@@ -49,24 +53,27 @@ class FileAggregatorApp:
         icon = resource_path("assets/comic-sorting.ico")
         if icon.is_file():
             self.root.iconbitmap(default=icon)
-        self.root.title(tr("漫畫整合工具"))
-        self.root.minsize(820, 640)
+        self.root.title(tr("漫畫工作台"))
+        self.root.minsize(px(820), px(640))
         size = settings.get("window_size")
         self.window_size = None
         self.window_maximized = settings.get("window_maximized") is True
         if isinstance(size, list) and len(size) == 2 and all(type(value) is int and value > 0 for value in size):
-            width = max(820, min(size[0], self.root.winfo_screenwidth()))
-            height = max(640, min(size[1], self.root.winfo_screenheight()))
-            self.window_size = [width, height]
+            width = max(px(820), min(px(size[0]), self.root.winfo_screenwidth()))
+            height = max(px(640), min(px(size[1]), self.root.winfo_screenheight()))
+            self.window_size = [round(width / ui_theme.SCALE), round(height / ui_theme.SCALE)]
             self.root.geometry(f"{width}x{height}")
         self.folders = []
         self.series_groups = {}
         self.tree_items = {}
         self.chapter_updates = {}
         self.chapter_sizes = {}
+        self.chapter_page_counts = {}
         self.ready_chapters = set()
         self.events = queue.Queue()
         self.scan_events = queue.Queue()
+        self.scan_count = 0
+        self.scan_started = time.monotonic()
         self.aggregate_events = queue.Queue()
         self.manga_busy = False
         self.base_path = tk.StringVar(value=settings.get("manga_path", ""))
@@ -80,154 +87,15 @@ class FileAggregatorApp:
         self.search_text = tk.StringVar()
         self.scan_data = None
         self.search_after = None
+        self.applied_query = ""
+        self.expanded_series = set()
         self.series_sort = settings.get("series_sort", "updated")
         if self.series_sort not in tuple(SERIES_SORT_FIELDS):
             self.series_sort = "updated"
         self.series_sort_descending = settings.get("series_sort_descending", True) is True
 
-        language_row = ttk.Frame(root, padding=(10, 4))
-        language_row.pack(fill="x")
-        ttk.Label(language_row, text="介面語言 / Language / 表示言語").pack(side="left")
-        language_choice = ttk.Combobox(
-            language_row, textvariable=self.ui_language, values=tuple(LANGUAGES.values()),
-            state="readonly", width=12)
-        language_choice.pack(side="left", padx=8)
-        language_choice.bind("<<ComboboxSelected>>", lambda _event: self.save_settings())
-        ttk.Label(language_row, text=tr("重新啟動後套用語言")).pack(side="left")
-
-        self.panes = ttk.Panedwindow(root, orient="vertical")
-        self.panes.pack(fill="both", expand=True, padx=10, pady=6)
-        manga = ttk.LabelFrame(self.panes, text=tr("漫畫整合"), padding=8)
-        self.panes.add(manga, weight=1)
-        path_row = ttk.Frame(manga)
-        path_row.pack(fill="x")
-        ttk.Label(path_row, text=tr("漫畫路徑：")).pack(side="left")
-        self.path_entry = ttk.Entry(path_row, textvariable=self.base_path)
-        self.path_entry.pack(side="left", fill="x", expand=True)
-        self.browse_button = ttk.Button(path_row, text=tr("瀏覽"), command=self.browse)
-        self.browse_button.pack(side="left", padx=(6, 0))
-        self.rescan_button = ttk.Button(path_row, text=tr("重新掃描"), command=self.load_folders)
-        self.rescan_button.pack(side="left", padx=(6, 0))
-        self.path_entry.bind("<Return>", lambda _event: self.load_folders())
-        search_row = ttk.Frame(manga)
-        search_row.pack(fill="x", pady=(6, 0))
-        ttk.Label(search_row, text=tr("搜尋系列／章節")).pack(side="left")
-        self.search_entry = ttk.Entry(search_row, textvariable=self.search_text)
-        self.search_entry.pack(side="left", fill="x", expand=True, padx=6)
-        self.root.bind("<Control-f>", lambda _event: self.search_entry.focus_set())
-        self.search_entry.bind("<Escape>", lambda _event: self.search_text.set(""))
-        ttk.Button(search_row, text=tr("清除搜尋"), command=lambda: self.search_text.set("")).pack(side="left", padx=(0, 6))
-        ttk.Button(search_row, text=tr("匯出漫畫名稱"), command=self.export_manga_names).pack(side="left", padx=(0, 6))
-        self.selection_text = tk.StringVar(value=tr("已選取 {0} 個資料夾").format(0))
-        ttk.Label(search_row, textvariable=self.selection_text).pack(side="left")
-        self.search_text.trace_add("write", self.filter_folders)
-
-        manga_footer = ttk.Frame(manga)
-        manga_footer.pack(side="bottom", fill="x")
-        list_frame = ttk.Frame(manga)
-        list_frame.pack(fill="both", expand=True, pady=8)
-        self.folder_tree = ttk.Treeview(
-            list_frame, columns=("kind", "status", "size", "updated"), show="tree headings",
-            selectmode="extended", height=6)
-        self.update_sort_headings()
-        self.folder_tree.column("#0", width=450, stretch=True)
-        self.folder_tree.heading("kind", text=tr("資料夾類型"))
-        self.folder_tree.column("kind", width=110, stretch=False)
-        self.folder_tree.column("status", width=150, stretch=False)
-        self.folder_tree.column("size", width=110, anchor="e", stretch=False)
-        self.folder_tree.column("updated", width=150, anchor="center", stretch=False)
-        vertical = ttk.Scrollbar(list_frame, command=self.folder_tree.yview)
-        horizontal = ttk.Scrollbar(list_frame, orient="horizontal", command=self.folder_tree.xview)
-        self.folder_tree.configure(yscrollcommand=vertical.set, xscrollcommand=horizontal.set)
-        self.folder_tree.grid(row=0, column=0, sticky="nsew")
-        vertical.grid(row=0, column=1, sticky="ns")
-        horizontal.grid(row=1, column=0, sticky="ew")
-        list_frame.rowconfigure(0, weight=1)
-        list_frame.columnconfigure(0, weight=1)
-        self.folder_details = tk.StringVar()
-        self.folder_details_label = ttk.Label(list_frame, textvariable=self.folder_details, anchor="w", justify="left", wraplength=700)
-        self.folder_details_label.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(4, 0))
-        self.folder_tree.bind("<Configure>", self.fit_folder_columns)
-        self.folder_tree.bind("<<TreeviewSelect>>", self.on_tree_select)
-        self.folder_tree.bind("<Double-1>", self.add_chapter_to_queue)
-        copy_paths = bind_table_shortcuts(self.folder_tree, self.selected_chapters)
-        self.folder_context_menu = tk.Menu(self.folder_tree, tearoff=False)
-        self.folder_context_menu.add_command(label=tr("刪除章節資料夾…"))
-        for label in ("全選所有資料夾", "全選單一章節", "全選整合資料夾"):
-            self.folder_context_menu.add_command(label=tr(label))
-        self.folder_context_menu.add_separator()
-        self.folder_context_menu.add_command(label=tr("複製完整路徑"), accelerator="Ctrl+C", command=copy_paths)
-        self.folder_tree.bind("<Button-3>", self.show_folder_context_menu)
-
-        scan_row = ttk.Frame(manga_footer)
-        scan_row.pack(fill="x")
-        self.scan_progress = ttk.Progressbar(scan_row, mode="indeterminate")
-        self.scan_progress.pack(side="left", fill="x", expand=True)
-        self.scan_status_text = tk.StringVar(value=tr("尚未掃描"))
-        self.scan_status_label = ttk.Label(scan_row, textvariable=self.scan_status_text)
-        self.scan_status_label.pack(side="left", padx=(8, 0))
-        self.scan_progress.pack_forget()
-
-        range_row = ttk.Frame(manga_footer)
-        range_row.pack()
-        ttk.Label(range_row, text=tr("起始編號：")).pack(side="left")
-        self.start_entry = ttk.Entry(range_row, width=6)
-        self.start_entry.pack(side="left")
-        ttk.Label(range_row, text=tr("結束編號：")).pack(side="left", padx=(10, 0))
-        self.end_entry = ttk.Entry(range_row, width=6)
-        self.end_entry.pack(side="left")
-        self.aggregate_button = ttk.Button(range_row, text=tr("確認整合"), command=self.confirm_aggregate, style="Accent.TButton")
-        self.aggregate_button.pack(side="left", padx=10)
-        self.remove_sources_checkbox = ttk.Checkbutton(
-            range_row, text=tr("整合後清除來源"),
-            variable=self.remove_sources_after_aggregate, command=self.save_settings)
-        self.remove_sources_checkbox.pack(side="left")
-        self.keep_last_source_checkbox = ttk.Checkbutton(
-            range_row, text=tr("保留最後一個"),
-            variable=self.keep_last_source, command=self.save_settings)
-        self.keep_last_source_checkbox.pack(side="left", padx=(8, 0))
-
-        self.work_tabs = ttk.Notebook(self.panes)
-        self.panes.add(self.work_tabs, weight=1)
-        self.queue_tab = ttk.Frame(self.work_tabs)
-        self.export_tab = ttk.Frame(self.work_tabs)
-        self.settings_tab = ttk.Frame(self.work_tabs)
-        self.work_tabs.add(self.queue_tab, text=tr("主佇列"))
-        self.work_tabs.add(self.export_tab, text=tr("Komga 匯出"))
-        self.work_tabs.add(self.settings_tab, text=tr("設定"))
-
-        export = ttk.LabelFrame(self.export_tab, text=tr("Komga 匯出"), padding=8)
-        export.pack(fill="x", padx=10, pady=6)
-        komga_row = ttk.Frame(export)
-        komga_row.pack(fill="x")
-        ttk.Label(komga_row, text=tr("Komga 輸出路徑：")).pack(side="left")
-        self.komga_entry = ttk.Entry(komga_row, textvariable=self.komga_path)
-        self.komga_entry.pack(side="left", fill="x", expand=True)
-        self.browse_komga_button = ttk.Button(
-            komga_row, text=tr("瀏覽"), command=self.browse_komga)
-        self.browse_komga_button.pack(side="left", padx=(6, 0))
-        options = ttk.Frame(export)
-        options.pack(fill="x", pady=6)
-        self.skip_checkbox = ttk.Checkbutton(
-            options, text=tr("已存在且來源未變更時跳過"), variable=self.skip_unchanged, command=self.save_settings)
-        self.skip_checkbox.pack(side="left")
-        self.open_checkbox = ttk.Checkbutton(
-            options, text=tr("匯出完成後開啟輸出資料夾"), variable=self.open_after_export, command=self.save_settings)
-        self.open_checkbox.pack(side="left", padx=12)
-        buttons = ttk.Frame(export)
-        buttons.pack(fill="x")
-        self.export_selected_button = ttk.Button(buttons, text=tr("匯出選取項目"), command=self.export_selected)
-        self.export_selected_button.pack(side="left")
-        self.export_all_button = ttk.Button(buttons, text=tr("匯出所有已翻譯項目"), command=self.export_all)
-        self.export_all_button.pack(side="left", padx=6)
-        self.cleanup_button = ttk.Button(
-            buttons, text=tr("清理所有 mask / inpainted"), command=self.confirm_cleanup)
-        self.cleanup_button.pack(side="left")
-        self.progress = ttk.Progressbar(export, mode="determinate")
-        self.progress.pack(fill="x", pady=(8, 2))
-        self.status_label = ttk.Label(export, textvariable=self.status_text)
-        self.status_label.pack(anchor="w")
-        self.progress.pack_forget()
+        self.build_library_panel()
+        self.build_work_tabs()
 
         self.translation_queue = TranslationQueue(self, settings)
         self.window_grip = ttk.Sizegrip(root)
@@ -239,14 +107,266 @@ class FileAggregatorApp:
         if self.base_path.get() and Path(self.base_path.get()).is_dir():
             self.load_folders()
 
+    def build_library_panel(self):
+        self.pending_chapters = {}
+        self.current_series = tk.StringVar(value=tr("請先選擇漫畫"))
+        self.series_choices = {}
+        self.range_start, self.range_end = tk.StringVar(), tk.StringVar()
+        self.panes = ttk.Panedwindow(self.root, orient="horizontal")
+        self.panes.pack(fill="both", expand=True, padx=px(10), pady=px(8))
+        self.panes.bind("<Map>", self.initialize_panes)
+        manga = ttk.Frame(self.panes, padding=px(8))
+        header = ttk.Frame(manga)
+        header.pack(fill="x", pady=px(0, 6))
+        ttk.Label(header, text=tr("漫畫庫"), style="TLabelframe.Label").pack(side="left")
+        self.panes.add(manga, weight=0)
+        path_row = ttk.Frame(manga)
+        path_row.pack(fill="x")
+        self.path_entry = ttk.Entry(path_row, textvariable=self.base_path)
+        self.path_entry.pack(fill="x")
+        path_buttons = ttk.Frame(manga)
+        path_buttons.pack(fill="x", pady=px(4, 0))
+        self.browse_button = ttk.Button(path_buttons, text=tr("瀏覽"), command=self.browse)
+        self.browse_button.pack(side="left", fill="x", expand=True)
+        self.rescan_button = ttk.Button(path_buttons, text=tr("重新掃描"), command=self.load_folders)
+        self.rescan_button.pack(side="left", fill="x", expand=True, padx=px(4, 0))
+        self.path_entry.bind("<Return>", lambda _event: self.load_folders())
+
+        search_row = ttk.Frame(manga)
+        search_row.pack(fill="x", pady=px(8, 0))
+        ttk.Label(search_row, text=tr("搜尋")).pack(side="left", padx=px(0, 4))
+        self.search_entry = ttk.Entry(search_row, textvariable=self.search_text)
+        self.search_entry.pack(side="left", fill="x", expand=True)
+        self.search_entry.configure(width=8)
+        ttk.Button(search_row, text=tr("清除"), width=0, command=lambda: self.search_text.set("")).pack(side="left", padx=px(4))
+        self.library_menu = library_menu = ttk.Menubutton(header, text=tr("工具"))
+        menu = tk.Menu(library_menu, tearoff=False)
+        menu.add_command(label=tr("章節整合"), command=self.open_aggregate)
+        menu.add_command(label=tr("匯出漫畫名稱"), command=self.export_manga_names)
+        sort_menu = tk.Menu(menu, tearoff=False)
+        for field, title in SERIES_SORT_FIELDS.items():
+            sort_menu.add_command(label=tr(title), command=lambda key=field: self.sort_by_column(key))
+        menu.add_cascade(label=tr("排序"), menu=sort_menu)
+        library_menu.configure(menu=menu)
+        library_menu.pack(side="right")
+        self.selection_text = tk.StringVar(value=tr("已選取 {0} 個資料夾").format(0))
+        self.search_text.trace_add("write", self.filter_folders)
+
+        manga_footer = ttk.Frame(manga)
+        manga_footer.pack(side="bottom", fill="x")
+        list_frame = ttk.Frame(manga)
+        list_frame.pack(fill="both", expand=True, pady=px(8))
+        self.folder_tree = LibraryTree(
+            list_frame, self.load_series_children,
+            columns=("kind", "status", "size", "updated", "pages"), displaycolumns=("pages",),
+            show="tree headings", selectmode="extended", height=6)
+        self.update_sort_headings()
+        self.folder_tree.column("#0", width=px(230), minwidth=px(160))
+        for column, title, width in (("kind", "資料夾類型", 110), ("status", "狀態", 190),
+                                     ("size", "資料夾大小", 110), ("updated", "更新時間", 180), ("pages", "頁數", 80)):
+            self.folder_tree.heading(column, text=tr(title))
+            self.folder_tree.column(column, width=px(width), stretch=False)
+        vertical = ttk.Scrollbar(list_frame, command=self.folder_tree.yview)
+        horizontal = ttk.Scrollbar(list_frame, orient="horizontal", command=self.folder_tree.xview)
+        self.folder_tree.configure(yscrollcommand=vertical.set, xscrollcommand=horizontal.set)
+        self.folder_tree.grid(row=0, column=0, sticky="nsew")
+        vertical.grid(row=0, column=1, sticky="ns")
+        horizontal.grid(row=1, column=0, sticky="ew")
+        list_frame.rowconfigure(0, weight=1)
+        list_frame.columnconfigure(0, weight=1)
+        self.folder_details = tk.StringVar()
+        _details, self.folder_details_label = details_text(list_frame, self.folder_details,
+                                                           row=2, column=0, columnspan=2, sticky="ew", pady=px(6, 0))
+        self.folder_tree.bind("<Configure>", self.fit_folder_columns)
+        self.folder_tree.bind("<<TreeviewSelect>>", self.on_tree_select)
+        self.folder_tree.bind("<Double-1>", self.add_chapter_to_queue)
+        copy_paths = bind_table_shortcuts(self.folder_tree, self.selected_chapters)
+        self.root.bind("<Control-f>", bind_search_shortcuts(
+            self.search_entry, self.search_text, self.apply_filter, self.folder_tree))
+        self.folder_context_menu = tk.Menu(self.folder_tree, tearoff=False)
+        self.folder_context_menu.add_command(label=tr("刪除章節資料夾…"))
+        for label in ("全選所有資料夾", "全選單一章節", "全選整合資料夾"):
+            self.folder_context_menu.add_command(label=tr(label))
+        self.folder_context_menu.add_separator()
+        self.folder_context_menu.add_command(label=tr("複製完整路徑"), accelerator="Ctrl+C", command=copy_paths)
+        self.folder_context_menu.add_command(label=tr("複製漫畫名稱"), command=lambda: copy_manga_names(
+            self.folder_tree, (path if kind == "series" else path.parent
+                               for kind, path in (self.tree_items[item] for item in self.folder_tree.selection()))))
+        self.folder_tree.bind("<Button-3>", self.show_folder_context_menu)
+
+        scan_row = ttk.Frame(manga_footer)
+        scan_row.pack(fill="x")
+        self.scan_progress = ttk.Progressbar(scan_row, mode="indeterminate")
+        self.scan_status_text = tk.StringVar(value=tr("尚未掃描"))
+        self.scan_status_label = ttk.Label(scan_row, textvariable=self.scan_status_text, wraplength=px(300), style="Muted.TLabel")
+        self.scan_status_label.pack(side="left", fill="x", expand=True)
+        self.scan_status_label.bind("<Configure>", lambda event: self.scan_status_label.configure(wraplength=event.width)
+                                    if event.width > 100 and self.translation_queue.sash_after is None else None)
+        self.add_selected_button = ttk.Button(manga_footer, text=tr("加入選取"),
+                                             command=lambda: self.translation_queue.add_selected())
+        self.add_selected_button.pack(fill="x", pady=px(4, 0))
+        ttk.Label(manga_footer, textvariable=self.selection_text, style="Muted.TLabel").pack(anchor="w", pady=px(4, 0))
+
+
+    def build_enqueue_panel(self, parent):
+        panel = ttk.Frame(parent)
+        panel.pack(fill="x", pady=px(0, 8))
+        self.enqueue_header = ttk.Frame(panel)
+        self.enqueue_header.pack(fill="x", pady=px(0, 4))
+        ttk.Label(self.enqueue_header, text=tr("加入漫畫與章節"), style="TLabelframe.Label").pack(side="left")
+        manga_row = ttk.Frame(panel)
+        manga_row.pack(fill="x", pady=px(0, 4))
+        ttk.Label(manga_row, text=tr("漫畫")).pack(side="left", padx=px(0, 8))
+        self.manga_choice = ttk.Combobox(manga_row, textvariable=self.current_series, state="readonly", width=8)
+        self.manga_choice.pack(side="left", fill="x", expand=True)
+        self.manga_choice.bind("<<ComboboxSelected>>", self.choose_series)
+        range_row = ttk.Frame(panel)
+        range_row.pack(fill="x")
+        range_row.columnconfigure(1, weight=1)
+        self.enqueue_range = ttk.Frame(range_row)
+        self.enqueue_range.grid(row=0, column=0, sticky="w", padx=px(0, 8))
+        ttk.Label(self.enqueue_range, text=tr("章節序號")).pack(side="left", padx=px(0, 8))
+        self.start_entry = ttk.Entry(self.enqueue_range, textvariable=self.range_start, width=5)
+        self.start_entry.pack(side="left")
+        ttk.Label(self.enqueue_range, text="–").pack(side="left", padx=px(4))
+        self.end_entry = ttk.Entry(self.enqueue_range, textvariable=self.range_end, width=5)
+        self.end_entry.pack(side="left")
+        self.enqueue_actions = ttk.Frame(range_row)
+        self.enqueue_actions.grid(row=0, column=1, sticky="ew")
+        self.add_range_button = ttk.Button(self.enqueue_actions, text=tr("加入佇列"), style="Accent.TButton",
+                                          command=lambda: self.translation_queue.add_number_range())
+        self.add_range_button.pack(side="right")
+        def add_range(_event=None):
+            self.add_range_button.invoke()
+            return "break"
+        for entry in (self.start_entry, self.end_entry):
+            entry.bind("<Return>", add_range)
+        ttk.Label(panel, text=tr("從 1 起算；結束留白到最後"), style="Muted.TLabel").pack(anchor="w", pady=px(2, 0))
+
+
+    def series_name(self, series):
+        base = self.scan_data[0] if self.scan_data else None
+        return str(series.relative_to(base)) if base and series != base else series.name
+
+    def choose_series(self, _event=None):
+        series = self.series_choices.get(self.current_series.get())
+        if series is None or self.manga_busy or self.translation_queue.running:
+            return
+        if self.search_text.get() or self.search_after is not None:
+            self.search_text.set("")
+            self.apply_filter()
+        parent = next(item for item in self.folder_tree.get_children()
+                      if self.tree_items[item] == ("series", series))
+        self.folder_tree.selection_set(parent)
+        self.folder_tree.see(parent)
+        self.on_tree_select()
+        self.work_tabs.select(self.queue_tab)
+
+    def open_aggregate(self):
+        self.aggregate_window.deiconify()
+        self.aggregate_window.lift()
+
+
+    def initialize_panes(self, _event):
+        self.panes.unbind("<Map>")
+        self.panes.sashpos(0, min(px(360), max(px(260), int(self.panes.winfo_width() * .30))))
+
+    def build_work_tabs(self):
+        self.work_tabs = ttk.Notebook(self.panes)
+        self.panes.add(self.work_tabs, weight=1)
+        self.queue_tab = ttk.Frame(self.work_tabs)
+        self.aggregate_window = tk.Toplevel(self.root)
+        self.aggregate_window.title(tr("章節整合"))
+        self.aggregate_window.geometry(f"{px(600)}x{px(350)}")
+        self.aggregate_window.minsize(px(480), px(320))
+        self.aggregate_window.protocol("WM_DELETE_WINDOW", self.aggregate_window.withdraw)
+        self.aggregate_window.withdraw()
+        self.aggregate_tab = ttk.Frame(self.aggregate_window)
+        self.aggregate_tab.pack(fill="both", expand=True)
+        self.export_tab = ttk.Frame(self.work_tabs)
+        self.settings_tab = ttk.Frame(self.work_tabs)
+        self.work_tabs.add(self.queue_tab, text=tr("主佇列"))
+        self.work_tabs.add(self.export_tab, text=tr("Komga 匯出"))
+        self.work_tabs.add(self.settings_tab, text=tr("設定"))
+
+        integration = ttk.LabelFrame(self.aggregate_tab, text=tr("章節整合"), padding=px(12))
+        integration.pack(fill="x", padx=px(8), pady=px(8))
+        ttk.Label(integration, textvariable=self.current_series).pack(anchor="w", pady=px(0, 8))
+        range_row = ttk.Frame(integration)
+        range_row.pack(fill="x")
+        ttk.Label(range_row, text=tr("章節序號")).pack(side="left")
+        self.aggregate_start_entry = ttk.Entry(range_row, textvariable=self.range_start, width=6)
+        self.aggregate_start_entry.pack(side="left", padx=px(6))
+        ttk.Label(range_row, text="–").pack(side="left")
+        self.aggregate_end_entry = ttk.Entry(range_row, textvariable=self.range_end, width=6)
+        self.aggregate_end_entry.pack(side="left", padx=px(6))
+        self.remove_sources_checkbox = ttk.Checkbutton(integration, text=tr("整合後清除來源"),
+            variable=self.remove_sources_after_aggregate, command=self.save_settings)
+        self.remove_sources_checkbox.pack(anchor="w", pady=px(12, 4))
+        self.keep_last_source_checkbox = ttk.Checkbutton(integration, text=tr("保留最後一個"),
+            variable=self.keep_last_source, command=self.save_settings)
+        self.keep_last_source_checkbox.pack(anchor="w")
+        buttons = ttk.Frame(integration)
+        buttons.pack(fill="x", pady=px(12, 0))
+        self.aggregate_button = ttk.Button(buttons, text=tr("確認整合"), command=self.confirm_aggregate)
+        self.aggregate_button.pack(side="left")
+        self.aggregate_translate_button = ttk.Button(buttons, text=tr("整合＋加入佇列"),
+            command=lambda: self.confirm_aggregate(translate_after=True))
+        self.aggregate_translate_button.pack(side="left", padx=px(6))
+
+        language_row = ttk.LabelFrame(self.settings_tab, text=tr("介面設定"), padding=px(8))
+        language_row.pack(fill="x", padx=px(8), pady=px(8))
+        ttk.Label(language_row, text="Language / 表示言語").pack(side="left")
+        language_choice = ttk.Combobox(language_row, textvariable=self.ui_language,
+            values=tuple(LANGUAGES.values()), state="readonly", width=12)
+        language_choice.pack(side="left", padx=px(8))
+        language_choice.bind("<<ComboboxSelected>>", lambda _event: self.save_settings())
+        ttk.Label(language_row, text=tr("重啟後套用")).pack(anchor="w")
+
+        export = ttk.LabelFrame(self.export_tab, text=tr("Komga 匯出"), padding=px(8))
+        export.pack(fill="x", padx=px(10), pady=px(6))
+        komga_row = ttk.Frame(export)
+        komga_row.pack(fill="x")
+        ttk.Label(komga_row, text=tr("Komga 輸出路徑：")).pack(side="left")
+        self.komga_entry = ttk.Entry(komga_row, textvariable=self.komga_path)
+        self.komga_entry.pack(side="left", fill="x", expand=True)
+        self.browse_komga_button = ttk.Button(
+            komga_row, text=tr("瀏覽"), command=self.browse_komga)
+        self.browse_komga_button.pack(side="left", padx=px(6, 0))
+        options = ttk.Frame(export)
+        options.pack(fill="x", pady=px(6))
+        self.skip_checkbox = ttk.Checkbutton(
+            options, text=tr("已存在且來源未變更時跳過"), variable=self.skip_unchanged, command=self.save_settings)
+        self.skip_checkbox.pack(side="left")
+        self.open_checkbox = ttk.Checkbutton(
+            options, text=tr("匯出完成後開啟輸出資料夾"), variable=self.open_after_export, command=self.save_settings)
+        self.open_checkbox.pack(side="left", padx=px(12))
+        buttons = ttk.Frame(export)
+        buttons.pack(fill="x")
+        self.export_selected_button = ttk.Button(buttons, text=tr("匯出選取項目"), style="Accent.TButton",
+                                                 command=self.export_selected)
+        self.export_selected_button.pack(side="left")
+        self.export_all_button = ttk.Button(buttons, text=tr("匯出所有已翻譯項目"), command=self.export_all)
+        self.export_all_button.pack(side="left", padx=px(6))
+        # Cleanup deletes cache folders, so it sits on its own row apart from the export actions.
+        self.cleanup_button = ttk.Button(
+            export, text=tr("清理已匯出快取"), command=self.confirm_cleanup)
+        self.cleanup_button.pack(anchor="w", pady=px(6, 0))
+        self.progress = ttk.Progressbar(export, mode="determinate")
+        self.progress.pack(fill="x", pady=px(8, 2))
+        self.status_label = ttk.Label(export, textvariable=self.status_text)
+        self.status_label.pack(anchor="w", pady=px(6, 0))
+        self.progress.pack_forget()
+
     def remember_window_size(self, event):
         if event.widget != self.root:
             return
         state = self.root.state()
         if state in ("normal", "zoomed"):
             self.window_maximized = state == "zoomed"
-            if state == "normal" and event.width >= 820 and event.height >= 640:
-                self.window_size = [event.width, event.height]
+            if state == "normal" and event.width >= px(820) and event.height >= px(640):
+                # Saved in 96-DPI pixels so the size survives a display scaling change.
+                self.window_size = [round(event.width / ui_theme.SCALE), round(event.height / ui_theme.SCALE)]
 
     def save_settings(self):
         try:
@@ -298,7 +418,7 @@ class FileAggregatorApp:
         messagebox.showinfo(tr("匯出漫畫名稱"), tr("已匯出 {0} 個漫畫名稱：\n{1}").format(len(names), target), parent=self.root)
 
     def update_sort_headings(self):
-        for column, field, title in (("#0", "name", tr("序號｜系列 / 章節")),
+        for column, field, title in (("#0", "name", tr("漫畫 / 章節")),
                                      ("status", "chapters", tr("狀態")),
                                      ("size", "size", tr("資料夾大小")),
                                      ("updated", "updated", tr("更新時間"))):
@@ -327,13 +447,9 @@ class FileAggregatorApp:
         if self.manga_busy:
             messagebox.showwarning(tr("工作執行中"), tr("請等待目前工作完成，或先停止翻譯佇列。"))
             return
-        editor = self.translation_queue.config_editor
-        if editor and editor.winfo_exists():
-            editor.close()
-            if editor.winfo_exists():
-                return
         if self.save_settings():
             logger.info("application_close")
+            self.translation_queue.cancel_sash_animation()
             self.root.destroy()
 
     def browse(self):
@@ -363,7 +479,9 @@ class FileAggregatorApp:
         self.set_manga_busy(True)
         self.show_scan_progress("indeterminate")
         self.scan_progress.start(12)
+        self.scan_started = time.monotonic()
         self.scan_status_text.set(tr("正在掃描…"))
+        self.scan_count = 0
         threading.Thread(target=self.scan_worker, args=(base,), daemon=True).start()
         self.root.after(50, self.poll_scan_events)
 
@@ -378,6 +496,7 @@ class FileAggregatorApp:
         state = "disabled" if busy else "normal"
         for widget in (self.path_entry, self.browse_button, self.rescan_button,
                        self.start_entry, self.end_entry, self.aggregate_button,
+                       self.aggregate_start_entry, self.aggregate_end_entry, self.aggregate_translate_button,
                        self.remove_sources_checkbox, self.keep_last_source_checkbox,
                        self.komga_entry, self.browse_komga_button,
                        self.skip_checkbox, self.open_checkbox,
@@ -387,8 +506,12 @@ class FileAggregatorApp:
         if hasattr(self, "translation_queue"):
             self.translation_queue.update_controls()
         if not busy and self.has_explicit_chapter_selection():
-            self.start_entry.configure(state="disabled")
-            self.end_entry.configure(state="disabled")
+            for entry in self.range_entries():
+                entry.configure(state="disabled")
+
+    def range_entries(self):
+        # The merge window shares the range variables, so both ignore them together.
+        return self.start_entry, self.end_entry, self.aggregate_start_entry, self.aggregate_end_entry
 
     def show_scan_progress(self, mode):
         self.scan_progress.configure(mode=mode, value=0)
@@ -401,7 +524,7 @@ class FileAggregatorApp:
 
     def show_export_progress(self, mode):
         self.progress.configure(mode=mode, value=0)
-        self.progress.pack(fill="x", pady=(8, 2), before=self.status_label)
+        self.progress.pack(fill="x", pady=px(8, 2), before=self.status_label)
 
     def hide_export_progress(self):
         self.progress.stop()
@@ -410,18 +533,26 @@ class FileAggregatorApp:
     def scan_worker(self, base):
         try:
             logger.info("scan_start path=%s", base)
-            self.scan_events.put(("done", base, self.scan_folder_data(base)))
+            data = self.scan_folder_data(base, progress=lambda count: self.scan_events.put(("progress", count)))
+            self.scan_events.put(("done", base, data))
             logger.info("scan_done path=%s", base)
         except Exception as error:
             logger.exception("scan_failed path=%s", base)
             self.scan_events.put(("error", error))
 
     def poll_scan_events(self):
-        try:
-            event = self.scan_events.get_nowait()
-        except queue.Empty:
-            self.root.after(50, self.poll_scan_events)
-            return
+        count = self.scan_count
+        while True:
+            try:
+                event = self.scan_events.get_nowait()
+            except queue.Empty:
+                elapsed = time.monotonic() - self.scan_started
+                self.scan_status_text.set(tr("正在掃描…") + (f" {count:,}" if count else "") + f"｜{elapsed:.1f} s")
+                self.root.after(50, self.poll_scan_events)
+                return
+            if event[0] != "progress":
+                break
+            count = self.scan_count = event[1]
         self.hide_scan_progress()
         self.set_manga_busy(False)
         if event[0] == "error":
@@ -434,40 +565,9 @@ class FileAggregatorApp:
         self.base_path.set(str(base))
         self.apply_scan_data(base, data)
         self.translation_queue.render(refresh_counts=True)
+        self.scan_status_text.set(self.scan_status_text.get() + f"｜{time.monotonic() - self.scan_started:.1f} s")
 
-    @staticmethod
-    def scan_folder_data(base):
-        folders = FileAggregatorApp.get_folders_with_numbers(base)
-        series_groups = {}
-        chapter_updates = {}
-        chapter_sizes = {}
-        ready_chapters = set()
-        details = {}
-        for folder_path, folder_name, number in folders:
-            chapter = Path(folder_path)
-            status, translated = translation_status(folder_path)
-            if status == tr("可匯出"):
-                detail = tr("{0} 張翻譯圖片｜可匯出").format(len(translated))
-                images = translated
-                ready_chapters.add(chapter)
-            elif status == tr("結果為空"):
-                detail = tr("結果資料夾為空")
-                images = []
-            elif status == tr("部分翻譯"):
-                detail = tr("{0} 張翻譯圖片｜部分翻譯").format(len(translated))
-                images = translated
-            else:
-                images = image_files(folder_path)
-                detail = tr("{0} 張圖片｜未翻譯").format(len(images))
-            chapter_updates[chapter] = updated_at(chapter, images)
-            chapter_sizes[chapter] = folder_size(chapter)
-            details[chapter] = detail
-            series_groups.setdefault(chapter.parent, []).append(
-                (str(chapter), folder_name, number))
-        for chapters in series_groups.values():
-            chapters.sort(key=lambda item: (item[2], natural_sort_key(item[1])))
-        return (folders, series_groups, chapter_updates, chapter_sizes,
-                ready_chapters, details)
+    scan_folder_data = staticmethod(scan_folder_data)
 
     def sorted_series(self, base):
         def sort_key(series):
@@ -486,57 +586,81 @@ class FileAggregatorApp:
         view = self.folder_tree.yview() if self.scan_data and self.scan_data[0] == base else ()
         self.scan_data = (base, data)
         selected_paths = {self.tree_items[item][1] for item in self.folder_tree.selection()}
-        expanded_paths = {self.tree_items[item][1] for item in self.folder_tree.get_children()
-                          if self.folder_tree.item(item, "open")}
+        # A search opens every match, so only remember expansion from an unfiltered tree.
+        if not self.applied_query:
+            self.expanded_series = {self.tree_items[item][1] for item in self.folder_tree.get_children()
+                                    if self.folder_tree.item(item, "open")}
         query = self.search_text.get().strip().casefold()
+        self.applied_query = query
         (self.folders, self.series_groups, self.chapter_updates,
-         self.chapter_sizes, self.ready_chapters, details) = data
+         self.chapter_sizes, self.ready_chapters, details, self.chapter_page_counts) = data
         existing_items = self.folder_tree.get_children()
+        self.series_choices = {self.series_name(series): series for series in self.sorted_series(base)}
+        self.manga_choice.configure(values=tuple(self.series_choices))
         if existing_items:
             self.folder_tree.delete(*existing_items)
         self.tree_items = {}
-        for series_index, series in enumerate(self.sorted_series(base), 1):
+        self.pending_chapters = {}
+        selected_parents = []
+        for series_index, series in enumerate(self.series_choices.values(), 1):
             visible = {item[0] for item in self.series_groups[series]
                        if not query or query in str(series).casefold() or query in item[1].casefold()}
             if not visible:
                 continue
-            modified = max(self.chapter_updates[Path(item[0])]
-                           for item in self.series_groups[series])
-            relative_series = series.relative_to(base)
-            series_name = series.name if relative_series == Path(".") else str(relative_series)
+            chapters = [Path(item[0]) for item in self.series_groups[series]]
+            modified = max(self.chapter_updates[chapter] for chapter in chapters)
+            series_name = self.series_name(series)
             parent = self.folder_tree.insert(
-                "", "end", text=f"{series_index}. {series_name}", open=bool(query) or series in expanded_paths,
+                "", "end", text=f"{series_index}. {series_name}", open=bool(query) or series in self.expanded_series,
                 values=("", tr("{0} 單一｜{1} 整合").format(
                             sum(folder_kind(name) == "chapter" for _, name, _ in self.series_groups[series]),
                             sum(folder_kind(name) == "merged" for _, name, _ in self.series_groups[series])),
-                        format_size(sum(self.chapter_sizes[Path(item[0])]
-                                        for item in self.series_groups[series])),
-                        datetime.fromtimestamp(modified).strftime("%Y-%m-%d %H:%M:%S")))
+                        format_size(sum(self.chapter_sizes[chapter] for chapter in chapters)),
+                        datetime.fromtimestamp(modified).strftime("%Y-%m-%d %H:%M:%S"),
+                        f"{sum(self.chapter_page_counts[chapter] for chapter in chapters):,}"))
             self.tree_items[parent] = ("series", series)
             if series in selected_paths:
-                self.folder_tree.selection_add(parent)
-            for chapter_index, (folder_path, folder_name, _) in enumerate(
-                    self.series_groups[series], 1):
-                if folder_path not in visible:
-                    continue
-                chapter = Path(folder_path)
-                kind = folder_kind(folder_name)
-                item = self.folder_tree.insert(
-                    parent, "end", text=f"{chapter_index}. {folder_name}",
-                    values=(tr(FOLDER_KINDS[kind]), details[chapter], format_size(self.chapter_sizes[chapter]),
-                            datetime.fromtimestamp(
-                        self.chapter_updates[chapter]).strftime("%Y-%m-%d %H:%M:%S")))
-                self.tree_items[item] = (kind, chapter)
-                if chapter in selected_paths:
-                    self.folder_tree.selection_add(item)
-        self.scan_status_text.set(
-            tr("{0} 個系列｜單一章節 {1} 個｜整合資料夾 {2} 個").format(
-                len(self.series_groups), sum(folder_kind(name) == "chapter" for _, name, _ in self.folders),
-                sum(folder_kind(name) == "merged" for _, name, _ in self.folders)))
+                selected_parents.append(parent)
+            self.pending_chapters[parent] = (visible, selected_paths)
+            self.folder_tree.insert(parent, 'end')
+            if self.folder_tree.item(parent, 'open') or any(chapter in selected_paths for chapter in chapters
+                                                            if str(chapter) in visible):
+                self.load_series_children(parent)
+        if selected_parents:
+            self.folder_tree.selection_add(selected_parents)
+        self.scan_status_text.set(tr("{0} 部漫畫 · {1} 個資料夾").format(
+            len(self.series_groups), len(self.folders)))
 
         if view:
             self.folder_tree.yview_moveto(view[0])
         self.on_tree_select()
+
+    def load_series_children(self, parent):
+        pending = self.pending_chapters.pop(parent, None)
+        if pending is None:
+            return
+        visible, selected = pending
+        children = ttk.Treeview.get_children(self.folder_tree, parent)
+        if children:
+            self.folder_tree.delete(*children)
+        series = self.tree_items[parent][1]
+        details = self.scan_data[1][5]
+        chosen = []
+        for index, (path, name, _number) in enumerate(self.series_groups[series], 1):
+            if path not in visible:
+                continue
+            chapter = Path(path)
+            kind = folder_kind(name)
+            item = self.folder_tree.insert(parent, 'end', text=f'{index}. {name}',
+                values=(tr(FOLDER_KINDS[kind]), details[chapter], format_size(self.chapter_sizes[chapter]),
+                        datetime.fromtimestamp(self.chapter_updates[chapter]).strftime('%Y-%m-%d %H:%M:%S'),
+                        f'{self.chapter_page_counts[chapter]:,}'))
+            self.tree_items[item] = (kind, chapter)
+            if chapter in selected:
+                chosen.append(item)
+        # One call: each selection change queues a <<TreeviewSelect>> that reruns on_tree_select.
+        if chosen:
+            self.folder_tree.selection_add(chosen)
 
     def show_folder_context_menu(self, event):
         if self.folder_tree.identify_region(event.x, event.y) not in ("tree", "cell"):
@@ -574,7 +698,6 @@ class FileAggregatorApp:
             return
         if self.search_text.get().strip():
             self.search_text.set("")
-            self.root.after_cancel(self.search_after)
             self.apply_filter()
         parent = next((item for item in self.folder_tree.get_children()
                        if self.tree_items[item] == ("series", series)), None)
@@ -625,6 +748,8 @@ class FileAggregatorApp:
         self.search_after = self.root.after(180, self.apply_filter)
 
     def apply_filter(self):
+        if self.search_after is not None:
+            self.root.after_cancel(self.search_after)
         self.search_after = None
         if self.scan_data:
             self.apply_scan_data(*self.scan_data)
@@ -649,32 +774,7 @@ class FileAggregatorApp:
             self.translation_queue.add_paths([item[1]])
             return "break"
 
-    @staticmethod
-    def get_folders_with_numbers(base_path):
-        folders = []
-        base = Path(base_path)
-        if is_link_or_junction(base):
-            return folders
-
-        def fail(error):
-            raise error
-
-        for current, directory_names, file_names in os.walk(base, onerror=fail):
-            folder = Path(current)
-            has_result = any(name.casefold() == "result" for name in directory_names)
-            directory_names[:] = [name for name in directory_names
-                                  if name.casefold() not in {"result", "inpainted", "mask"}
-                                  and not (name.casefold().startswith(".chapter ")
-                                           and name.casefold().endswith((".tmp", ".backup")))
-                                  and not is_link_or_junction(folder / name)]
-            number = chapter_number(folder.name)
-            has_images = any(Path(name).suffix.casefold() in IMAGE_EXTENSIONS
-                             for name in file_names)
-            if folder != base and number is not None and (has_result or has_images):
-                folders.append((str(folder), folder.name, number))
-        return sorted(folders, key=lambda item: (
-            natural_sort_key(str(Path(item[0]).parent.relative_to(base))),
-            item[2], natural_sort_key(item[1])))
+    get_folders_with_numbers = staticmethod(get_folders_with_numbers)
 
     def selected_tree_item(self):
         selection = self.folder_tree.selection()
@@ -689,36 +789,46 @@ class FileAggregatorApp:
         return len(selection) > 1 and all(self.tree_items[item][0] in FOLDER_KINDS for item in selection)
 
     def fit_folder_columns(self, event):
-        width = max(1, event.width - 4)
-        font = tkfont.Font(root=self.root, font=ttk.Style(self.folder_tree).lookup("Treeview", "font") or "TkDefaultFont")
-        sizes = {"kind": font.measure(tr("整合資料夾")) + 24,
-                 "status": font.measure(tr("{0} 張翻譯圖片｜可匯出").format(99999)) + 24,
-                 "size": max(font.measure(tr("資料夾大小")), font.measure("9999.9 GB")) + 24,
-                 "updated": font.measure("2026-09-15 23:59:59") + 24}
-        date_width = min(sizes.pop("updated"), int(width * .35))
-        self.folder_tree.column("updated", width=max(1, date_width), minwidth=1, stretch=False)
-        scale = min(1, max(1, width * .78 - date_width) / sum(sizes.values()))
-        for column, size in sizes.items():
-            self.folder_tree.column(column, width=max(1, int(size * scale)), minwidth=1, stretch=False)
-        remaining = width - date_width - sum(self.folder_tree.column(column, "width") for column in sizes)
-        self.folder_tree.column("#0", width=max(1, remaining), minwidth=1, stretch=False)
-        self.folder_tree.xview_moveto(0)
-        self.folder_details_label.configure(wraplength=max(100, width))
+        if self.translation_queue.sash_after is not None:
+            return
+        width = event.width - 4
+        if width < 100 or getattr(self, "_library_width", None) == width:
+            return
+        self._library_width = width
+        font = tkfont.nametofont("TkDefaultFont", root=self.root)
+        pages = max(px(65), font.measure(tr("頁數")) + px(16))
+        self.folder_tree.column("pages", width=pages, minwidth=pages, stretch=False)
+        self.folder_tree.column("#0", width=max(px(100), width - pages), minwidth=px(100), stretch=False)
 
     def on_tree_select(self, _event=None):
         selection = self.folder_tree.selection()
+        invalid = [item for item in selection if item not in self.tree_items]
+        if invalid:
+            self.folder_tree.selection_remove(invalid)
+            selection = self.folder_tree.selection()
         if selection and selection[0] in self.tree_items:
             item = selection[0]
             path = self.tree_items[item][1]
             values = self.folder_tree.item(item, "values")
-            self.folder_details.set(str(path) + "\n" + " | ".join(str(value) for value in values if value))
+            kind = self.tree_items[item][0]
+            preview = ""
+            if len(values) >= 5:
+                status = tr("{0} 個資料夾").format(len(self.series_groups[path])) if kind == "series" else values[1]
+                preview = " · ".join(filter(None, (status, tr("{0} 頁").format(values[4]))))
+            details = [tr(title) + "：" + str(value) for title, value in zip(
+                ("資料夾類型", "狀態", "資料夾大小", "更新時間", "頁數"), values) if value]
+            self.folder_details.set("\n".join(filter(None, (path.name, preview, str(path), *details))))
+            self.current_series.set(self.series_name(path if kind == 'series' else path.parent))
         else:
             self.folder_details.set("")
+            self.current_series.set(tr("請先選擇漫畫"))
         paths = self.selected_chapters()
         self.selection_text.set(tr("已選取 {0} 個資料夾").format(len(paths)))
+        if hasattr(self, "translation_queue"):
+            self.translation_queue.update_controls()
         if self.manga_busy:
             return
-        for entry in (self.start_entry, self.end_entry):
+        for entry in self.range_entries():
             entry.configure(state="normal")
         selected = self.selected_tree_item()
         if not selected:
@@ -732,7 +842,8 @@ class FileAggregatorApp:
         for entry, value in ((self.start_entry, start), (self.end_entry, end)):
             entry.delete(0, tk.END)
             entry.insert(0, str(value))
-            if self.has_explicit_chapter_selection():
+        if self.has_explicit_chapter_selection():
+            for entry in self.range_entries():
                 entry.configure(state="disabled")
 
     def confirm_aggregate(self, translate_after=False):
@@ -797,49 +908,7 @@ class FileAggregatorApp:
                 args=(chapters, start_idx, end_idx, remove_sources, keep_last), daemon=True).start()
             self.root.after(50, self.poll_aggregate_events)
 
-    def aggregate_folders(self, chapters, start_idx, end_idx, progress=None):
-        selected = chapters[start_idx:end_idx + 1]
-        output = aggregate_output(selected)
-        if len(selected) == 1 and Path(selected[0][0]).resolve() == output:
-            return output
-        sources = []
-        for folder_path, _, _ in selected:
-            images = image_files(folder_path)
-            if not images:
-                raise ValueError(tr("來源沒有可整合的圖片：{0}").format(folder_path))
-            sources.extend(images)
-        temporary = output.with_name(f".{output.name}.tmp")
-        backup = output.with_name(f".{output.name}.backup")
-        if temporary.exists():
-            shutil.rmtree(temporary)
-        if backup.exists():
-            if output.exists():
-                shutil.rmtree(backup)
-            else:
-                os.replace(backup, output)
-        if output.exists() and not output.is_dir():
-            raise ValueError(tr("輸出路徑不是資料夾：{0}").format(output))
-        temporary.mkdir()
-        try:
-            for index, source in enumerate(sources, 1):
-                shutil.copy2(source, temporary / f"{index}{source.suffix}")
-                if progress:
-                    progress(index, len(sources))
-            if output.exists():
-                os.replace(output, backup)
-            os.replace(temporary, output)
-        except Exception:
-            if temporary.exists():
-                shutil.rmtree(temporary)
-            if backup.exists() and not output.exists():
-                os.replace(backup, output)
-            raise
-        if backup.exists():
-            try:
-                shutil.rmtree(backup)
-            except OSError:
-                pass
-        return output
+    aggregate_folders = staticmethod(aggregate_folders)
 
     def aggregate_worker(self, chapters, start_idx, end_idx, remove_sources=False, keep_last=True):
         try:
@@ -971,7 +1040,6 @@ class FileAggregatorApp:
             return
         errors = []
         output_folders = set()
-        exported_chapters = []
         for chapter in chapters:
             chapter = Path(chapter)
             name = chapter.name
@@ -982,7 +1050,6 @@ class FileAggregatorApp:
                         ("progress", chapter_name, current, total)))
                 counts[action] += 1
                 output_folders.add(output.parent)
-                exported_chapters.append(chapter)
                 logger.info("export_%s source=%s output=%s", action, chapter, output)
                 self.events.put(("chapter", action, name))
             except Exception as error:
@@ -990,28 +1057,14 @@ class FileAggregatorApp:
                 counts["failed"] += 1
                 errors.append(f"{name}: {error}")
                 self.events.put(("chapter", "failed", name))
-        state_saved = True
         try:
             save_json(state_file, state)
         except Exception as error:
             logger.exception("export_state_save_failed path=%s", state_file)
-            state_saved = False
-            counts["failed"] += 1
             errors.append(tr("狀態檔: {0}").format(error))
-        cleanup = None
-        if state_saved and exported_chapters:
-            folders = removed = 0
-            cleanup_errors = []
-            for chapter in exported_chapters:
-                result = clear_work_folders(chapter)
-                folders += result[0]
-                removed += result[1]
-                cleanup_errors.extend(result[2])
-            cleanup = folders, removed, cleanup_errors
-            errors.extend(tr("清理失敗：{0}").format(error) for error in cleanup_errors)
         output_folder = output_folders.pop() if len(output_folders) == 1 else root
-        logger.info("export_end counts=%s errors=%s cleanup=%s", counts, errors, cleanup)
-        self.events.put(("done", counts, errors, str(output_folder), cleanup))
+        logger.info("export_end counts=%s errors=%s", counts, errors)
+        self.events.put(("done", counts, errors, str(output_folder), None))
 
     def confirm_cleanup(self):
         if self.manga_busy:
@@ -1023,21 +1076,26 @@ class FileAggregatorApp:
         if not value or not root.is_dir():
             messagebox.showwarning(tr("警告"), tr("請選擇有效的漫畫路徑"))
             return
+        output = self.komga_path.get().strip()
+        if not output or not Path(output).is_dir():
+            messagebox.showwarning(tr("清理已匯出快取"), tr("請設定 Komga 輸出路徑"), parent=self.root)
+            self.work_tabs.select(self.export_tab)
+            return
         if not messagebox.askyesno(
                 tr("確認清理"),
-                tr("將清空目前漫畫路徑下所有 mask 與 inpainted 資料夾內容。\n資料夾本身會保留，此操作無法復原。確定繼續嗎？") + "\n\n" + str(root.resolve())):
+                tr("只清理已完整匯出且 CBZ 驗證通過的 mask / inpainted。\n未匯出、檔案已變更或驗證失敗的章節會保留。\n清理無法復原，確定繼續？") + "\n\n" + str(root.resolve()), parent=self.root):
             return
         self.set_manga_busy(True)
         self.show_export_progress("indeterminate")
         self.progress.start(12)
         self.status_text.set(tr("正在清理 mask / inpainted…"))
-        threading.Thread(target=self.cleanup_worker, args=(root,), daemon=True).start()
+        threading.Thread(target=self.cleanup_worker, args=(root, output), daemon=True).start()
         self.root.after(50, self.poll_events)
 
-    def cleanup_worker(self, root):
+    def cleanup_worker(self, root, output):
         try:
             logger.info("cleanup_start path=%s", root)
-            result = clear_work_folders(root)
+            result = clear_work_folders(root, output)
             logger.info("cleanup_end path=%s result=%s", root, result)
             self.events.put(("cleanup_done", result))
         except Exception as error:
@@ -1123,11 +1181,28 @@ class FileAggregatorApp:
 
 
 if __name__ == "__main__":
+    instance = None
     try:
+        if os.name == "nt":
+            from app_instance import AppInstance
+            instance = AppInstance(settings_path())
+            if not instance.acquire():
+                instance.activate_existing()
+                sys.exit(0)
         configure_logging()
         logger.info("application_start executable=%s", sys.executable)
+        if os.name == "nt":
+            try:
+                # System-aware DPI lets Tk draw sharp text; ui_theme.px scales the fixed layout sizes.
+                ctypes.windll.shcore.SetProcessDpiAwareness(1)
+            except (AttributeError, OSError):
+                pass
         root = tk.Tk()
-        FileAggregatorApp(root)
+        app = FileAggregatorApp(root)
+        if app.window_size is None:
+            root.geometry(f"{min(px(1280), root.winfo_screenwidth())}x{min(px(820), root.winfo_screenheight())}")
+        if instance is not None:
+            instance.register_window(root)
         root.mainloop()
     except Exception as error:
         logger.exception("application_failed")
@@ -1135,3 +1210,6 @@ if __name__ == "__main__":
             messagebox.showerror(tr("Comic sorting 錯誤"), str(error))
         except Exception:
             pass
+    finally:
+        if instance is not None:
+            instance.close()
