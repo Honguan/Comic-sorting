@@ -5,6 +5,7 @@ import time
 import tkinter as tk
 from tkinter import ttk, messagebox
 from ui_language import tr
+from ui_theme import px
 from queue_phases import READY
 
 
@@ -97,13 +98,13 @@ class QueueSchedule:
             return
         self.window = window = tk.Toplevel(self.queue.app.root)
         window.title(tr('排程啟動'))
-        window.geometry('820x520')
-        window.minsize(720, 440)
-        ttk.Label(window, text=tr('一次性排程；需保持程式開啟。忙碌時等待，關閉程式即取消。'), wraplength=720).pack(pady=8)
+        window.geometry(f"{px(820)}x{px(520)}")
+        window.minsize(px(720), px(440))
+        ttk.Label(window, text=tr('一次性排程；需保持程式開啟。忙碌時等待，關閉程式即取消。'), wraplength=px(720)).pack(pady=px(8))
         self.tabs = ttk.Notebook(window)
-        self.tabs.pack(fill='x', padx=8)
-        countdown = ttk.Frame(self.tabs, padding=10)
-        fixed = ttk.Frame(self.tabs, padding=10)
+        self.tabs.pack(fill='x', padx=px(8))
+        countdown = ttk.Frame(self.tabs, padding=px(10))
+        fixed = ttk.Frame(self.tabs, padding=px(10))
         self.tabs.add(countdown, text=tr('倒數啟動'))
         self.tabs.add(fixed, text=tr('指定日期時間'))
         future = datetime.now() + timedelta(hours=1)
@@ -114,25 +115,25 @@ class QueueSchedule:
         self.minute = tk.StringVar(window, future.strftime('%M'))
         for variable, maximum, label in ((self.hours, 8760, '小時'), (self.minutes, 59, '分鐘')):
             ttk.Spinbox(countdown, from_=0, to=maximum, textvariable=variable, width=6).pack(side='left')
-            ttk.Label(countdown, text=tr(label)).pack(side='left', padx=(4, 12))
+            ttk.Label(countdown, text=tr(label)).pack(side='left', padx=px(4, 12))
         def preset(minutes):
             self.hours.set(str(minutes // 60))
             self.minutes.set(str(minutes % 60))
         for minutes in (15, 30, 60, 120):
             ttk.Button(countdown, text=f'{minutes} ' + tr('分鐘'), width=0,
-                       command=lambda value=minutes: preset(value)).pack(side='left', padx=2)
-        ttk.Label(fixed, text=tr('日期')).pack(side='left', padx=(0, 4))
+                       command=lambda value=minutes: preset(value)).pack(side='left', padx=px(2))
+        ttk.Label(fixed, text=tr('日期')).pack(side='left', padx=px(0, 4))
         ttk.Entry(fixed, textvariable=self.date, width=12).pack(side='left')
         ttk.Label(fixed, text=' YYYY-MM-DD ').pack(side='left')
         for variable, maximum, label in ((self.hour, 23, '時'), (self.minute, 59, '分')):
             ttk.Spinbox(fixed, from_=0, to=maximum, textvariable=variable, width=4, wrap=True).pack(side='left')
-            ttk.Label(fixed, text=tr(label)).pack(side='left', padx=(4, 8))
+            ttk.Label(fixed, text=tr(label)).pack(side='left', padx=px(4, 8))
         for days, label in ((0, '今天'), (1, '明天')):
             ttk.Button(fixed, text=tr(label), width=0, command=lambda days=days:
-                       self.date.set((datetime.now() + timedelta(days=days)).strftime('%Y-%m-%d'))).pack(side='left', padx=2)
-        row = ttk.Frame(window, padding=(8, 8))
+                       self.date.set((datetime.now() + timedelta(days=days)).strftime('%Y-%m-%d'))).pack(side='left', padx=px(2))
+        row = ttk.Frame(window, padding=px(8, 8))
         row.pack(fill='x')
-        self.preview = ttk.Label(row, wraplength=500)
+        self.preview = ttk.Label(row, wraplength=px(500))
         self.preview.pack(side='left', fill='x', expand=True)
         def add():
             try:
@@ -151,11 +152,11 @@ class QueueSchedule:
             self.refresh()
         # Packed before the expanding table so the table cannot push it out of the window.
         self.remove_button = ttk.Button(window, text=tr('刪除選取排程'), command=remove)
-        self.remove_button.pack(side='bottom', pady=8)
+        self.remove_button.pack(side='bottom', pady=px(8))
         self.table = ttk.Treeview(window, columns=('time', 'count', 'status'), show='headings', selectmode='extended')
         for key, title in [('time', '啟動時間'), ('count', '工作數'), ('status', '狀態')]:
             self.table.heading(key, text=tr(title))
-        self.table.pack(fill='both', expand=True, padx=8, pady=(8, 0))
+        self.table.pack(fill='both', expand=True, padx=px(8), pady=px(8, 0))
         self.refresh()
 
     def form_value(self):

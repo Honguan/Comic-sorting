@@ -6,6 +6,7 @@ import json
 from urllib.request import urlopen
 
 from app_logging import logger
+from ui_theme import px
 
 CATALOG_URL = 'https://openrouter.ai/api/v1/models'
 # Standard USD per million tokens, verified on each OpenAI model page 2026-10-01.
@@ -113,15 +114,15 @@ def open_pricing(parent, custom, save):
     from ui_language import tr
     window = tk.Toplevel(parent)
     window.title(tr('模型單價'))
-    window.geometry('680x390')
-    frame = ttk.Frame(window, padding=12)
+    window.geometry(f"{px(680)}x{px(390)}")
+    frame = ttk.Frame(window, padding=px(12))
     frame.pack(fill='both', expand=True)
-    ttk.Label(frame, text=tr('每百萬 Token 的美元單價；自訂單價優先。快取留白使用輸入單價。'), wraplength=640).pack(fill='x')
+    ttk.Label(frame, text=tr('每百萬 Token 的美元單價；自訂單價優先。快取留白使用輸入單價。'), wraplength=px(640)).pack(fill='x')
     values = [tk.StringVar() for _ in range(5)]
     known = sorted(set(DEFAULT_RATES) | set(custom))
     for index, title in enumerate(('模型', '輸入 Token', '快取讀取', '快取寫入', '輸出 Token')):
         row = ttk.Frame(frame)
-        row.pack(fill='x', pady=4)
+        row.pack(fill='x', pady=px(4))
         ttk.Label(row, text=tr(title), width=16).pack(side='left')
         entry = ttk.Combobox(row, textvariable=values[index], values=known) if index == 0 else ttk.Entry(row, textvariable=values[index])
         entry.pack(side='left', fill='x', expand=True)
@@ -154,7 +155,7 @@ def open_pricing(parent, custom, save):
         load()
         messagebox.showinfo(tr('模型單價'), tr('已儲存'), parent=window)
     buttons = ttk.Frame(frame)
-    buttons.pack(fill='x', pady=8)
+    buttons.pack(fill='x', pady=px(8))
     ttk.Button(buttons, text=tr('儲存'), command=apply).pack(side='left')
-    ttk.Button(buttons, text=tr('恢復預設'), command=lambda: apply(True)).pack(side='left', padx=8)
-    ttk.Label(frame, text=tr('其他模型會自動查詢 OpenRouter 公開費率；查無單價時可在此新增任何模型。'), wraplength=640).pack(fill='x')
+    ttk.Button(buttons, text=tr('恢復預設'), command=lambda: apply(True)).pack(side='left', padx=px(8))
+    ttk.Label(frame, text=tr('其他模型會自動查詢 OpenRouter 公開費率；查無單價時可在此新增任何模型。'), wraplength=px(640)).pack(fill='x')

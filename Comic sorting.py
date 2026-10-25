@@ -1,3 +1,4 @@
+import ctypes
 import os
 import queue
 import shutil
@@ -12,7 +13,8 @@ from tkinter import filedialog, messagebox, ttk, font as tkfont
 from translation_queue import TranslationQueue
 from app_logging import configure_logging, logger, log_path, redact
 from ui_language import LANGUAGES, set_language, tr
-from ui_theme import apply_theme
+import ui_theme
+from ui_theme import apply_theme, px
 from ui_interactions import LibraryTree, bind_search_shortcuts, bind_table_shortcuts, copy_manga_names, details_text
 from comic_core import (
     IMAGE_EXTENSIONS, FOLDER_KINDS, chapter_number, folder_kind, image_files, translation_status,
@@ -52,14 +54,14 @@ class FileAggregatorApp:
         if icon.is_file():
             self.root.iconbitmap(default=icon)
         self.root.title(tr("漫畫工作台"))
-        self.root.minsize(820, 640)
+        self.root.minsize(px(820), px(640))
         size = settings.get("window_size")
         self.window_size = None
         self.window_maximized = settings.get("window_maximized") is True
         if isinstance(size, list) and len(size) == 2 and all(type(value) is int and value > 0 for value in size):
-            width = max(820, min(size[0], self.root.winfo_screenwidth()))
-            height = max(640, min(size[1], self.root.winfo_screenheight()))
-            self.window_size = [width, height]
+            width = max(px(820), min(px(size[0]), self.root.winfo_screenwidth()))
+            height = max(px(640), min(px(size[1]), self.root.winfo_screenheight()))
+            self.window_size = [round(width / ui_theme.SCALE), round(height / ui_theme.SCALE)]
             self.root.geometry(f"{width}x{height}")
         self.folders = []
         self.series_groups = {}
@@ -111,11 +113,11 @@ class FileAggregatorApp:
         self.series_choices = {}
         self.range_start, self.range_end = tk.StringVar(), tk.StringVar()
         self.panes = ttk.Panedwindow(self.root, orient="horizontal")
-        self.panes.pack(fill="both", expand=True, padx=10, pady=8)
+        self.panes.pack(fill="both", expand=True, padx=px(10), pady=px(8))
         self.panes.bind("<Map>", self.initialize_panes)
-        manga = ttk.Frame(self.panes, padding=8)
+        manga = ttk.Frame(self.panes, padding=px(8))
         header = ttk.Frame(manga)
-        header.pack(fill="x", pady=(0, 6))
+        header.pack(fill="x", pady=px(0, 6))
         ttk.Label(header, text=tr("漫畫庫"), style="TLabelframe.Label").pack(side="left")
         self.panes.add(manga, weight=0)
         path_row = ttk.Frame(manga)
@@ -123,20 +125,20 @@ class FileAggregatorApp:
         self.path_entry = ttk.Entry(path_row, textvariable=self.base_path)
         self.path_entry.pack(fill="x")
         path_buttons = ttk.Frame(manga)
-        path_buttons.pack(fill="x", pady=(4, 0))
+        path_buttons.pack(fill="x", pady=px(4, 0))
         self.browse_button = ttk.Button(path_buttons, text=tr("瀏覽"), command=self.browse)
         self.browse_button.pack(side="left", fill="x", expand=True)
         self.rescan_button = ttk.Button(path_buttons, text=tr("重新掃描"), command=self.load_folders)
-        self.rescan_button.pack(side="left", fill="x", expand=True, padx=(4, 0))
+        self.rescan_button.pack(side="left", fill="x", expand=True, padx=px(4, 0))
         self.path_entry.bind("<Return>", lambda _event: self.load_folders())
 
         search_row = ttk.Frame(manga)
-        search_row.pack(fill="x", pady=(8, 0))
-        ttk.Label(search_row, text=tr("搜尋")).pack(side="left", padx=(0, 4))
+        search_row.pack(fill="x", pady=px(8, 0))
+        ttk.Label(search_row, text=tr("搜尋")).pack(side="left", padx=px(0, 4))
         self.search_entry = ttk.Entry(search_row, textvariable=self.search_text)
         self.search_entry.pack(side="left", fill="x", expand=True)
         self.search_entry.configure(width=8)
-        ttk.Button(search_row, text=tr("清除"), width=0, command=lambda: self.search_text.set("")).pack(side="left", padx=4)
+        ttk.Button(search_row, text=tr("清除"), width=0, command=lambda: self.search_text.set("")).pack(side="left", padx=px(4))
         self.library_menu = library_menu = ttk.Menubutton(header, text=tr("工具"))
         menu = tk.Menu(library_menu, tearoff=False)
         menu.add_command(label=tr("章節整合"), command=self.open_aggregate)
@@ -153,17 +155,17 @@ class FileAggregatorApp:
         manga_footer = ttk.Frame(manga)
         manga_footer.pack(side="bottom", fill="x")
         list_frame = ttk.Frame(manga)
-        list_frame.pack(fill="both", expand=True, pady=8)
+        list_frame.pack(fill="both", expand=True, pady=px(8))
         self.folder_tree = LibraryTree(
             list_frame, self.load_series_children,
             columns=("kind", "status", "size", "updated", "pages"), displaycolumns=("pages",),
             show="tree headings", selectmode="extended", height=6)
         self.update_sort_headings()
-        self.folder_tree.column("#0", width=230, minwidth=160)
+        self.folder_tree.column("#0", width=px(230), minwidth=px(160))
         for column, title, width in (("kind", "資料夾類型", 110), ("status", "狀態", 190),
                                      ("size", "資料夾大小", 110), ("updated", "更新時間", 180), ("pages", "頁數", 80)):
             self.folder_tree.heading(column, text=tr(title))
-            self.folder_tree.column(column, width=width, stretch=False)
+            self.folder_tree.column(column, width=px(width), stretch=False)
         vertical = ttk.Scrollbar(list_frame, command=self.folder_tree.yview)
         horizontal = ttk.Scrollbar(list_frame, orient="horizontal", command=self.folder_tree.xview)
         self.folder_tree.configure(yscrollcommand=vertical.set, xscrollcommand=horizontal.set)
@@ -174,7 +176,7 @@ class FileAggregatorApp:
         list_frame.columnconfigure(0, weight=1)
         self.folder_details = tk.StringVar()
         _details, self.folder_details_label = details_text(list_frame, self.folder_details,
-                                                           row=2, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+                                                           row=2, column=0, columnspan=2, sticky="ew", pady=px(6, 0))
         self.folder_tree.bind("<Configure>", self.fit_folder_columns)
         self.folder_tree.bind("<<TreeviewSelect>>", self.on_tree_select)
         self.folder_tree.bind("<Double-1>", self.add_chapter_to_queue)
@@ -196,25 +198,25 @@ class FileAggregatorApp:
         scan_row.pack(fill="x")
         self.scan_progress = ttk.Progressbar(scan_row, mode="indeterminate")
         self.scan_status_text = tk.StringVar(value=tr("尚未掃描"))
-        self.scan_status_label = ttk.Label(scan_row, textvariable=self.scan_status_text, wraplength=300, style="Muted.TLabel")
+        self.scan_status_label = ttk.Label(scan_row, textvariable=self.scan_status_text, wraplength=px(300), style="Muted.TLabel")
         self.scan_status_label.pack(side="left", fill="x", expand=True)
         self.scan_status_label.bind("<Configure>", lambda event: self.scan_status_label.configure(wraplength=event.width)
                                     if event.width > 100 and self.translation_queue.sash_after is None else None)
         self.add_selected_button = ttk.Button(manga_footer, text=tr("加入選取"),
                                              command=lambda: self.translation_queue.add_selected())
-        self.add_selected_button.pack(fill="x", pady=(4, 0))
-        ttk.Label(manga_footer, textvariable=self.selection_text, style="Muted.TLabel").pack(anchor="w", pady=(4, 0))
+        self.add_selected_button.pack(fill="x", pady=px(4, 0))
+        ttk.Label(manga_footer, textvariable=self.selection_text, style="Muted.TLabel").pack(anchor="w", pady=px(4, 0))
 
 
     def build_enqueue_panel(self, parent):
         panel = ttk.Frame(parent)
-        panel.pack(fill="x", pady=(0, 8))
+        panel.pack(fill="x", pady=px(0, 8))
         self.enqueue_header = ttk.Frame(panel)
-        self.enqueue_header.pack(fill="x", pady=(0, 4))
+        self.enqueue_header.pack(fill="x", pady=px(0, 4))
         ttk.Label(self.enqueue_header, text=tr("加入漫畫與章節"), style="TLabelframe.Label").pack(side="left")
         manga_row = ttk.Frame(panel)
-        manga_row.pack(fill="x", pady=(0, 4))
-        ttk.Label(manga_row, text=tr("漫畫")).pack(side="left", padx=(0, 8))
+        manga_row.pack(fill="x", pady=px(0, 4))
+        ttk.Label(manga_row, text=tr("漫畫")).pack(side="left", padx=px(0, 8))
         self.manga_choice = ttk.Combobox(manga_row, textvariable=self.current_series, state="readonly", width=8)
         self.manga_choice.pack(side="left", fill="x", expand=True)
         self.manga_choice.bind("<<ComboboxSelected>>", self.choose_series)
@@ -222,11 +224,11 @@ class FileAggregatorApp:
         range_row.pack(fill="x")
         range_row.columnconfigure(1, weight=1)
         self.enqueue_range = ttk.Frame(range_row)
-        self.enqueue_range.grid(row=0, column=0, sticky="w", padx=(0, 8))
-        ttk.Label(self.enqueue_range, text=tr("章節序號")).pack(side="left", padx=(0, 8))
+        self.enqueue_range.grid(row=0, column=0, sticky="w", padx=px(0, 8))
+        ttk.Label(self.enqueue_range, text=tr("章節序號")).pack(side="left", padx=px(0, 8))
         self.start_entry = ttk.Entry(self.enqueue_range, textvariable=self.range_start, width=5)
         self.start_entry.pack(side="left")
-        ttk.Label(self.enqueue_range, text="–").pack(side="left", padx=4)
+        ttk.Label(self.enqueue_range, text="–").pack(side="left", padx=px(4))
         self.end_entry = ttk.Entry(self.enqueue_range, textvariable=self.range_end, width=5)
         self.end_entry.pack(side="left")
         self.enqueue_actions = ttk.Frame(range_row)
@@ -239,7 +241,7 @@ class FileAggregatorApp:
             return "break"
         for entry in (self.start_entry, self.end_entry):
             entry.bind("<Return>", add_range)
-        ttk.Label(panel, text=tr("從 1 起算；結束留白到最後"), style="Muted.TLabel").pack(anchor="w", pady=(2, 0))
+        ttk.Label(panel, text=tr("從 1 起算；結束留白到最後"), style="Muted.TLabel").pack(anchor="w", pady=px(2, 0))
 
 
     def series_name(self, series):
@@ -267,7 +269,7 @@ class FileAggregatorApp:
 
     def initialize_panes(self, _event):
         self.panes.unbind("<Map>")
-        self.panes.sashpos(0, min(360, max(260, int(self.panes.winfo_width() * .30))))
+        self.panes.sashpos(0, min(px(360), max(px(260), int(self.panes.winfo_width() * .30))))
 
     def build_work_tabs(self):
         self.work_tabs = ttk.Notebook(self.panes)
@@ -275,8 +277,8 @@ class FileAggregatorApp:
         self.queue_tab = ttk.Frame(self.work_tabs)
         self.aggregate_window = tk.Toplevel(self.root)
         self.aggregate_window.title(tr("章節整合"))
-        self.aggregate_window.geometry("600x350")
-        self.aggregate_window.minsize(480, 320)
+        self.aggregate_window.geometry(f"{px(600)}x{px(350)}")
+        self.aggregate_window.minsize(px(480), px(320))
         self.aggregate_window.protocol("WM_DELETE_WINDOW", self.aggregate_window.withdraw)
         self.aggregate_window.withdraw()
         self.aggregate_tab = ttk.Frame(self.aggregate_window)
@@ -287,42 +289,42 @@ class FileAggregatorApp:
         self.work_tabs.add(self.export_tab, text=tr("Komga 匯出"))
         self.work_tabs.add(self.settings_tab, text=tr("設定"))
 
-        integration = ttk.LabelFrame(self.aggregate_tab, text=tr("章節整合"), padding=12)
-        integration.pack(fill="x", padx=8, pady=8)
-        ttk.Label(integration, textvariable=self.current_series).pack(anchor="w", pady=(0, 8))
+        integration = ttk.LabelFrame(self.aggregate_tab, text=tr("章節整合"), padding=px(12))
+        integration.pack(fill="x", padx=px(8), pady=px(8))
+        ttk.Label(integration, textvariable=self.current_series).pack(anchor="w", pady=px(0, 8))
         range_row = ttk.Frame(integration)
         range_row.pack(fill="x")
         ttk.Label(range_row, text=tr("章節序號")).pack(side="left")
         self.aggregate_start_entry = ttk.Entry(range_row, textvariable=self.range_start, width=6)
-        self.aggregate_start_entry.pack(side="left", padx=6)
+        self.aggregate_start_entry.pack(side="left", padx=px(6))
         ttk.Label(range_row, text="–").pack(side="left")
         self.aggregate_end_entry = ttk.Entry(range_row, textvariable=self.range_end, width=6)
-        self.aggregate_end_entry.pack(side="left", padx=6)
+        self.aggregate_end_entry.pack(side="left", padx=px(6))
         self.remove_sources_checkbox = ttk.Checkbutton(integration, text=tr("整合後清除來源"),
             variable=self.remove_sources_after_aggregate, command=self.save_settings)
-        self.remove_sources_checkbox.pack(anchor="w", pady=(12, 4))
+        self.remove_sources_checkbox.pack(anchor="w", pady=px(12, 4))
         self.keep_last_source_checkbox = ttk.Checkbutton(integration, text=tr("保留最後一個"),
             variable=self.keep_last_source, command=self.save_settings)
         self.keep_last_source_checkbox.pack(anchor="w")
         buttons = ttk.Frame(integration)
-        buttons.pack(fill="x", pady=(12, 0))
+        buttons.pack(fill="x", pady=px(12, 0))
         self.aggregate_button = ttk.Button(buttons, text=tr("確認整合"), command=self.confirm_aggregate)
         self.aggregate_button.pack(side="left")
         self.aggregate_translate_button = ttk.Button(buttons, text=tr("整合＋加入佇列"),
             command=lambda: self.confirm_aggregate(translate_after=True))
-        self.aggregate_translate_button.pack(side="left", padx=6)
+        self.aggregate_translate_button.pack(side="left", padx=px(6))
 
-        language_row = ttk.LabelFrame(self.settings_tab, text=tr("介面設定"), padding=8)
-        language_row.pack(fill="x", padx=8, pady=8)
+        language_row = ttk.LabelFrame(self.settings_tab, text=tr("介面設定"), padding=px(8))
+        language_row.pack(fill="x", padx=px(8), pady=px(8))
         ttk.Label(language_row, text="Language / 表示言語").pack(side="left")
         language_choice = ttk.Combobox(language_row, textvariable=self.ui_language,
             values=tuple(LANGUAGES.values()), state="readonly", width=12)
-        language_choice.pack(side="left", padx=8)
+        language_choice.pack(side="left", padx=px(8))
         language_choice.bind("<<ComboboxSelected>>", lambda _event: self.save_settings())
         ttk.Label(language_row, text=tr("重啟後套用")).pack(anchor="w")
 
-        export = ttk.LabelFrame(self.export_tab, text=tr("Komga 匯出"), padding=8)
-        export.pack(fill="x", padx=10, pady=6)
+        export = ttk.LabelFrame(self.export_tab, text=tr("Komga 匯出"), padding=px(8))
+        export.pack(fill="x", padx=px(10), pady=px(6))
         komga_row = ttk.Frame(export)
         komga_row.pack(fill="x")
         ttk.Label(komga_row, text=tr("Komga 輸出路徑：")).pack(side="left")
@@ -330,30 +332,30 @@ class FileAggregatorApp:
         self.komga_entry.pack(side="left", fill="x", expand=True)
         self.browse_komga_button = ttk.Button(
             komga_row, text=tr("瀏覽"), command=self.browse_komga)
-        self.browse_komga_button.pack(side="left", padx=(6, 0))
+        self.browse_komga_button.pack(side="left", padx=px(6, 0))
         options = ttk.Frame(export)
-        options.pack(fill="x", pady=6)
+        options.pack(fill="x", pady=px(6))
         self.skip_checkbox = ttk.Checkbutton(
             options, text=tr("已存在且來源未變更時跳過"), variable=self.skip_unchanged, command=self.save_settings)
         self.skip_checkbox.pack(side="left")
         self.open_checkbox = ttk.Checkbutton(
             options, text=tr("匯出完成後開啟輸出資料夾"), variable=self.open_after_export, command=self.save_settings)
-        self.open_checkbox.pack(side="left", padx=12)
+        self.open_checkbox.pack(side="left", padx=px(12))
         buttons = ttk.Frame(export)
         buttons.pack(fill="x")
         self.export_selected_button = ttk.Button(buttons, text=tr("匯出選取項目"), style="Accent.TButton",
                                                  command=self.export_selected)
         self.export_selected_button.pack(side="left")
         self.export_all_button = ttk.Button(buttons, text=tr("匯出所有已翻譯項目"), command=self.export_all)
-        self.export_all_button.pack(side="left", padx=6)
+        self.export_all_button.pack(side="left", padx=px(6))
         # Cleanup deletes cache folders, so it sits on its own row apart from the export actions.
         self.cleanup_button = ttk.Button(
             export, text=tr("清理已匯出快取"), command=self.confirm_cleanup)
-        self.cleanup_button.pack(anchor="w", pady=(6, 0))
+        self.cleanup_button.pack(anchor="w", pady=px(6, 0))
         self.progress = ttk.Progressbar(export, mode="determinate")
-        self.progress.pack(fill="x", pady=(8, 2))
+        self.progress.pack(fill="x", pady=px(8, 2))
         self.status_label = ttk.Label(export, textvariable=self.status_text)
-        self.status_label.pack(anchor="w", pady=(6, 0))
+        self.status_label.pack(anchor="w", pady=px(6, 0))
         self.progress.pack_forget()
 
     def remember_window_size(self, event):
@@ -362,8 +364,9 @@ class FileAggregatorApp:
         state = self.root.state()
         if state in ("normal", "zoomed"):
             self.window_maximized = state == "zoomed"
-            if state == "normal" and event.width >= 820 and event.height >= 640:
-                self.window_size = [event.width, event.height]
+            if state == "normal" and event.width >= px(820) and event.height >= px(640):
+                # Saved in 96-DPI pixels so the size survives a display scaling change.
+                self.window_size = [round(event.width / ui_theme.SCALE), round(event.height / ui_theme.SCALE)]
 
     def save_settings(self):
         try:
@@ -521,7 +524,7 @@ class FileAggregatorApp:
 
     def show_export_progress(self, mode):
         self.progress.configure(mode=mode, value=0)
-        self.progress.pack(fill="x", pady=(8, 2), before=self.status_label)
+        self.progress.pack(fill="x", pady=px(8, 2), before=self.status_label)
 
     def hide_export_progress(self):
         self.progress.stop()
@@ -793,9 +796,9 @@ class FileAggregatorApp:
             return
         self._library_width = width
         font = tkfont.nametofont("TkDefaultFont", root=self.root)
-        pages = max(65, font.measure(tr("頁數")) + 16)
+        pages = max(px(65), font.measure(tr("頁數")) + px(16))
         self.folder_tree.column("pages", width=pages, minwidth=pages, stretch=False)
-        self.folder_tree.column("#0", width=max(100, width - pages), minwidth=100, stretch=False)
+        self.folder_tree.column("#0", width=max(px(100), width - pages), minwidth=px(100), stretch=False)
 
     def on_tree_select(self, _event=None):
         selection = self.folder_tree.selection()
@@ -1188,9 +1191,16 @@ if __name__ == "__main__":
                 sys.exit(0)
         configure_logging()
         logger.info("application_start executable=%s", sys.executable)
+        if os.name == "nt":
+            try:
+                # System-aware DPI lets Tk draw sharp text; ui_theme.px scales the fixed layout sizes.
+                ctypes.windll.shcore.SetProcessDpiAwareness(1)
+            except (AttributeError, OSError):
+                pass
         root = tk.Tk()
-        root.geometry(f"{min(1280, root.winfo_screenwidth())}x{min(820, root.winfo_screenheight())}")
-        FileAggregatorApp(root)
+        app = FileAggregatorApp(root)
+        if app.window_size is None:
+            root.geometry(f"{min(px(1280), root.winfo_screenwidth())}x{min(px(820), root.winfo_screenheight())}")
         if instance is not None:
             instance.register_window(root)
         root.mainloop()

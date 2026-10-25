@@ -2,6 +2,7 @@
 import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
 from ui_language import tr
+from ui_theme import px
 
 
 class QueueStartDialog(simpledialog.Dialog):
@@ -12,12 +13,12 @@ class QueueStartDialog(simpledialog.Dialog):
 
     def body(self, master):
         ttk.Label(master, text=tr("拖曳調整漫畫順序；取消不會開始。" if self.reorder else
-                                 "選擇單一章節起訖；整合章節仍照原佇列執行。"), wraplength=600).pack(anchor="w", pady=6)
+                                 "選擇單一章節起訖；整合章節仍照原佇列執行。"), wraplength=px(600)).pack(anchor="w", pady=px(6))
         self.list = ttk.Treeview(master, columns=("path",), show="tree headings", height=12, selectmode="browse")
         self.list.heading("#0", text=tr("漫畫／章節"))
         self.list.heading("path", text=tr("完整路徑"))
-        self.list.column("#0", width=320)
-        self.list.column("path", width=320)
+        self.list.column("#0", width=px(320))
+        self.list.column("path", width=px(320))
         scroll = ttk.Scrollbar(master, command=self.list.yview)
         self.list.configure(yscrollcommand=scroll.set)
         scroll.pack(side="right", fill="y")
@@ -25,7 +26,7 @@ class QueueStartDialog(simpledialog.Dialog):
         for index, path in enumerate(self.paths):
             self.list.insert("", "end", iid=str(index), text=path.name if self.reorder else f"{index + 1}. {path.name}", values=(str(path),))
         controls = ttk.Frame(master)
-        controls.pack(fill="x", pady=8)
+        controls.pack(fill="x", pady=px(8))
         if self.reorder:
             self.dragged = None
             self.list.bind("<ButtonPress-1>", self.begin_drag)
@@ -43,10 +44,10 @@ class QueueStartDialog(simpledialog.Dialog):
         return self.list
 
     def buttonbox(self):
-        box = ttk.Frame(self, padding=8)
+        box = ttk.Frame(self, padding=px(8))
         box.pack(fill="x")
         ttk.Button(box, text=tr("確認開始"), command=self.ok).pack(side="right")
-        ttk.Button(box, text=tr("取消"), command=self.cancel).pack(side="right", padx=6)
+        ttk.Button(box, text=tr("取消"), command=self.cancel).pack(side="right", padx=px(6))
         self.bind("<Escape>", self.cancel)
 
     def begin_drag(self, event):

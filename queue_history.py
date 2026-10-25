@@ -12,6 +12,7 @@ from queue_worker import BT_STAGES, parse_bt_usage
 from queue_errors import error_details, error_info
 from queue_stats import used_models, model_usage, merge_snapshots
 from ui_language import tr
+from ui_theme import px
 
 JEV_FIELDS = {'requests': '請求數', 'input_tokens': '輸入 Token', 'missing_input_usage_requests': '未回報請求數',
               'cost_nano_usd': '已知金額（USD）', 'cost_source': '金額來源', 'unpriced_requests': '未計價請求數',
@@ -184,10 +185,10 @@ MODEL_COLUMNS = dict(scope='項目', model='模型', total_tokens='Token 數', t
 
 def create_model_table(parent):
     toolbar = ttk.Frame(parent)
-    toolbar.grid(row=0, column=0, columnspan=2, sticky='ew', padx=4, pady=4)
+    toolbar.grid(row=0, column=0, columnspan=2, sticky='ew', padx=px(4), pady=px(4))
     brief_note = tr('合計包含 OCR 與翻譯；預估費用僅含已知金額，非實際帳單。')
     detailed_note = tr('佔比依 OCR／翻譯／合計分別計算；Token 僅含已回報用量，費用僅含已知金額。平均值以每次請求計算；平均 Token 排除未回報請求，金額不完整時不顯示平均費用。') + '\n' + tr('合計已包含 OCR 與翻譯；Jev 另列。快取屬於輸入 Token，分項只累加已回報資料；舊資料不推算模型分項。')
-    note = ttk.Label(toolbar, width=1, text=brief_note, wraplength=950)
+    note = ttk.Label(toolbar, width=1, text=brief_note, wraplength=px(950))
     note.pack(side='left', fill='x', expand=True)
     note.bind('<Configure>', lambda event: note.configure(wraplength=event.width) if event.width > 100 else None)
     overview = ('scope', 'model', 'total_tokens', 'requests', 'cost')
@@ -198,13 +199,13 @@ def create_model_table(parent):
         table.xview_moveto(0)
         note.configure(text=detailed_note if detailed.get() else brief_note)
     table.column_toggle = ttk.Checkbutton(toolbar, text=tr('全部欄位'), variable=detailed, command=toggle_columns)
-    table.column_toggle.pack(side='right', padx=(8, 0))
+    table.column_toggle.pack(side='right', padx=px(8, 0))
     widths = dict(scope=60, model=180, total_tokens=100, token_share=85, requests=70, request_share=85,
                   cost=135, cost_share=115, avg_tokens=110, avg_cost=145, pricing=145)
     for key, title in MODEL_COLUMNS.items():
         table.heading(key, text=tr(title))
-        table.column(key, width=max(widths.get(key, 110), tkfont.nametofont('TkHeadingFont').measure(tr(title)) + 16),
-                     minwidth=180 if key == 'model' else 55, stretch=key == 'model', anchor='w' if key in ('scope', 'model', 'pricing') else 'e')
+        table.column(key, width=max(px(widths.get(key, 110)), tkfont.nametofont('TkHeadingFont').measure(tr(title)) + px(16)),
+                     minwidth=px(180) if key == 'model' else px(55), stretch=key == 'model', anchor='w' if key in ('scope', 'model', 'pricing') else 'e')
     vertical = ttk.Scrollbar(parent, command=table.yview)
     horizontal = ttk.Scrollbar(parent, orient='horizontal', command=table.xview)
     table.configure(yscrollcommand=vertical.set, xscrollcommand=horizontal.set)
@@ -256,49 +257,49 @@ class HistoryWindow(tk.Toplevel):
     def __init__(self, parent, path, actions, statuses):
         super().__init__(parent)
         self.title(tr("歷史紀錄"))
-        self.geometry('1200x700')
-        self.minsize(820, 480)
+        self.geometry(f"{px(1200)}x{px(700)}")
+        self.minsize(px(820), px(480))
         self.path, self.actions, self.statuses = path, actions, statuses
         self.records = {}
         self.pending_children = set()
         self.offset = 0
         self.query = None
         self.keyword, self.start, self.end = tk.StringVar(), tk.StringVar(), tk.StringVar()
-        filters = ttk.Frame(self, padding=8)
+        filters = ttk.Frame(self, padding=px(8))
         filters.pack(fill='x')
-        search = ttk.Frame(self, padding=(8, 8, 8, 0))
+        search = ttk.Frame(self, padding=px(8, 8, 8, 0))
         search.pack(fill='x', before=filters)
         ttk.Label(search, text=tr("漫畫名稱／路徑")).pack(side='left')
         entry = ttk.Entry(search, textvariable=self.keyword)
-        entry.pack(side='left', fill='x', expand=True, padx=(8, 0))
+        entry.pack(side='left', fill='x', expand=True, padx=px(8, 0))
         entry.bind('<Return>', lambda _event: self.refresh())
         for label, variable, width in ((tr("開始日期"), self.start, 12), (tr("結束日期"), self.end, 12)):
             ttk.Label(filters, text=label).pack(side='left')
             entry = ttk.Entry(filters, textvariable=variable, width=width)
-            entry.pack(side='left', padx=(4, 8))
+            entry.pack(side='left', padx=px(4, 8))
             entry.bind('<Return>', lambda _event: self.refresh())
         ttk.Button(filters, text=tr("查詢／重新整理"), command=self.refresh).pack(side='left')
         self.previous = ttk.Button(filters, text=tr('上一頁'), command=lambda: self.change_page(-1))
-        self.previous.pack(side='left', padx=(8, 2))
+        self.previous.pack(side='left', padx=px(8, 2))
         self.next = ttk.Button(filters, text=tr('下一頁'), command=lambda: self.change_page(1))
         self.next.pack(side='left')
         self.note = tk.StringVar()
-        note = ttk.Label(self, textvariable=self.note, padding=(8, 0), wraplength=780)
+        note = ttk.Label(self, textvariable=self.note, padding=px(8, 0), wraplength=px(780))
         note.pack(fill='x')
-        note.bind('<Configure>', lambda event: event.widget.configure(wraplength=max(100, event.width - 16)))
-        totals = ttk.LabelFrame(self, text=tr('全部歷史總累計'), padding=8)
-        totals.pack(side='bottom', fill='x', padx=8, pady=(0, 8))
+        note.bind('<Configure>', lambda event: event.widget.configure(wraplength=max(px(100), event.width - px(16))))
+        totals = ttk.LabelFrame(self, text=tr('全部歷史總累計'), padding=px(8))
+        totals.pack(side='bottom', fill='x', padx=px(8), pady=px(0, 8))
         summary = ttk.Frame(totals)
-        summary.pack(fill='x', pady=(0, 6))
+        summary.pack(fill='x', pady=px(0, 6))
         self.total_counts = {}
         for index, (key, label) in enumerate((('runs', '佇列批數'), ('jobs', '完成數'), ('elapsed', '累計耗時'))):
-            ttk.Label(summary, text=tr(label)).grid(row=0, column=index * 2, padx=(0, 6))
+            ttk.Label(summary, text=tr(label)).grid(row=0, column=index * 2, padx=px(0, 6))
             variable = tk.StringVar()
             self.total_counts[key] = variable
-            ttk.Entry(summary, textvariable=variable, state='readonly', width=14).grid(row=0, column=index * 2 + 1, sticky='ew', padx=(0, 12))
+            ttk.Entry(summary, textvariable=variable, state='readonly', width=14).grid(row=0, column=index * 2 + 1, sticky='ew', padx=px(0, 12))
             summary.columnconfigure(index * 2 + 1, weight=1)
         self.total_usage = tk.StringVar()
-        ttk.Label(summary, textvariable=self.total_usage, wraplength=950).grid(row=1, column=0, columnspan=7, sticky='w', pady=(4, 0))
+        ttk.Label(summary, textvariable=self.total_usage, wraplength=px(950)).grid(row=1, column=0, columnspan=7, sticky='w', pady=px(4, 0))
         self.totals_toggle = ttk.Button(summary, text=tr('詳細統計') + ' ▾', command=self.toggle_totals)
         self.totals_toggle.grid(row=0, column=6, sticky='e')
         self.total_details = ttk.Frame(totals)
@@ -306,32 +307,32 @@ class HistoryWindow(tk.Toplevel):
         self.totals = ttk.Treeview(self.total_details, columns=columns, show='headings', height=4, selectmode='browse')
         for key, title, width in zip(columns, ('項目', 'Token 數', '預估金額（USD）', '請求數', '金額完整性', 'Token 完整性'), (70, 130, 130, 80, 145, 145)):
             self.totals.heading(key, text=tr(title))
-            self.totals.column(key, width=width, minwidth=40, anchor='w' if key in ('scope', 'pricing', 'reporting') else 'e')
+            self.totals.column(key, width=px(width), minwidth=px(40), anchor='w' if key in ('scope', 'pricing', 'reporting') else 'e')
         self.totals.pack(fill='x')
         self.jev_totals_table = ttk.Treeview(self.total_details, columns=tuple(JEV_FIELDS),
                                            displaycolumns=('requests', 'input_tokens', 'cost_nano_usd', 'cost_source', 'unpriced_requests', 'elapsed_seconds'),
                                            show='headings', height=1)
         for key, title in JEV_FIELDS.items():
             self.jev_totals_table.heading(key, text=tr(title))
-            self.jev_totals_table.column(key, width=110, minwidth=40, anchor='e')
-        self.jev_totals_table.pack(fill='x', pady=(4, 0))
-        note = ttk.Label(self.total_details, text=tr("全部歷史，含失敗／停止已回報用量，不受查詢條件影響；耗時為各批次加總，可能重疊。"), wraplength=780)
-        note.pack(fill='x', pady=(4, 0))
-        note.bind('<Configure>', lambda event: note.configure(wraplength=max(100, event.width)))
+            self.jev_totals_table.column(key, width=px(110), minwidth=px(40), anchor='e')
+        self.jev_totals_table.pack(fill='x', pady=px(4, 0))
+        note = ttk.Label(self.total_details, text=tr("全部歷史，含失敗／停止已回報用量，不受查詢條件影響；耗時為各批次加總，可能重疊。"), wraplength=px(780))
+        note.pack(fill='x', pady=px(4, 0))
+        note.bind('<Configure>', lambda event: note.configure(wraplength=max(px(100), event.width)))
         panes = ttk.Panedwindow(self, orient='vertical')
-        panes.pack(fill='both', expand=True, padx=8, pady=8)
-        listing = ttk.LabelFrame(panes, text=tr('執行紀錄'), padding=4)
-        detail = ttk.LabelFrame(panes, text=tr('選取項目明細'), padding=4)
+        panes.pack(fill='both', expand=True, padx=px(8), pady=px(8))
+        listing = ttk.LabelFrame(panes, text=tr('執行紀錄'), padding=px(4))
+        detail = ttk.LabelFrame(panes, text=tr('選取項目明細'), padding=px(4))
         panes.add(listing, weight=1)
         panes.add(detail, weight=1)
         columns = ('end', 'status', 'jobs', 'elapsed', 'tokens', 'cost', 'requests', 'pricing', 'reporting', 'error_reason')
         self.tree = ttk.Treeview(listing, columns=columns, show='tree headings', selectmode='browse', height=8)
         self.tree.heading('#0', text=tr("開始時間／資料夾"))
-        self.tree.column('#0', width=320, minwidth=160)
+        self.tree.column('#0', width=px(320), minwidth=px(160))
         for key, title, width in zip(columns, (tr("完成時間"), tr("狀態"), tr("完成數"), tr("耗時"),
                                                tr("Token 數"), tr("預估金額（USD）"), tr("請求數"), tr("金額完整性"), tr("Token 完整性"), tr("錯誤原因")), (160, 100, 65, 90, 130, 130, 80, 130, 130, 220)):
             self.tree.heading(key, text=title)
-            self.tree.column(key, width=width, minwidth=40, stretch=False)
+            self.tree.column(key, width=px(width), minwidth=px(40), stretch=False)
         scroll = ttk.Scrollbar(listing, command=self.tree.yview)
         self.tree.configure(yscrollcommand=scroll.set)
         self.tree.bind('<Configure>', self.fit_columns)
@@ -353,7 +354,7 @@ class HistoryWindow(tk.Toplevel):
             for column in columns:
                 title = self.totals.heading(column, 'text') if key == 'usage' else tr('欄位') if column == 'field' else tr('資料')
                 table.heading(column, text=title)
-                table.column(column, width=130 if key == 'usage' or column == 'field' else 550, minwidth=40, stretch=True)
+                table.column(column, width=px(130) if key == 'usage' or column == 'field' else 550, minwidth=px(40), stretch=True)
             vertical = ttk.Scrollbar(frame, command=table.yview)
             horizontal = ttk.Scrollbar(frame, orient='horizontal', command=table.xview)
             table.configure(yscrollcommand=vertical.set, xscrollcommand=horizontal.set)
@@ -372,7 +373,7 @@ class HistoryWindow(tk.Toplevel):
             self.total_details.pack_forget()
             self.totals_toggle.configure(text=tr('詳細統計') + ' ▾')
         else:
-            self.total_details.pack(fill='x', pady=(4, 0))
+            self.total_details.pack(fill='x', pady=px(4, 0))
             self.totals_toggle.configure(text=tr('詳細統計') + ' ▴')
 
 
@@ -382,9 +383,9 @@ class HistoryWindow(tk.Toplevel):
         samples = {'#0': '2026-09-14 20:04:28', 'end': '2026-09-14 21:05:08',
                    'status': tr("完成（有異常）"), 'jobs': '999', 'elapsed': '999:59:59',
                    'tokens': '999,999,999', 'cost': 'US$9999.99', 'requests': '999,999'}
-        sizes = {key: max(font.measure(value), font.measure(self.tree.heading(key, 'text'))) + 20
+        sizes = {key: max(font.measure(value), font.measure(self.tree.heading(key, 'text'))) + px(20)
                  for key, value in samples.items()}
-        sizes['#0'] += 20  # Reserve the tree expander.
+        sizes['#0'] += px(20)  # Reserve the tree expander.
         columns = ['end', 'status', 'jobs', 'elapsed', 'tokens', 'cost', 'requests']
         if sum(sizes.values()) > width:
             columns.remove('end')  # Full timestamps remain in the selected record's details.
@@ -395,10 +396,10 @@ class HistoryWindow(tk.Toplevel):
         remaining = width
         for key in columns:
             size = max(1, int(sizes[key] * scale))
-            self.tree.column(key, width=size, minwidth=1, stretch=False,
+            self.tree.column(key, width=size, minwidth=px(1), stretch=False,
                              anchor='e' if key in ('jobs', 'tokens', 'cost', 'requests') else 'w')
             remaining -= size
-        self.tree.column('#0', width=max(1, remaining), minwidth=1, stretch=False)
+        self.tree.column('#0', width=max(1, remaining), minwidth=px(1), stretch=False)
         self.tree.xview_moveto(0)
 
     def refresh(self, totals=True):

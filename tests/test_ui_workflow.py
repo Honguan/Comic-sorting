@@ -9,6 +9,7 @@ from unittest import mock
 from test_comic_sorting import comic
 from queue_worker import Job
 from ui_language import set_language
+import ui_theme
 
 
 def detail_values(window):
@@ -2857,6 +2858,11 @@ class WorkflowTests(unittest.TestCase):
         q = self.app.translation_queue
         self.assertFalse(q.bt_bars['OCR'].master.winfo_ismapped())
         self.assertFalse(q.usage_table.master.winfo_ismapped())
+    def test_window_size_is_saved_in_96_dpi_pixels(self):
+        with mock.patch.object(ui_theme, 'SCALE', 1.25), mock.patch.object(self.root, 'state', return_value='normal'):
+            self.assertEqual((ui_theme.px(4), ui_theme.px(4, 0)), (5, (5, 0)))
+            self.app.remember_window_size(mock.Mock(widget=self.root, width=1125, height=875))
+        self.assertEqual(self.app.window_size, [900, 700])
     @unittest.skipUnless(comic.os.name == 'nt', 'Windows maximized state')
     def test_maximized_window_keeps_normal_size_through_minimize_and_restart(self):
         self.root.geometry('900x700')

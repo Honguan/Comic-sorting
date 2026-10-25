@@ -15,6 +15,7 @@ from tkinter import ttk
 from windows_notifications import WindowsNotifications
 from app_logging import logger, redact
 from ui_language import tr
+from ui_theme import px
 
 
 def validate_settings(settings):
@@ -142,27 +143,27 @@ class NtfyNotifications:
         self.tab = ttk.Frame(app.work_tabs)
         app.work_tabs.add(self.tab, text=tr('通知'))
         self.windows = WindowsNotifications(app, self.tab, settings)
-        box = ttk.LabelFrame(self.tab, text=tr('ntfy 通知'), padding=8)
-        box.pack(fill='x', padx=8, pady=8)
+        box = ttk.LabelFrame(self.tab, text=tr('ntfy 通知'), padding=px(8))
+        box.pack(fill='x', padx=px(8), pady=px(8))
         row = ttk.Frame(box)
         row.pack(fill='x')
         for text, variable in ((tr('啟用通知'), self.enabled), (tr('整批結束'), self.done),
                                (tr('單項失敗／異常'), self.failed), (tr('單項成功'), self.success)):
-            ttk.Checkbutton(row, text=text, variable=variable).pack(side='left', padx=(0, 12))
+            ttk.Checkbutton(row, text=text, variable=variable).pack(side='left', padx=px(0, 12))
         for text, variable in ((tr('伺服器網址'), self.server), (tr('主題（Topic）'), self.topic),
                                (tr('存取權杖（選填）'), self.token)):
             row = ttk.Frame(box)
-            row.pack(fill='x', pady=2)
+            row.pack(fill='x', pady=px(2))
             ttk.Label(row, text=text, width=22).pack(side='left')
             ttk.Entry(row, textvariable=variable, show='•' if variable is self.token else '').pack(side='left', fill='x', expand=True)
         row = ttk.Frame(box)
-        row.pack(fill='x', pady=4)
+        row.pack(fill='x', pady=px(4))
         ttk.Button(row, text=tr('儲存通知設定'), command=self.save).pack(side='left')
         self.test_button = ttk.Button(row, text=tr('測試通知'), command=self.test)
-        self.test_button.pack(side='left', padx=4)
+        self.test_button.pack(side='left', padx=px(4))
         ttk.Button(row, text=tr('複製訂閱網址'), command=self.copy_url).pack(side='left')
-        ttk.Label(box, text=tr('手機／其他設備訂閱相同伺服器與主題；公開主題請勿分享，權杖需搭配受保護主題。'), wraplength=720).pack(anchor='w')
-        ttk.Label(box, textvariable=self.status, wraplength=720).pack(anchor='w')
+        ttk.Label(box, text=tr('手機／其他設備訂閱相同伺服器與主題；公開主題請勿分享，權杖需搭配受保護主題。'), wraplength=px(720)).pack(anchor='w')
+        ttk.Label(box, textvariable=self.status, wraplength=px(720)).pack(anchor='w')
         app.root.bind('<Destroy>', self.close, add='+')
 
     def settings(self):

@@ -16,6 +16,7 @@ from ui_interactions import bind_search_shortcuts, bind_table_shortcuts, copy_ma
 from queue_worker import BT_STAGES, Job, run_jobs, translator_command
 from app_logging import logger, log_path
 from ui_language import tr
+from ui_theme import px
 from queue_stats import SnapshotTotals
 from model_pricing import open_pricing
 from comic_core import FOLDER_KINDS, folder_kind, image_files, image_count
@@ -79,13 +80,13 @@ class TranslationQueue:
 
     def build_settings_panel(self, settings):
         app = self.app
-        config_box = ttk.LabelFrame(app.settings_tab, text="BallonsTranslator", padding=8)
-        config_box.pack(fill="x", padx=8, pady=8)
+        config_box = ttk.LabelFrame(app.settings_tab, text="BallonsTranslator", padding=px(8))
+        config_box.pack(fill="x", padx=px(8), pady=px(8))
         for title, variable, directory in ((tr("安裝路徑"), self.installation, True),
                                           (tr("設定檔"), self.config, False),
                                           (tr("Python（空白使用內附環境）"), self.python, False)):
             row = ttk.Frame(config_box)
-            row.pack(fill="x", pady=2)
+            row.pack(fill="x", pady=px(2))
             ttk.Label(row, text=title).pack(anchor="w")
             field = ttk.Frame(row)
             field.pack(fill="x")
@@ -95,7 +96,7 @@ class TranslationQueue:
             self.button(field, tr("瀏覽"), lambda v=variable, d=directory: self.browse(v, d)).pack_configure(side="right")
             entry.pack(side="left", fill="x", expand=True)
         settings_actions = ttk.Frame(config_box)
-        settings_actions.pack(fill="x", pady=(6, 0))
+        settings_actions.pack(fill="x", pady=px(6, 0))
         self.button(settings_actions, tr("開啟原生設定介面"), self.open_settings)
         self.button(settings_actions, tr("開啟紀錄資料夾"), self.open_logs)
         self.button(settings_actions, tr('模型單價'), lambda: open_pricing(app.root, self.token_rates, app.save_settings))
@@ -104,13 +105,13 @@ class TranslationQueue:
 
     def build_queue_panel(self):
         app = self.app
-        box = ttk.Frame(app.queue_tab, padding=8)
+        box = ttk.Frame(app.queue_tab, padding=px(8))
         box.pack(fill="both", expand=True)
         app.build_enqueue_panel(box)
         row = app.enqueue_header
         self.action_choice = ttk.Combobox(app.enqueue_actions, textvariable=self.action,
             values=tuple(tr(value) for value in ACTIONS.values()), state="readonly", width=8)
-        self.action_choice.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        self.action_choice.pack(side="left", fill="x", expand=True, padx=px(0, 8))
         # Menu-only commands; update_controls fills action_states and menus read it when opened.
         self.actions = {"翻譯頁數": self.edit_page_range}
         self.action_states = {}
@@ -137,14 +138,14 @@ class TranslationQueue:
         footer = ttk.Frame(box)
         footer.pack(side="bottom", fill="x")
         search_row = ttk.Frame(box)
-        search_row.pack(fill="x", pady=(4, 0))
-        ttk.Label(search_row, text=tr("搜尋")).pack(side="left", padx=(0, 6))
+        search_row.pack(fill="x", pady=px(4, 0))
+        ttk.Label(search_row, text=tr("搜尋")).pack(side="left", padx=px(0, 6))
         self.search = tk.StringVar()
         self.search_after = None
         self.search_entry = ttk.Entry(search_row, textvariable=self.search)
         self.search_entry.pack(side="left", fill="x", expand=True)
         self.search_entry.configure(width=8)
-        ttk.Button(search_row, text=tr("清除"), width=0, command=lambda: self.search.set("")).pack(side="left", padx=4)
+        ttk.Button(search_row, text=tr("清除"), width=0, command=lambda: self.search.set("")).pack(side="left", padx=px(4))
         self.search_count = tk.StringVar()
         ttk.Label(search_row, textvariable=self.search_count).pack(side="left")
         self.queue_restore_ratio = None
@@ -156,20 +157,20 @@ class TranslationQueue:
                        if self.queue_restore_ratio is not None and self.sash_after is None else None, add="+")
 
         tree_frame = ttk.Frame(box)
-        tree_frame.pack(fill="both", expand=True, pady=4)
+        tree_frame.pack(fill="both", expand=True, pady=px(4))
         self.tree = ttk.Treeview(tree_frame, columns=("kind", "action", "pages", "status", "error_reason"), show="tree headings", height=3)
         for column, text in (("#0", "漫畫 / 章節"), ("kind", "資料夾類型"), ("action", "動作"), ("pages", "翻譯頁數"),
                              ("status", "狀態"), ("error_reason", "錯誤原因")):
             self.tree.heading(column, text=tr(text))
-        self.tree.column("#0", width=340, minwidth=40, stretch=False)
-        self.tree.column("kind", width=110, stretch=False)
-        self.tree.column("action", width=85, stretch=False)
-        self.tree.column("pages", width=120, stretch=False)
-        self.tree.column("status", width=110, stretch=False)
+        self.tree.column("#0", width=px(340), minwidth=px(40), stretch=False)
+        self.tree.column("kind", width=px(110), stretch=False)
+        self.tree.column("action", width=px(85), stretch=False)
+        self.tree.column("pages", width=px(120), stretch=False)
+        self.tree.column("status", width=px(110), stretch=False)
         for status, color in (("failed", "#b42318"), ("blocked", "#b42318"),
                               ("done", "#166534"), ("done_warning", "#92400e")):
             self.tree.tag_configure(status, foreground=color)
-        self.tree.column("error_reason", width=220, minwidth=40, stretch=False)
+        self.tree.column("error_reason", width=px(220), minwidth=px(40), stretch=False)
         vertical = ttk.Scrollbar(tree_frame, command=self.tree.yview)
         horizontal = ttk.Scrollbar(tree_frame, orient="horizontal", command=self.tree.xview)
         self.tree.configure(yscrollcommand=vertical.set, xscrollcommand=horizontal.set)
@@ -180,7 +181,7 @@ class TranslationQueue:
         tree_frame.columnconfigure(0, weight=1)
         self.selection_details = tk.StringVar()
         _details, self.selection_label = details_text(tree_frame, self.selection_details,
-                                                      row=2, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+                                                      row=2, column=0, columnspan=2, sticky="ew", pady=px(4, 0))
         self.tree.bind("<Configure>", self.fit_columns)
         self.tree.bind("<Double-1>", self.show_details)
         self.tree.bind("<<TreeviewSelect>>", lambda _event: self.update_controls())
@@ -195,10 +196,10 @@ class TranslationQueue:
         row.pack(fill="x")
         details_row = ttk.Frame(footer)
         self.workflow_group = workflow_row = ttk.Frame(row)
-        ttk.Label(workflow_row, text=tr("流程")).pack(side="left", padx=(0, 8))
+        ttk.Label(workflow_row, text=tr("流程")).pack(side="left", padx=px(0, 8))
         self.workflow_choice = ttk.Menubutton(workflow_row, textvariable=self.workflow)
         # Natural width keeps the arrow beside the label text so it reads as a menu.
-        self.workflow_choice.pack(side="left", padx=(4, 0))
+        self.workflow_choice.pack(side="left", padx=px(4, 0))
         self.actions.update({"移除選取": self.remove, "上移": lambda: self.move(-1),
                              "下移": lambda: self.move(1),
                              "移到最上": lambda: self.move(-1, to_edge=True),
@@ -234,14 +235,14 @@ class TranslationQueue:
         self.context_menu.add_command(label=tr("複製漫畫名稱"), command=lambda: copy_manga_names(
             self.tree, (path.parent for path in self.selected_paths())))
         self.pause_button = ttk.Button(row, text=tr("暫停"), command=self.request_pause, width=0)
-        self.pause_button.pack(side="left", padx=2)
+        self.pause_button.pack(side="left", padx=px(2))
         self.stop_button = ttk.Button(row, text=tr("停止"), command=self.request_stop, width=0)
-        self.stop_button.pack(side="left", padx=2)
+        self.stop_button.pack(side="left", padx=px(2))
         self.action_entry(self.context_menu, "清除已完成")
         self.summary = tk.StringVar()
         self.summary_preview = tk.StringVar()
-        summary_label = ttk.Label(footer, textvariable=self.summary_preview, wraplength=650, style="Muted.TLabel")
-        summary_label.pack(fill="x", pady=(2, 0))
+        summary_label = ttk.Label(footer, textvariable=self.summary_preview, wraplength=px(650), style="Muted.TLabel")
+        summary_label.pack(fill="x", pady=px(2, 0))
         summary_label.bind("<Configure>", lambda event: summary_label.configure(wraplength=event.width)
                            if event.width > 100 and self.sash_after is None else None)
         self.total = ttk.Progressbar(footer)
@@ -249,11 +250,11 @@ class TranslationQueue:
         self.label = tk.StringVar(value=tr("BallonsTranslator：待命"))
         self.stage = ttk.Progressbar(footer)
         elapsed_row = ttk.Frame(footer)
-        elapsed_row.pack(fill="x", pady=(2, 0))
+        elapsed_row.pack(fill="x", pady=px(2, 0))
         details_row.pack(fill="x")
         progress_grid, self.toggle_progress = self.popup_panel(tr("各階段進度"))
-        stage_label = ttk.Label(elapsed_row, textvariable=self.label, width=1, wraplength=300)
-        stage_label.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        stage_label = ttk.Label(elapsed_row, textvariable=self.label, width=1, wraplength=px(300))
+        stage_label.pack(side="left", fill="x", expand=True, padx=px(0, 8))
         stage_label.bind("<Configure>", lambda event: stage_label.configure(wraplength=event.width)
                          if event.width > 100 and self.sash_after is None else None)
         self.resize_widgets = (app.folder_tree, self.tree, app.scan_status_label, summary_label, stage_label)
@@ -267,17 +268,17 @@ class TranslationQueue:
         self.time_labels = {}
         for row, name in enumerate(BT_STAGES):
             line = row * 3
-            ttk.Label(progress_grid, text=tr(name)).grid(row=line, column=0, sticky="w", padx=(0, 8))
+            ttk.Label(progress_grid, text=tr(name)).grid(row=line, column=0, sticky="w", padx=px(0, 8))
             self.bt_bars[name] = ttk.Progressbar(progress_grid)
-            self.bt_bars[name].grid(row=line + 1, column=0, columnspan=2, sticky="ew", pady=(2, 0))
+            self.bt_bars[name].grid(row=line + 1, column=0, columnspan=2, sticky="ew", pady=px(2, 0))
             self.bt_labels[name] = tk.StringVar()
-            detail = ttk.Label(progress_grid, textvariable=self.bt_labels[name], width=1, wraplength=700)
-            detail.grid(row=line + 2, column=0, columnspan=2, sticky="ew", pady=(0, 8))
+            detail = ttk.Label(progress_grid, textvariable=self.bt_labels[name], width=1, wraplength=px(700))
+            detail.grid(row=line + 2, column=0, columnspan=2, sticky="ew", pady=px(0, 8))
             detail.bind("<Configure>", lambda event, label=detail: label.configure(wraplength=event.width)
                         if event.width > 100 else None)
             self.time_labels[name] = tk.StringVar(value=tr("累計耗時：{0}").format('—'))
             ttk.Label(progress_grid, textvariable=self.time_labels[name], style="Muted.TLabel").grid(
-                row=line, column=1, sticky="e", padx=(8, 0))
+                row=line, column=1, sticky="e", padx=px(8, 0))
         self.reset_bt_progress()
         self.usage_records = SnapshotTotals(lambda key: key[1])
         self.jev_records = SnapshotTotals()
@@ -313,7 +314,7 @@ class TranslationQueue:
         self.usage_table = ttk.Treeview(usage_grid, columns=columns, show='headings', height=3)
         for key, title, width in zip(columns, ('項目', 'Token 數', '預估金額（USD）', '請求數', '金額完整性', 'Token 完整性'), (70, 130, 130, 80, 145, 145)):
             self.usage_table.heading(key, text=tr(title))
-            self.usage_table.column(key, width=width, minwidth=40, anchor='w' if key in ('scope', 'pricing', 'reporting') else 'e')
+            self.usage_table.column(key, width=px(width), minwidth=px(40), anchor='w' if key in ('scope', 'pricing', 'reporting') else 'e')
         self.usage_table.grid(row=1, column=0, columnspan=2, sticky='ew')
         usage_scroll = ttk.Scrollbar(usage_grid, command=self.usage_table.yview)
         self.usage_table.configure(yscrollcommand=usage_scroll.set)
@@ -404,10 +405,10 @@ class TranslationQueue:
         """Popup content and the function that shows or hides it."""
         popup = tk.Toplevel(self.app.root)
         popup.title(title)
-        popup.geometry("1000x380")
-        popup.minsize(760, 340)
+        popup.geometry(f"{px(1000)}x{px(380)}")
+        popup.minsize(px(760), px(340))
         popup.withdraw()
-        content = ttk.Frame(popup, padding=12)
+        content = ttk.Frame(popup, padding=px(12))
         def toggle():
             if content.winfo_manager():
                 content.pack_forget()
@@ -425,8 +426,8 @@ class TranslationQueue:
         if self.model_window is None or not self.model_window.winfo_exists():
             self.model_window = tk.Toplevel(self.app.root)
             self.model_window.title(tr('模型統計'))
-            self.model_window.geometry('1200x480')
-            frame = ttk.Frame(self.model_window, padding=8)
+            self.model_window.geometry(f"{px(1200)}x{px(480)}")
+            frame = ttk.Frame(self.model_window, padding=px(8))
             frame.pack(fill='both', expand=True)
             self.model_usage_table = create_model_table(frame)
         self.show_usage()
@@ -438,12 +439,12 @@ class TranslationQueue:
         if self.jev_window is None or not self.jev_window.winfo_exists():
             self.jev_window = tk.Toplevel(self.app.root)
             self.jev_window.title(tr('Jev 統計'))
-            self.jev_window.geometry('560x480')
+            self.jev_window.geometry(f"{px(560)}x{px(480)}")
             self.jev_table = ttk.Treeview(self.jev_window, columns=('field', 'value'), show='headings', height=len(JEV_FIELDS))
             for key, title in (('field', '欄位'), ('value', '資料')):
                 self.jev_table.heading(key, text=tr(title))
-                self.jev_table.column(key, width=200, minwidth=80)
-            self.jev_table.pack(fill='both', expand=True, padx=8, pady=8)
+                self.jev_table.column(key, width=px(200), minwidth=px(80))
+            self.jev_table.pack(fill='both', expand=True, padx=px(8), pady=px(8))
         self.show_usage()
         self.jev_window.deiconify()
         self.jev_window.lift()
@@ -533,7 +534,7 @@ class TranslationQueue:
 
     def button(self, parent, text, command):
         button = ttk.Button(parent, text=text, command=command, width=0)
-        button.pack(side="left", padx=2)
+        button.pack(side="left", padx=px(2))
         self.controls.append(button)
         return button
 
@@ -650,29 +651,29 @@ class TranslationQueue:
             return
         self._queue_width = width
         app = self.app
-        wrapped = width < app.enqueue_range.winfo_reqwidth() + app.enqueue_actions.winfo_reqwidth() + 8
+        wrapped = width < app.enqueue_range.winfo_reqwidth() + app.enqueue_actions.winfo_reqwidth() + px(8)
         app.enqueue_actions.grid_configure(row=1 if wrapped else 0, column=0 if wrapped else 1,
-                                          columnspan=2 if wrapped else 1, pady=(4, 0) if wrapped else 0)
-        wrapped = width < sum(button.winfo_reqwidth() for button in self.footer_buttons) + 24
+                                          columnspan=2 if wrapped else 1, pady=px(4, 0) if wrapped else 0)
+        wrapped = width < sum(button.winfo_reqwidth() for button in self.footer_buttons) + px(24)
         positions = ((0, 0), (1, 0), (1, 1), (1, 2)) if wrapped else tuple((0, i) for i in range(4))
         for button, (row, column) in zip(self.footer_buttons, positions):
-            button.grid(row=row, column=column, sticky="w", padx=2, pady=2)
+            button.grid(row=row, column=column, sticky="w", padx=px(2), pady=px(2))
         self.workflow_group.grid_configure(columnspan=3 if wrapped else 1, sticky="ew")
         self.start_button.master.columnconfigure(0, weight=0 if wrapped else 1)
         self.start_button.master.columnconfigure(3, weight=1 if wrapped else 0)
         row = column = used = 0
         for button in self.navigation_buttons:
-            size = button.winfo_reqwidth() + 4
+            size = button.winfo_reqwidth() + px(4)
             if used and used + size > width:
                 row, column, used = row + 1, 0, 0
-            button.grid(row=row, column=column, sticky="w", padx=2, pady=2)
+            button.grid(row=row, column=column, sticky="w", padx=px(2), pady=px(2))
             column, used = column + 1, used + size
         font = tkfont.nametofont("TkDefaultFont", root=self.app.root)
-        name_min = min(180, width // 2)
-        fixed = {"status": min(max(font.measure(tr(value)) for value in STATUSES.values()) + 20, width - name_min),
-                 "pages": max(90, font.measure(tr("翻譯頁數")) + 16),
-                 "action": max(font.measure(tr(value)) for value in ACTIONS.values()) + 20,
-                 "error_reason": 180}
+        name_min = min(px(180), width // 2)
+        fixed = {"status": min(max(font.measure(tr(value)) for value in STATUSES.values()) + px(20), width - name_min),
+                 "pages": max(px(90), font.measure(tr("翻譯頁數")) + px(16)),
+                 "action": max(font.measure(tr(value)) for value in ACTIONS.values()) + px(20),
+                 "error_reason": px(180)}
         visible = ["status"]
         for column in ("pages", "action", "error_reason"):
             if name_min + sum(fixed[key] for key in (*visible, column)) <= width:
@@ -1198,20 +1199,20 @@ class TranslationQueue:
         dialog.title(tr("翻譯頁數"))
         dialog.transient(self.app.root)
         dialog.resizable(False, False)
-        box = ttk.Frame(dialog, padding=12)
+        box = ttk.Frame(dialog, padding=px(12))
         box.pack(fill="both", expand=True)
         ttk.Label(box, text=job.path.name).grid(row=0, column=0, columnspan=2, sticky="w")
-        ttk.Label(box, text=tr("共 {0} 頁；檔名自然排序，含起訖頁").format(len(images))).grid(row=1, column=0, columnspan=2, sticky="w", pady=6)
+        ttk.Label(box, text=tr("共 {0} 頁；檔名自然排序，含起訖頁").format(len(images))).grid(row=1, column=0, columnspan=2, sticky="w", pady=px(6))
         start = tk.StringVar(dialog, value=str(job.start_page))
         end = tk.StringVar(dialog, value="" if job.end_page is None else str(job.end_page))
         for row, title, variable in ((2, "起始頁", start), (3, "結束頁（空白到最後）", end)):
-            ttk.Label(box, text=tr(title)).grid(row=row, column=0, sticky="w", pady=3)
-            ttk.Spinbox(box, from_=1, to=len(images), textvariable=variable, width=12).grid(row=row, column=1, padx=(12, 0))
+            ttk.Label(box, text=tr(title)).grid(row=row, column=0, sticky="w", pady=px(3))
+            ttk.Spinbox(box, from_=1, to=len(images), textvariable=variable, width=12).grid(row=row, column=1, padx=px(12, 0))
         range_export = tk.BooleanVar(dialog, value=job.range_export)
         export_check = ttk.Checkbutton(box, text=tr("指定頁面完成後匯出 CBZ"), variable=range_export)
-        export_check.grid(row=4, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        export_check.grid(row=4, column=0, columnspan=2, sticky="w", pady=px(8, 0))
         ttk.Label(box, text=tr("勾選後才匯出整章 CBZ；須全章結果齊全。"),
-                  wraplength=420).grid(row=5, column=0, columnspan=2, sticky="w")
+                  wraplength=px(420)).grid(row=5, column=0, columnspan=2, sticky="w")
 
         def update_export(*_args):
             export_check.configure(state="disabled" if start.get().strip() == "1" and not end.get().strip() else "normal")
@@ -1235,10 +1236,10 @@ class TranslationQueue:
             dialog.destroy()
 
         buttons = ttk.Frame(box)
-        buttons.grid(row=6, column=0, columnspan=2, pady=(12, 0))
-        ttk.Button(buttons, text=tr("全部頁面"), command=lambda: (start.set("1"), end.set(""), range_export.set(False))).pack(side="left", padx=3)
-        ttk.Button(buttons, text=tr("套用"), command=save).pack(side="left", padx=3)
-        ttk.Button(buttons, text=tr("取消"), command=dialog.destroy).pack(side="left", padx=3)
+        buttons.grid(row=6, column=0, columnspan=2, pady=px(12, 0))
+        ttk.Button(buttons, text=tr("全部頁面"), command=lambda: (start.set("1"), end.set(""), range_export.set(False))).pack(side="left", padx=px(3))
+        ttk.Button(buttons, text=tr("套用"), command=save).pack(side="left", padx=px(3))
+        ttk.Button(buttons, text=tr("取消"), command=dialog.destroy).pack(side="left", padx=px(3))
         dialog.bind("<Return>", lambda _event: save())
         dialog.bind("<Escape>", lambda _event: dialog.destroy())
         dialog.grab_set()

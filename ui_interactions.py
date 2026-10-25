@@ -1,5 +1,6 @@
 """Selection details and keyboard actions scoped to the focused widget."""
 from tkinter import Text, ttk
+from ui_theme import px
 
 
 def details_text(parent, variable, **grid):
@@ -7,7 +8,7 @@ def details_text(parent, variable, **grid):
     frame = ttk.Frame(parent)
     frame.grid(**grid)
     text = Text(frame, width=1, height=2, wrap='word', font='TkDefaultFont',
-                relief='flat', borderwidth=0, padx=4, pady=4, state='disabled', takefocus=True)
+                relief='flat', borderwidth=0, padx=px(4), pady=px(4), state='disabled', takefocus=True)
     scrollbar = ttk.Scrollbar(frame, command=text.yview)
     text.configure(yscrollcommand=scrollbar.set)
     text.pack(side='left', fill='both', expand=True)
